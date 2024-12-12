@@ -62,9 +62,9 @@ class ScripDownloadPanel extends PureComponent {
     }
 
     onSubmit(request) {
-        const {ID, Title, DATA_SOURCE} = this.props;
+        const {jobId, label, DATA_SOURCE} = this.props;
         const attributes = Object.values(request).filter((v) => SCRIPT_ATTRIB.get(String(v)));
-        createDownloadScript(ID, Title.replace(/\s/g, '_'), DATA_SOURCE, attributes)
+        createDownloadScript(jobId, label.replace(/\s/g, '_'), DATA_SOURCE, attributes)
             .then((url) => {
                 download(url);
                 dispatchHideDialog(SCRIPT_DOWNLOAD_ID);
@@ -72,15 +72,17 @@ class ScripDownloadPanel extends PureComponent {
     }
 
     render() {
-        const {help_id, ID} = this.props;
+        const {help_id, jobId} = this.props;
         const {urlsOnly} = this.state;
         return (
             <div style = {{margin: '4px'}}>
                 <FormPanel
-                    submitText='OK'
                     groupKey='ScriptDownloadDialog'
-                    onSubmit={this.onSubmit}
-                    onCancel={() => dispatchHideDialog(SCRIPT_DOWNLOAD_ID)}>
+                    onSuccess={this.onSubmit}
+                    onCancel={() => dispatchHideDialog(SCRIPT_DOWNLOAD_ID)}
+                    completeText='OK'
+                    help_id={help_id}>
+
                     <FieldGroup groupKey={'ScriptDownloadDialog'}>
                         <div style={{visibility: (urlsOnly ? 'hidden' : 'visible')}}>
                             <ListBoxInputField
@@ -106,8 +108,6 @@ class ScripDownloadPanel extends PureComponent {
                                             {label: 'ditto - on Mac, best for files larger than 2GB', value: 'Ditto'},
                                             {label: "Don't unzip the files", value: '-'}
                                            ]}
-                                labelWidth = {110}
-                                wrapperStyle = {{marginTop: 3}}
                             />
                         </div>
 
@@ -117,8 +117,6 @@ class ScripDownloadPanel extends PureComponent {
                             options={[
                                         {label: 'Download just a list of URLs', value: 'URLsOnly'}
                                     ]}
-                            labelWidth = {110}
-                            wrapperStyle = {{marginTop: 15}}
                         />
                     </FieldGroup>
                 </FormPanel>
@@ -129,8 +127,8 @@ class ScripDownloadPanel extends PureComponent {
 
 
 ScripDownloadPanel.propTypes = {
-    ID : PropTypes.string,      //  background ID
-    Title: PropTypes.string,    // background Title
+    jobId : PropTypes.string,      //  background ID
+    label: PropTypes.string,        // background Title
     help_id : PropTypes.string
 };
 

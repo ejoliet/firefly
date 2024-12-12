@@ -3,6 +3,7 @@
  */
 package edu.caltech.ipac.firefly.server.catquery;
 
+import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.table.io.IpacTableReader;
 import edu.caltech.ipac.table.query.DataGroupQueryStatement;
 import edu.caltech.ipac.firefly.core.EndUserException;
@@ -70,11 +71,8 @@ public class GatorDD extends SharedDbProcessor {
  */
 class GatorDDImpl extends BaseGator {
 
-    private static final String DEF_DD_SERVICE = AppProperties.getProperty("irsa.gator.service.dd",
-            "/cgi-bin/Gator/nph-dd");
-    private static final String DEF_DD_HOST = AppProperties.getProperty("irsa.gator.dd.hostname",
-            "irsa.ipac.caltech.edu");
-    public static final String BASE_NAME = "gator-dd-pre";
+    private static final String DEF_DD_SERVICE = AppProperties.getProperty("irsa.gator.service.dd","/cgi-bin/Gator/nph-dd");
+    private static final String DEF_DD_HOST = AppProperties.getProperty("irsa.gator.dd.hostname","irsa.ipac.caltech.edu");
     private final static String START_PARAM_MODE_ASCII = "mode=ascii";
 
 
@@ -85,19 +83,6 @@ class GatorDDImpl extends BaseGator {
     @Override
     protected String getDefHost(){
         return DEF_DD_HOST;
-    }
-
-    protected String getFileBaseName(CatalogRequest req) throws EndUserException {
-        return BASE_NAME;
-    }
-
-    @Override
-    protected File createFile(TableServerRequest request) throws IOException {
-        try {
-            return File.createTempFile(getFileBaseName((CatalogRequest) request), ".tbl", ServerContext.getPermWorkDir());
-        } catch (EndUserException e) {
-            return null;
-        }
     }
 
     protected String getParams(CatalogRequest req) throws EndUserException, IOException {
@@ -131,7 +116,7 @@ class GatorDDImpl extends BaseGator {
     }
 
     protected File modifyData(File f, CatalogRequest req) throws Exception {
-        File inFile = File.createTempFile("gator-dd", ".tbl", ServerContext.getPermWorkDir());
+        File inFile = File.createTempFile("gator-dd", ".tbl", QueryUtil.getTempDir(req));
         String forStmt;
         if (req.getDDShort()) {
             //short form

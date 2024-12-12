@@ -8,14 +8,15 @@ import edu.caltech.ipac.firefly.server.util.StopWatch;
 import edu.caltech.ipac.table.*;
 
 import java.io.*;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 
-import static edu.caltech.ipac.table.IpacTableUtil.createMetaFromColumns;
+import static edu.caltech.ipac.table.DataType.typeToDesc;
+import static edu.caltech.ipac.table.IpacTableUtil.*;
+import static edu.caltech.ipac.table.TableMeta.*;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
@@ -84,16 +85,25 @@ public class IpacTableWriter {
 
         // fix column with array type
         modHeaders.stream()
-            .filter(dt -> dt.getArraySize() != null)
+            .filter(dt -> dt.getArraySize() != null && dt.getDataType() != String.class)        // save original type and arraySize because ipac table will serialize it to string
             .forEach(dt -> {
-                List<DataGroup.Attribute> atts = Arrays.asList(TableMeta.makeAttribute(TableMeta.ARY_SIZE_TAG, dt.getKeyName(), dt.getArraySize()));
-                IpacTableUtil.writeAttributes(out, atts, false);
-                atts = Arrays.asList(TableMeta.makeAttribute(TableMeta.TYPE_TAG, dt.getKeyName(), dt.getTypeDesc()));
+                List<DataGroup.Attribute> atts = Arrays.asList(
+                        TableMeta.makeAttribute(TableMeta.ARY_SIZE_TAG, dt.getKeyName(), dt.getArraySize()),
+                        TableMeta.makeAttribute(TableMeta.TYPE_TAG, dt.getKeyName(), dt.getTypeDesc())
+                );
                 IpacTableUtil.writeAttributes(out, atts, false);
 
                 dt.setDataType(String.class);
-                dt.setTypeDesc(DataType.CHAR);
+                dt.setTypeDesc("char");
             });
+
+        // make sure derived columns are marked
+        modHeaders.stream()
+                .filter(dt -> dt.getDerivedFrom() != null)        // save derived column info
+                .forEach(dt -> {
+                    List<DataGroup.Attribute> atts = Arrays.asList(TableMeta.makeAttribute(DESC_TAG, dt.getKeyName(), dt.getDesc()));
+                    IpacTableUtil.writeAttributes(out, atts, false);
+                });
 
         // fix type if format changes value to another type
         modHeaders.stream()
@@ -102,9 +112,19 @@ public class IpacTableWriter {
                 String prec = col.getPrecision().toUpperCase();
                 if (prec.startsWith("HMS") || prec.startsWith("DMS")) {
                     col.setDataType(String.class);
-                    col.setTypeDesc(DataType.CHAR);
+                    col.setTypeDesc("char");
                 }
             });
+
+        // fix unsupported types
+        modHeaders.stream()
+                .filter(dt -> !isKnownType(dt.getDataType()))
+                .forEach( dt -> {
+                    List<DataGroup.Attribute> atts = Arrays.asList(TableMeta.makeAttribute(TYPE_TAG, dt.getKeyName(), dt.getTypeDesc()));
+                    IpacTableUtil.writeAttributes(out, atts, false);
+                    dt.setDataType(mapToIpac(dt.getDataType()));
+                    dt.setTypeDesc(typeToDesc(dt.getDataType()));
+                });
 
         // print column headers
         IpacTableUtil.writeHeader(out, modHeaders);

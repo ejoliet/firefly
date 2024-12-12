@@ -1,16 +1,19 @@
 /*
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
-import React, {memo, useEffect, useState, PureComponent} from 'react';
-import PropTypes from 'prop-types';
-import ReactDOM from 'react-dom';
-import {get, set} from 'lodash';
+import React, {memo, useEffect, useRef, useState} from 'react';
+import PropTypes, {bool, elementType, func, object, oneOfType, shape, string} from 'prop-types';
+import {createRoot} from 'react-dom/client';
+import {Dropdown, IconButton, Menu, MenuButton, Sheet, Tooltip} from '@mui/joy';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+
+import {set} from 'lodash';
 import {dispatchHideDialog, isDialogVisible} from '../core/ComponentCntlr';
 import {flux} from '../core/ReduxFlux';
+import {FireflyRoot} from './FireflyRoot.jsx';
 
 
 const DIALOG_DIV= 'dialogRootDiv';
-const DROPDOWN_DIV_ROOT= 'dropDownPlane-root';
 const TMP_ROOT='TMP-';
 const DEFAULT_ZINDEX= 200;
 
@@ -20,116 +23,70 @@ let dialogs= [];
 let tmpPopups= [];
 let tmpCount=0;
 let divElement;
+let divElementRoot;
 
-const init= () => divElement= createDiv({id: DIALOG_DIV});
+function init() {
+    divElement= createDiv({id: DIALOG_DIV});
+    divElementRoot= createRoot(divElement);
+}
 
-/**
- * locDir is a 2-digit number to indicate the location and direction of the drop-down.
- *   location is the first digit starting from 1-top-left to 4-bottom-left clockwise.
- *   direction is the 2nd digit used to denote direction.  It follows the same convention as above.
- *
- * example:  drop-down at bottom-right, spanning left.   34
- *
- * @param p parameters object
- * @param p.content     the content to display
- * @param p.style       overrideable style
- * @param p.atElRef     the element reference used to apply locDir to.
- * @param p.locDir      location and direction of the drop-down.  see desc for more info
- * @param p.wrapperStyle style to apply to dropdown wrapper div, ex. zIndex
+/*
+ * Extend JoyUI Dropdown component to provide ease of use.
+ * This set focus to the popup panel on mount.  This allow any click to hide it.
+ * It also show tooltip when dropdown is closed.
+ * @param button         defaults to ArrowDropDownIcon
+ * @param title          tooltips for this dropdown
+ * @param onOpenChange   called when dropdown open/close state changes
+ * @param onFocusChange  called when focus state changes.  focus is true when mouse in hover over button, or when dropdown is opened.
+ * @param slotProps
+ * @param useIconButton     defaults to true.  more convenience than setting button.slots.root
  */
-export function showDropDown({id='',content, style={}, atElRef, locDir, wrapperStyle}) {
-    const planeId= getddDiv(id);
-    const ddDiv = document.getElementById(planeId) || createDiv({id: planeId, wrapperStyle});
-    const rootZindex= atElRef && computeZIndex(atElRef);
-    if (rootZindex) ddDiv.style.zIndex= rootZindex;
-    ReactDOM.render( <DropDown {...{id, content, style, atElRef, locDir}}/>, ddDiv);
-    return ddDiv;
+export function DropDown({button, title, onOpenChange, onFocusChange, slotProps, useIconButton=true, children, ...props}) {
+    const [open, setOpen] = useState(false);
+    const [focus, setFocus] = useState();
+
+    const dropdownEl = useRef(null);
+    useEffect(() => {
+        dropdownEl.current?.focus();
+    }, [dropdownEl.current]);
+
+    useEffect(() => {
+        focus !== undefined && onFocusChange?.(focus);
+    }, [focus]);
+
+    button ||= <ArrowDropDownIcon/>;
+
+    const onChange = (_, open) => {
+        onOpenChange?.(open);
+        setOpen(open);
+        setFocus(open);
+    };
+
+    const root = useIconButton ? IconButton : undefined;
+    return (
+        <Dropdown onOpenChange={onChange} {...props}>
+            <Tooltip onMouseEnter={() => setFocus(true)}
+                     onMouseLeave={() => setFocus(open)}
+                     title={!open && title} {...slotProps?.tooltip}>
+                <MenuButton {...slotProps?.button} slots={{ root, ...slotProps?.button?.slots }}>{button}</MenuButton>
+            </Tooltip>
+            <Menu ref={dropdownEl} {...slotProps?.menu}>{children}</Menu>
+        </Dropdown>
+    );
 }
 
-export function hideDropDown(id='') {
-    const ddDiv = document.getElementById(getddDiv(id));
-    if (ddDiv) {
-        ReactDOM.unmountComponentAtNode(ddDiv);
-        ddDiv.parentNode.removeChild(ddDiv);
-    }
-}
-
-const getddDiv= (id) => id ? id+ '-dropdownPlane' : DROPDOWN_DIV_ROOT;
-
-const getPos = (props) => {
-    const {atElRef:el} = props;
-    if (!get(el, 'isConnected', true)) hideDropDown(props.id);                                                  // referenced element is no longer visible.. hide drop-down.
-    const {x:o_x, y:o_y, width:o_width, height:o_height} = document.documentElement.getBoundingClientRect();    // outer box
-    const {x=0, y=0, width=0, height=0} = el ? el.getBoundingClientRect() : {};                                 // inner box
-    return {x, y, width, height,  o_x, o_y, o_width, o_height};
+DropDown.propTypes = {
+    button: object,
+    title: oneOfType([string, elementType]),
+    onOpenChange: func,
+    onFocusChange: func,
+    useIconButton: bool,
+    slotProps: shape({
+        button: object,
+        menu: object,
+        tooltip: object,
+    })
 };
-
-
-class DropDown extends PureComponent {
-
-    constructor(props) {
-        super(props);
-        this.state = getPos(props);
-        this.hideDropDown = this.hideDropDown.bind(this);
-    }
-
-    hideDropDown() {
-        hideDropDown(this.props.id);
-    }
-
-    static getDerivedStateFromProps(props) {
-        return getPos(props);
-    }
-
-    componentDidMount() {
-        document.addEventListener('click', this.hideDropDown);
-    }
-
-    componentWillUnmount() {
-        document.removeEventListener('click', this.hideDropDown);
-    }
-    render() {
-        const {content, style={}, locDir} = this.props;
-        const {x, y, width, height,  o_x, o_y, o_width, o_height} = this.state;    // outter box
-        const [loc, dir] = [Math.floor(locDir/10), locDir%10];
-
-        const top    = (y-o_y) + (loc === 3 || loc === 4 ? height : 0);
-        const bottom = ((o_height-o_y) - y) - (loc === 3 || loc === 4 ? height : 0);
-        const left   = (x-o_x) + (loc === 2 || loc === 3 ? width : 0);
-        const right  = ((o_width-o_x) - x) - (loc === 2 || loc === 3 ? width : 0);
-
-        let pos;
-        switch (dir) {
-            case 1:
-                pos = {bottom, right}; break;
-            case 2:
-                pos = {bottom, left}; break;
-            case 3:
-                pos = {top, left}; break;
-            case 4:
-                pos = {top, right}; break;
-        }
-
-        const myStyle = Object.assign({ backgroundColor: '#FBFBFB',
-                                        ...pos,
-                                        padding: 3,
-                                        boxShadow: '#c1c1c1 1px 1px 5px 0px',
-                                        borderRadius: '0 3px',
-                                        border: '1px solid #c1c1c1',
-                                        position: 'absolute'},
-                                    style);
-        const stopEvent = (e) => {
-            e.stopPropagation();
-            e.nativeEvent && e.nativeEvent.stopImmediatePropagation();
-        };
-
-        return (
-            <div className='rootStyle' style={myStyle} onClick={stopEvent}>
-                {content}
-            </div>
-        );
-    }
-}
 
 function requestOnTop(key) {
     const topKey= dialogs.sort( (d1,d2) => d2.zIndex-d1.zIndex)[0].dialogId;
@@ -203,7 +160,7 @@ function showTmpPopup(popup) {
     };
 }
 
-function createDiv({id, appendTo=document.body, wrapperStyle={}}) {
+function createDiv({id, appendTo=document.body, style = {}}) {
     const el= document.createElement('div');
     appendTo.appendChild(el);
     el.id= id;
@@ -212,7 +169,8 @@ function createDiv({id, appendTo=document.body, wrapperStyle={}}) {
     el.style.position = 'absolute';
     el.style.left= '0';
     el.style.top= '0';
-    Object.entries(wrapperStyle).forEach(([k,v]) => set(el.style, [k], v));
+    el.style.zIndex= DEFAULT_ZINDEX;
+    Object.entries(style).forEach(([k,v]) => set(el.style, [k], v));
     return el;
 }
 
@@ -230,7 +188,7 @@ const DialogRootComponent= memo(({dialogs,tmpPopups,requestOnTop}) =>{
         ));
     const tmpPopupAry = tmpPopups.map( (p) => React.cloneElement(p.component,{key:p.dialogId}));
     return (
-        <div>
+        <Sheet>
             {otherDialogAry}
             <div style={{position:'relative', zIndex:DEFAULT_ZINDEX}} className='rootStyle'>
                 {dialogAry}
@@ -238,7 +196,7 @@ const DialogRootComponent= memo(({dialogs,tmpPopups,requestOnTop}) =>{
                     {tmpPopupAry}
                 </div>
             </div>
-        </div>
+        </Sheet>
     );
 });
 
@@ -255,7 +213,11 @@ DialogRootComponent.propTypes = {
  * @param requestOnTop
  */
 function reRender(dialogs,tmpPopups,requestOnTop) {
-    ReactDOM.render(<DialogRootComponent dialogs={dialogs} tmpPopups={tmpPopups} requestOnTop={requestOnTop}/>, divElement);
+    divElementRoot.render(
+        <FireflyRoot>
+            <DialogRootComponent dialogs={dialogs} tmpPopups={tmpPopups} requestOnTop={requestOnTop}/>
+        </FireflyRoot>
+    );
 }
 
 /**

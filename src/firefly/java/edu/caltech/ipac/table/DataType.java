@@ -17,63 +17,75 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static edu.caltech.ipac.table.TableMeta.DERIVED_FROM;
 import static edu.caltech.ipac.table.TableUtil.foldAry;
-import static edu.caltech.ipac.util.StringUtils.isEmpty;
-import static edu.caltech.ipac.util.StringUtils.split;
+import static edu.caltech.ipac.util.StringUtils.*;
 import static org.apache.commons.lang.StringUtils.stripEnd;
 
 /**
- * TODO: need to fix DataType so that it supports these types mapping.
- * VOTable	        FITS    IPACTable   Firefly     Bytes   Meaning
- * --------	        ----	---------   -------     -----   -------
- * boolean	        L	    [char]      boolean     1       Logical
- * bit	            X	    [int]       [byte]      *       Bit
- * unsignedByte     B	    [int]       [byte]      1       Byte (0 to 255)
- * short	        I	    [int]       short       2       Short Integer
- * int	            J	    int         int         4       Integer
- * long	            K	    long        long        8       Long integer
- * char	            A	    char        char        1       ASCII Character
- * unicodeChar	    [B]     [int]       [int]       2       Unicode Character
- * float	        E	    float       float       4       Floating point
- * double	        D	    double      double      8       Double
- * floatComplex	    C	    [char]      [char]      8       Float Complex (ordered pair of float [real, imag])
- * doubleComplex    M	    [char]      [char]      16      Double Complex (ordered pair of double [real, imag])
- * char             [A]     date        date        8       Date
+ * Table below taken from https://www.ivoa.net/documents/VOTable/20191021/REC-VOTable-1.4-20191021.html#ToC11
+ * Added IPACTable and Firefly to show how these data types are mapped
+ * VOTable         FITS  Bytes   Meaning              IPACTable   Firefly   NOTES
+ * --------        ----  -----   -------              ---------   -------   -----------
+ * boolean         L     1       Logical              char        boolean
+ * bit             X     *       Bit                  int         boolean
+ * unsignedByte    B     1       Byte (0 to 255)      int         short
+ * short           I     2       Short Integer        int         short
+ * int             J     4       Integer              int         int
+ * long            K     8       Long integer         long        long
+ * char            A     1       ASCII Character      char        char
+ * unicodeChar           2       Unicode Character    char        char
+ * float           E     4       Floating point       float       float
+ * double          D     8       Double               double      double
+ * floatComplex    C     8       Float Complex        char        float[]   ordered pair of float [real, imag]   (not implemented, yet)
+ * doubleComplex   M     16      Double Complex       char        double[]  ordered pair of double [real, imag]  (not implemented, yet)
+ * char            A     8       Date                 date        date      Date is not a type for VOTable FITS.
  */
+
+
 public class DataType implements Serializable, Cloneable {
 
     public enum Visibility {show, hide, hidden};
 
-    private static final String DOUBLE = "double";
-    private static final String REAL = "real";
+    // firefly data types
+    public static final String BOOLEAN = "boolean";
+    public static final String BYTE = "byte";
+    public static final String SHORT = "short";
+    public static final String INT = "int";
+    public static final String INTEGER = "integer";
+    public static final String LONG = "long";
+    public static final String CHAR = "char";
+    public static final String FLOAT = "float";
+    public static final String DOUBLE = "double";
+    public static final String DATE = "date";
+    public static final String TIME = "time";
+
+    // VOTable mapped types; use lower case for comparison,
+    public static final String BIT = "bit";
+    public static final String UNSIGNED_BYTE = "unsignedbyte";
+    public static final String UNI_CHAR = "unicodechar";
+    public static final String COMPLEX_FLOAT = "floatcomplex";
+    public static final String COMPLEX_DOUBLE = "doublecomplex";
+
+    // IPAC-Table mapped types
+    public static final String REAL = "real";      // IPAC table
     public static final String LOCATION = "location";
 
-    private static final String FLOAT = "float";
-    private static final String INTEGER = "int";
-    private static final String LONG = "long";
-    public static final String CHAR = "char";
-    private static final String BOOLEAN = "boolean";
-    private static final String BOOL = "bool";
-    private static final String S_DOUBLE = "d";
-    private static final String S_REAL = "r";
+    // database mapped types
+    public static final String BIGINT = "bigint";      // IPAC table
+    public static final String TINYINT = "tinyint";
+    public static final String SMALLINT = "smallint";
 
-    private static final String S_FLOAT = "f";
-    private static final String S_INTEGER = "i";
-    private static final String S_LONG = "l";
-    private static final String S_CHAR = "c";
-    private static final String S_BOOL = "b";
-    public static final String LONG_STRING = "long_string";
-
-    private static final List<String> FLOATING_TYPES = Arrays.asList(DOUBLE, REAL, FLOAT, S_DOUBLE, S_REAL, S_FLOAT);
-    private static final List<String> INT_TYPES = Arrays.asList(INTEGER, LONG, S_INTEGER, S_LONG);
-    public static final List<String> NUMERIC_TYPES = Stream.concat(FLOATING_TYPES.stream(), INT_TYPES.stream()).collect(Collectors.toList());
+    private static final List<Class<?>> FLOATING_TYPES = List.of(Double.class, Float.class);
+    private static final List<Class<?>> INT_TYPES = List.of(Short.class, Integer.class, Long.class);
+    public static final List<Class<?>> NUMERIC_TYPES = Stream.concat(FLOATING_TYPES.stream(), INT_TYPES.stream()).collect(Collectors.toList());
     private static final Pattern precisiontPattern = Pattern.compile("^(HMS|DMS|[EFG])?(\\d*)$", Pattern.CASE_INSENSITIVE);
 
 
     private       String keyName;
     private       String label;
     private       String typeDesc;
-    private       Class type;
+    private       Class<?> type;
     private       String units;
     private       String nullString;
     private       String desc;
@@ -91,6 +103,7 @@ public class DataType implements Serializable, Cloneable {
     private       String precision;
     private       String ucd;
     private       String utype;
+    private       String xtype;
     private       String ref = "";
     private       List<LinkInfo> links = new ArrayList<>();
     private       String maxValue = "";
@@ -113,17 +126,17 @@ public class DataType implements Serializable, Cloneable {
 
 
     public DataType(String keyName,
-                    Class  type) {
+                    Class<?>  type) {
         this(keyName, type, null, null, null, null);
     }
 
     public DataType(String keyName,
                     String label,
-                    Class  type) {
+                    Class<?>  type) {
         this(keyName, type, label, null, null, null);
     }
 
-    public DataType(String keyName, Class type, String label, String units, String nullString, String desc) {
+    public DataType(String keyName, Class<?> type, String label, String units, String nullString, String desc) {
         // our db engine does not allow quotes in column names
         this.keyName = keyName == null ? null : keyName.replace("\"","");
         setDataType(type);
@@ -157,14 +170,14 @@ public class DataType implements Serializable, Cloneable {
         this.typeDesc = typeDesc;
     }
 
-    public Class getDataType() {
+    public Class<?> getDataType() {
         return type;
     }
 
-    public void setDataType(Class type) {
+    public void setDataType(Class<?> type) {
         this.type = type;
         if (type != null && typeDesc == null) {
-            typeDesc = resolveTypeDesc();
+            typeDesc = typeToDesc(type);
         }
     }
 
@@ -283,6 +296,15 @@ public class DataType implements Serializable, Cloneable {
         return utype;
     }
 
+    public void setXType(String xtype) {
+        this.xtype = xtype;
+    }
+
+    public String getXType() {
+        return this.xtype;
+    }
+
+
     public void setMaxValue(String max) {
         this.maxValue = max;
     }
@@ -327,9 +349,9 @@ public class DataType implements Serializable, Cloneable {
      * Firefly has 3 metas that affect the formatting of the column's data.  They are
      * listed below in order of highest to lowest precedence.
      *
-     * fmtDisp		: A Java format string.  It can be used to format any type.  i.e.  "cost $%.2f"
-     * format		: Same as fmtDisp
-     * precision	: This only applies to floating point numbers.
+     * fmtDisp      : A Java format string.  It can be used to format any type.  i.e.  "cost $%.2f"
+     * format       : Same as fmtDisp
+     * precision    : This only applies to floating point numbers.
      *                A string Tn where T is either F, E, G, HMS, or DMS
      *                If T is not present, it defaults to F.
      *                When T is F, E, HMS, or DMS, n is the number of significant figures after the decimal point.
@@ -373,7 +395,7 @@ public class DataType implements Serializable, Cloneable {
         } else if (!isEmpty(getFormat())) {
             return String.format(getFormat(), value);
 
-        } else if (FLOATING_TYPES.contains(getTypeDesc())) {
+        } else if (FLOATING_TYPES.contains(getDataType())) {
             // use precision
             String prec = getPrecision();
             if (!isEmpty(prec)) {
@@ -427,14 +449,17 @@ public class DataType implements Serializable, Cloneable {
 
     public boolean isFloatingPoint() {
         if (isFloatingPoint == null) {
-            isFloatingPoint = FLOATING_TYPES.contains(typeDesc);
+            if (type == null) {
+                System.out.println();
+            }
+            isFloatingPoint = FLOATING_TYPES.contains(type);
         }
         return isFloatingPoint;
     }
 
     public boolean isWholeNumber() {
         if (isWholeNumber == null) {
-            isWholeNumber = INT_TYPES.contains(typeDesc);
+            isWholeNumber = INT_TYPES.contains(type);
         }
         return isWholeNumber;
     }
@@ -479,19 +504,6 @@ public class DataType implements Serializable, Cloneable {
             StringUtils.Align align = isNumeric ? StringUtils.Align.RIGHT : StringUtils.Align.LEFT;
             return StringUtils.pad(width, value, align);
         }
-    }
-
-    public boolean isKnownType() {
-        return (type ==Boolean.class ||
-                type ==String.class  ||
-                type ==Double.class  ||
-                type ==Float.class   ||
-                type ==Integer.class ||
-                type ==Short.class ||
-                type ==Byte.class ||
-                type ==Long.class ||
-                type ==HREF.class
-        );
     }
 
     /**
@@ -552,89 +564,81 @@ public class DataType implements Serializable, Cloneable {
                 for (int i=0; i<strAry.length; i++) ary[i] = Byte.parseByte(strAry[i]);
                 return ary;
             }
-        } catch (Exception e) {}  // ignore
+        } catch (Exception ignored) {}  // ignore
         return strAry;
     }
 
 
     private Object strToObject(String s) {
         try {
-            if (s.length() == 0 || type == String.class) {
+            if (s.isEmpty() || type == String.class) {
                 return s;
             } else if (type ==Boolean.class) {
                 return Boolean.valueOf(s);
             }
             else if (type ==Double.class) {
-                return new Double(s);
+                return Double.parseDouble(s);
             }
             else if (type ==Float.class) {
-                return new Float(s);
+                return Float.parseFloat(s);
             }
             else if (type ==Integer.class) {
-                return new Integer(s);
+                return Integer.parseInt(s);
             }
             else if (type ==Short.class) {
-                return new Short(s);
+                return Short.parseShort(s);
             }
             else if (type ==Long.class) {
-                return new Long(s);
+                return Long.parseLong(s);
             }
             else if (type ==Byte.class) {
-                return new Byte(s);
+                return Byte.parseByte(s);
             }
             else if (type ==HREF.class) {
                 return HREF.parseHREF(s);
             }
-        } catch (IllegalArgumentException iae) {} // ok to ignore
+        } catch (IllegalArgumentException ignored) {} // ok to ignore
         return null;
     }
 
-    private String resolveTypeDesc() {
-
-        int w = getWidth();
-        boolean useShortType = w > 0 && w < 6;
-        if (type == null) type = String.class;
-
-        String typeDesc = useShortType ? S_CHAR : CHAR;
-        if (type.equals(Double.class))
-            typeDesc = useShortType ? S_DOUBLE : DOUBLE;
-        else if (type.equals(Float.class))
-            typeDesc = useShortType ? S_FLOAT : FLOAT;
-        else if (type.equals(Integer.class) || type.equals(Short.class) || type.equals(Byte.class))
-            typeDesc = useShortType ? S_INTEGER : INTEGER;
-        else if (type.equals(Long.class))
-            typeDesc = useShortType ? S_LONG : LONG;
-        else if (type.equals(Boolean.class))
-            typeDesc = useShortType ? S_BOOL : BOOLEAN;
-
-        return typeDesc;
+    public String getDerivedFrom() {
+        if (getDesc() == null) return null;
+        String[] derived = groupMatch(String.format("^\\(%s=(.*)\\).*", DERIVED_FROM), getDesc(), Pattern.DOTALL);  // allow new-line in description.
+        return derived == null ? null : derived[0];
     }
 
-    public static Class descToType(String type) {
-        switch (type) {
-            case DOUBLE:
-            case S_DOUBLE:
-            case REAL:
-            case S_REAL:
-                return Double.class;
-            case FLOAT:
-            case S_FLOAT:
-                return Float.class;
-            case LONG:
-            case S_LONG:
-                return Long.class;
-            case INTEGER:
-            case S_INTEGER:
-                return Integer.class;
-            case BOOL:
-            case BOOLEAN:
-            case S_BOOL:
-                return Boolean.class;
-            case LOCATION:
-                return String.class;
-            default:
-                return String.class;
-        }
+    public static String typeToDesc(Class<?> type) {
+
+        if (type == String.class)   return CHAR;
+        if (type == Double.class)   return DOUBLE;
+        if (type == Float.class)    return FLOAT;
+        if (type == Long.class)     return LONG;
+        if (type == Integer.class)  return INTEGER;
+        if (type == Short.class)    return SHORT;
+        if (type == Boolean.class)  return BOOLEAN;
+        if (type == Byte.class)     return BYTE;
+        if (type == Date.class)     return DATE;
+
+        return CHAR;
+    }
+
+    public static Class<?> descToType(String desc) {
+        return descToType(desc, String.class);
+    }
+
+    public static Class<?> descToType(String desc, Class<?> defaultVal) {
+        return switch (desc.toLowerCase()) {
+            case DOUBLE, COMPLEX_DOUBLE, REAL       -> Double.class;
+            case FLOAT, COMPLEX_FLOAT               -> Float.class;
+            case LONG, BIGINT                       -> Long.class;
+            case INT, INTEGER                       -> Integer.class;
+            case UNI_CHAR, LOCATION, CHAR           -> String.class;
+            case SHORT, UNSIGNED_BYTE, SMALLINT     -> Short.class;
+            case BOOLEAN, BIT                       -> Boolean.class;
+            case BYTE, TINYINT                      -> Byte.class;
+            case DATE, TIME                         -> Date.class;
+            default -> defaultVal;
+        };
     }
 
     public String toString() {
@@ -650,7 +654,7 @@ public class DataType implements Serializable, Cloneable {
 
     /**
      * convenience clone method to avoid catching exception and casting
-     * @return
+     * @return a clone copy of this object
      */
     public DataType newCopyOf() {
         try {

@@ -1,245 +1,155 @@
-import React from 'react';
-import {isDialogVisible} from 'firefly/core/ComponentCntlr';
-import {POPUP_DIALOG_ID, showOptionsPopup} from 'firefly/ui/PopupUtil';
-import {get, set, has, isUndefined} from 'lodash';
-import FieldGroupUtils from 'firefly/fieldGroup/FieldGroupUtils';
-import {
-    convertISOToMJD,
-    convertMJDToISO, DateTimePicker,
-    DateTimePickerField, fMoment, tryConvertToMoment,
-    validateDateTime,
-    validateMJD
-} from 'firefly/ui/DateTimePickerField';
-import {CheckboxGroupInputField} from 'firefly/ui/CheckboxGroupInputField';
-import {HeaderFont, ISO, MJD} from 'firefly/ui/tap/TapUtil';
-import HelpIcon from 'firefly/ui/HelpIcon';
-import * as PropTypes from 'prop-types';
-import {formFeedback, isShowHelp} from 'firefly/ui/TimePanel';
+import KeyboardDoubleArrowDown from '@mui/icons-material/KeyboardDoubleArrowDown';
 
-/* Style Helpers */
+import KeyboardDoubleArrowUp from '@mui/icons-material/KeyboardDoubleArrowUp';
+import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
+import {Box, Button, IconButton, Stack, Typography} from '@mui/joy';
+import HelpIcon from 'firefly/ui/HelpIcon';
+import {SwitchInputFieldView} from 'firefly/ui/SwitchInputField';
+import {isEqual, isObject} from 'lodash';
+import Prism from 'prismjs';
+import PropTypes from 'prop-types';
+import React, {useEffect, useRef} from 'react';
+import {getAppOptions} from '../../api/ApiUtil.js';
+import {CheckboxGroupInputField} from '../CheckboxGroupInputField.jsx';
+import {FieldGroupAccordionPanel} from '../panel/AccordionPanel.jsx';
+import {RadioGroupInputFieldView} from '../RadioGroupInputFieldView.jsx';
+import {useFieldGroupValue} from '../SimpleComponent.jsx';
+import {showResultTitleDialog} from './ResultTitleDialog';
+import {ADQL_QUERY_KEY, makeTapSearchTitle, USER_ENTERED_TITLE} from './TapUtil';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+
+export const HeaderFont = {fontSize: 12, fontWeight: 'bold', alignItems: 'center'};
+
+// Style Helpers
 export const LeftInSearch = 24;
 export const LabelWidth = 110;
-export const LableSaptail = 110;
-export const SpatialWidth = 440;
-export const SpatialLableSaptail = LableSaptail + 45 /* padding of target */ - 4 /* padding of label */;
+export const LableSaptail = 65;
+export const SpatialWidth = 520;
 export const Width_Column = 175;
 export const SmallFloatNumericWidth = 12;
 export const Width_Time_Wrapper = Width_Column + 30;
+export const SpatialPanelWidth = Math.max(Width_Time_Wrapper * 2, SpatialWidth) + LabelWidth + 10;
 
-export const  FROM = 0;
-export const  TO  = 1;
-
-export const skey = 'TABLE_SEARCH_METHODS';
+const DEF_ERR_MSG= 'Constraints Error';
 
 
-const showTimePicker = (loc, show, timeKey) => {
-    const pickerKey = timeKey + 'Picker';
-    const title = loc === FROM ? 'select "from" time' : 'select "to" time';
+export const getTapObsCoreOptions= (serviceLabel) =>
+    getAppOptions().tapObsCore?.[serviceLabel] ?? getAppOptions().tapObsCore ?? {};
 
-    const fields = FieldGroupUtils.getGroupFields(skey);
-    const {value/*, valid, message*/} = get(fields, pickerKey, {value: '', valid: true, message: ''});
+/**
+ * @param key
+ * @param [serviceLabel]
+ * @return {*}
+ */
+export function getObsCoreOption(key,serviceLabel=undefined) {
+    const slOps= serviceLabel ? getAppOptions().tapObsCore?.[serviceLabel] ?? {} : {};
+    const ops= getAppOptions().tapObsCore ?? {};
+    return slOps[key] ?? ops[key];
+}
 
-    const content = (
-        <DateTimePickerField fieldKey={pickerKey}
-                             groupKey={skey}
-                             showInput={false}
-                             openPicker={true}
-                             initialState={{
-                                 value
-                             }}
-                             inputStyle={{marginBottom: 3}}
-        />);
 
-    showOptionsPopup({content, title, modal: true, show});
+export function getTapObsCoreOptionsGuess(serviceLabelGuess) {
+    const {tapObsCore={}}=  getAppOptions();
+    if (!serviceLabelGuess) return tapObsCore;
+    const guessKey= Object.entries(tapObsCore)
+        .find( ([key,value]) => isObject(value) && serviceLabelGuess.includes(key))?.[0];
+    return getTapObsCoreOptions(guessKey);
+}
+
+
+/**
+ * make a FieldErrorList object
+ * @returns {FieldErrorList}
+ */
+export const makeFieldErrorList = () => {
+    const errors= [];
+    const checkForError= ({valid=true, message=''}= {}) => !valid && errors.push(message);
+    const addError= (message) => errors.push(message);
+    const getErrors= () => [...errors];
+    return {checkForError,addError,getErrors};
 };
 
-export const changeDatePickerOpenStatusNew = (loc, timeKey, currentValue, currentTimeMode, setTimeCallback) => {
-    const currentTimeInfo = getTimeInfo(currentTimeMode, currentValue, true, '');
-    const doSetTime = function(moment) {
-        const timeInfo = getTimeInfo(ISO, fMoment(moment), true, '');
-        setTimeCallback(timeInfo[currentTimeMode].value);
-    };
-    return () => {
-        const show = !isDialogVisible(POPUP_DIALOG_ID);
-        const title = loc === FROM ? 'select "from" time' : 'select "to" time';
-        const content = (
-            <DateTimePicker showInput={false}
-                            openPicker={true}
-                            value={currentTimeInfo[ISO].value}
-                            onChange={doSetTime}
-                            inputStyle={{marginBottom: 3}}
-            />);
+export const getPanelPrefix = (panelTitle) => panelTitle[0].toLowerCase() + panelTitle.substr(1);
 
-        showOptionsPopup({content, title, modal: true, show});
-    };
-};
 
-// ExpsoureStartFrom
-export function changeDatePickerOpenStatus(loc, timeKey) {
-    return () => {
-        const show = !isDialogVisible(POPUP_DIALOG_ID);
+function getPanelAdqlConstraint(panelActive, panelTitle,constraintsValid,adqlConstraintsAry,siaConstraints, firstMessage, defErrorMessage=DEF_ERR_MSG, useSIAv2=false) {
+    if (!panelActive) return {adqlConstraint:'',constraintErrors:[], siaConstraints:[]};
 
-        showTimePicker(loc, show, timeKey);
+    if (useSIAv2 && constraintsValid && siaConstraints?.length) {
+        return {adqlConstraint: adqlConstraintsAry.join(' AND '), constraintErrors: [], siaConstraints};
+    }
+    else if (!useSIAv2 && constraintsValid && adqlConstraintsAry?.length) {
+        return {adqlConstraint:adqlConstraintsAry.join(' AND '),constraintErrors:[], siaConstraints};
+    }
+    else {
+        const msg= (!constraintsValid && firstMessage) ?
+            `Error processing ${panelTitle} constraints: ${firstMessage}` : defErrorMessage;
+        return {adqlConstraint:'',constraintErrors:[msg], siaConstraints:[]};
+    }
+}
+
+/**
+ *
+ * @param {boolean} panelActive
+ * @param {String} panelTitle
+ * @param {String} [defErrorMessage]
+ * @returns {Function}
+ */
+export function makePanelStatusUpdater(panelActive,panelTitle,defErrorMessage) {
+    /**
+     * @Function
+     * @param {InputConstraints} constraints
+     * @param {ConstraintResult} lastConstraintResult
+     * @param {Function} setConstraintResult - a function to set the constraint result setConstraintResult(ConstraintResult)
+     * @String string - panel message
+     */
+    return (constraints, lastConstraintResult, setConstraintResult, useSIAv2= false) => {
+        const {valid:constraintsValid,errAry, adqlConstraintsAry,
+            uploadFile, TAP_UPLOAD}= constraints;
+
+        const simpleError= constraintsValid ? '' : (errAry[0]|| defErrorMessage || '');
+
+        const {adqlConstraint, constraintErrors, siaConstraints}=
+            getPanelAdqlConstraint(panelActive,panelTitle, constraintsValid,adqlConstraintsAry,constraints.siaConstraints, errAry[0], defErrorMessage, useSIAv2);
+        const cr = { adqlConstraint, constraintErrors, siaConstraints, simpleError,
+            uploadFile, TAP_UPLOAD};
+        if (constraintResultDiffer(cr, lastConstraintResult)) setConstraintResult(cr);
+
+        return simpleError;
     };
 }
 
-export const getTimeInfo = function(timeMode, value, valid, message){
-    const updateValue = timeMode === MJD ? value : (valid ? fMoment(tryConvertToMoment(value, true)): value);
-    const isoVal = timeMode === MJD ? convertMJDToISO(updateValue) : updateValue;
-    const mjdVal = timeMode === ISO ? convertISOToMJD(updateValue) : updateValue;
-    const isoValInfo = timeMode === MJD ? validateDateTime(isoVal) : {value: isoVal, valid, message};
-    const mjdValInfo = timeMode === ISO ? validateMJD(mjdVal) : {value: mjdVal, valid, message};
-    return {[ISO]: isoValInfo, [MJD]: mjdValInfo};
-};
 
-export const onChangeTimeMode = (newTimeMode, inFields, rFields, updateComponents) => {
-    updateComponents.forEach((timeKey) => {
-        const field = inFields[timeKey];
-        const timeInfo = getTimeInfo(field.timeMode, field.value, field.valid, field.message);
-        const newTimeInfo = timeInfo[newTimeMode];
+function constraintResultDiffer(c1, c2) {
+    return (c1?.adqlConstraint !== c2?.adqlConstraint ||
+        (c1.simpleError!==c2.simpleError) ||
+        !isEqual(c1.constraintErrors, c2.constraintErrors) ||
+        !isEqual(c1.siaConstraints, c2.siaConstraints) ||
+        c1.upload!==c2.upload ||
+        c1.uploadFrom!==c2.uploadFrom ||
+        c1.serverFile!==c2.serverFile ||
+        c1.uploadFileName!==c2.uploadFileName||
+        !isEqual(c1.uploadColumns, c2.uploadColumns) ||
+        !isEqual(c1.TAP_UPLOAD, c2.TAP_UPLOAD)
+    );
+}
 
-        const showHelp = isShowHelp(timeInfo[ISO].value, timeInfo[MJD].value);
-        const feedback = formFeedback(timeInfo[ISO].value, timeInfo[MJD].value);
 
-        rFields[timeKey] = {
-            ...inFields[timeKey],
-            value: newTimeInfo.value,
-            valid: newTimeInfo.valid,
-            message: newTimeInfo.message,
-            showHelp, feedback,
-            timeMode: newTimeMode
-        };
-    });
-};
 
-export const onChangeTimeField = (value, inFields, rFields, timeKey, timeOptionsKey) => {
-    // only update picker & mjd when there is no pop-up picker (time input -> picker or mjd)
-    if (!isDialogVisible(POPUP_DIALOG_ID)) {
-        const {valid, message} = inFields?.[timeKey] ?? {};
-        const currentTimeMode = inFields?.[timeOptionsKey]?.value;
-        const timeInfo = getTimeInfo(currentTimeMode, value, valid, message);
-        const showHelp = isShowHelp(timeInfo[ISO].value, timeInfo[MJD].value);
-        const feedback = formFeedback(timeInfo[ISO].value, timeInfo[MJD].value);
-        rFields[timeKey] = {
-            ...inFields[timeKey],
-            value: timeInfo[currentTimeMode].value, message, valid, showHelp, feedback,
-            [ISO]: timeInfo[ISO],
-            [MJD]: timeInfo[MJD]
-        };
-    }
-};
-
-export const onChangeDateTimePicker = (value, inFields, rFields, timeKey, pickerKey, timeOptions) => {
-    const currentTimeMode = timeOptions.value;
-    // update MJD & TimeFrom (TimeTo) when there is pop-up picker (picker -> time field & mjd)
-    if (isDialogVisible(POPUP_DIALOG_ID)) {
-        const {valid, message} = get(inFields, pickerKey) || {};
-        const timeInfo = getTimeInfo(ISO, value, valid, message);
-        const showHelp = isShowHelp(timeInfo[ISO].value, timeInfo[MJD].value);
-        const feedback = formFeedback(timeInfo[ISO].value, timeInfo[MJD].value);
-        rFields[timeKey] = {
-            ...inFields[timeKey],
-            value: timeInfo[currentTimeMode].value, message, valid, showHelp, feedback, timeMode: currentTimeMode,
-            [ISO]: timeInfo[ISO],
-            [MJD]: timeInfo[MJD]
-        };
-    }
-};
-
-const updateMessage = (retval, field) => {
-    if (field) {
-        retval.message = `field '${field.label}': ${retval.message}`;
-    }
-    return retval;
-};
-
-const getFieldValidity = (fields, fieldKey, nullAllowed) => {
-    const {valid=true, message, value, displayValue} = get(fields, fieldKey) || {};
-    const val = displayValue || value;
-    const rVal = val && (typeof val === 'string') ? val.trim() : val;
-
-    // if nullAllowed is undefined, just pass valid & message as assigned
-    if (isUndefined(nullAllowed) || rVal) {
-        return {valid, message: (valid ? '' : (message || 'entry error'))};
-    } else if (!rVal) {
-        return {valid: nullAllowed, message: !nullAllowed ? 'empty entry' : ''};
-    }
-};
-
-export const checkField = (key, opFields, nullAllowed, fieldsValidity) => {
-    const retval = getFieldValidity(opFields, key, nullAllowed);
-    const field = get(opFields, key);
-    const validity = {valid: retval.valid, message: retval.message};
-    if (!retval.valid) {
-        updateMessage(retval, field);
-    }
-    if (has(field, 'nullAllowed')) {
-        validity.nullAllowed = nullAllowed;
-    }
-    fieldsValidity.set(key, validity);
-    return validity;
-};
-
-export const getPanelPrefix = (panelTitle) => {
-    return panelTitle[0].toLowerCase() + panelTitle.substr(1);
-};
-
-export const isPanelChecked = (panelTitle, panelPrefix, fields) => {
-    const panelCheckId = `${panelPrefix}Check`;
-    return get(fields, [panelCheckId, 'value' ]) === panelTitle;
-};
-
-/*
- * Encapsulates the logic to inspect a panel's check, field validity,
- * and update everything accordingly.
- */
-export const updatePanelFields = (fieldsValidity, valid, fields, newFields, panelTitle, panelPrefix, defaultMessage) => {
-    const panelCheckId = `${panelPrefix}Check`;
-    const panelFieldKey = `${panelPrefix}SearchPanel`;
-    const firstMessage = Array.from(fieldsValidity.values()).find((v) => !v.valid)?.message ?? defaultMessage;
-    if (newFields) {
-        const panelActive = get(fields, [panelCheckId, 'value']) === panelTitle;
-        const panelValid = get(fields, [panelFieldKey, 'panelValid'], false);
-        for (const [key, validity] of fieldsValidity.entries()) {
-            newFields[key].validity = validity;
-            newFields[key].message = validity.message;
-            if (has(newFields[key], 'nullAllowed')) {
-                newFields[key].nullAllowed = !panelActive;
-                newFields[key].valid = panelActive ? validity.valid : true;
-            }
-        }
-
-        Object.assign(newFields[panelFieldKey], {
-            'panelValid': valid,
-            'panelMessage': !valid ? firstMessage : '',
-        });
-        if (valid && !panelValid && [...fieldsValidity.keys()].length > 0) {
-            set(newFields, [panelCheckId, 'value'], panelTitle);
-        }
-    }
-};
-
-export function Header({title, helpID='', checkID, message, enabled=false, panelValue=undefined}) {
+function Header({title, helpID='', checkID, message, enabled=false, panelValue=undefined}) {
     const tooltip = title + ' search is included in the query if checked';
     return (
-        <div style={{display: 'inline-flex', alignItems: 'center'}} title={title + ' search'}>
+        <Stack spacing={1} alignItems='center' direction='row'>
             <div onClick={(e) => e.stopPropagation()} title={tooltip}>
-                <CheckboxGroupInputField
-                    key={checkID}
-                    fieldKey={checkID}
-                    initialState={{
-                        value: enabled ? panelValue || title:'',
-                        label: ''
-                    }}
-                    options={[{label:'', value: panelValue || title}]}
-                    alignment='horizontal'
-                    wrapperStyle={{whiteSpace: 'norma'}}
-                />
+                <CheckboxGroupInputField key={checkID} fieldKey={checkID}
+                                         initialState={{ value: enabled ? panelValue || title:'', label: '' }}
+                                         options={[{label:'', value: panelValue || title}]}
+                                         orientation='horizontal'  />
             </div>
-            <div style={{...HeaderFont, marginRight: 5}}>{title}</div>
-            <HelpIcon helpId={helpID}/>
-            <div style={{marginLeft: 10, color: 'saddlebrown', fontStyle: 'italic', fontWeight: 'normal'}}>{message}</div>
-        </div>
+            <Typography {...{color:'primary'}}>{title}</Typography>
+            <HelpIcon helpId={helpID} component='div' />
+            <Typography {...{level:'body-sm', color:'warning'}}>{message}</Typography>
+        </Stack>
     );
 }
 
@@ -247,5 +157,240 @@ Header.propTypes = {
     title: PropTypes.string,
     helpID: PropTypes.string,
     checkID: PropTypes.string,
-    message: PropTypes.string
+    message: PropTypes.string,
+    panelValue: PropTypes.string,
+    enabled: PropTypes.bool
 };
+
+function InternalCollapsibleCheckHeader({sx, title, helpID, children, fieldKey, checkKey, message, initialState, initialStateChecked, panelValue}) {
+
+    return (
+        <FieldGroupAccordionPanel header={<Header title={title} helpID={helpID}
+                                               enabled={initialStateChecked}
+                                               checkID={checkKey} message={message} panelValue={panelValue}/>}
+                                  sx={{'& .MuiAccordionDetails-content>.check-header-content': { ml: 3, }, ...sx}}
+                                          initialState={initialState} fieldKey={fieldKey} headerStyle={HeaderFont}>
+            <Box className='check-header-content'>
+                {children}
+            </Box>
+        </FieldGroupAccordionPanel>
+
+    );
+}
+
+
+
+export function makeCollapsibleCheckHeader(base) {
+    const panelKey= base+'-panelKey';
+    const panelCheckKey= base+'-panelCheckKey';
+    const panelValue= base+'-panelEnabled';
+
+    const retObj= {
+            isPanelActive: () => false,
+            setPanelActive: () => undefined,
+            collapsibleCheckHeaderKeys:  [panelKey,panelCheckKey],
+        };
+
+    retObj.CollapsibleCheckHeader= ({sx, title,helpID,message,initialStateOpen, initialStateChecked,children}) => {
+        const [getPanelActive, setPanelActive] = useFieldGroupValue(panelCheckKey);// eslint-disable-line react-hooks/rules-of-hooks
+        const [getPanelOpenStatus, setPanelOpenStatus] = useFieldGroupValue(panelKey);// eslint-disable-line react-hooks/rules-of-hooks
+        const isActive= getPanelActive() === panelValue;
+        retObj.isPanelActive= () => getPanelActive() === panelValue;
+        retObj.setPanelActive= (active) => setPanelActive(active ? panelValue : '');
+        retObj.isPanelOpen= () => getPanelOpenStatus();
+        retObj.setPanelOpen= (open) => setPanelOpenStatus(open);
+        return (
+            <InternalCollapsibleCheckHeader {...{sx, title, helpID, checkKey:panelCheckKey, fieldKey:panelKey,
+                                            message: isActive ? message:'', initialStateChecked, panelValue,
+                                            initialState:{value: initialStateOpen}}} >
+                {children}
+            </InternalCollapsibleCheckHeader>
+        );
+    };
+    return retObj;
+}
+
+
+export function NavButtons({setServicesShowing, servicesShowing, currentPanel, setNextPanel, lockService=false}) {
+
+    return (
+        <Stack {...{direction:'column', justifyContent:'center', spacing:.5, alignItems:'flex-end', mr:.2,
+            sx:{ 'button': {width:'80px', maxHeight:22 } }
+        }}>
+            {!lockService && <ShowServicesButton {...{setServicesShowing,servicesShowing}}/>}
+            <GotoPanelButton {...{setNextPanel,currentPanel}}/>
+        </Stack>
+
+        // <div style={{display:'flex', flexDirection:'column', margin:'5px 5px 0 60px'}}>
+        //     <ShowServicesButton {...{setServicesShowing,servicesShowing}/>
+        //     <GotoPanelButton {...{sx:{mt:1/2}, setNextPanel,currentPanel}}/>
+        // </div>
+    );
+}
+
+export const ADQL= 'adql';
+export const SINGLE= 'basic';
+export const OBSCORE= 'obscore';
+export const ANY= 'any';
+const HIDE='HIDE';
+const SHOW='SHOW';
+
+function ShowServicesButton({setServicesShowing, servicesShowing }) {
+    const currState= servicesShowing ? SHOW : HIDE;
+    const options= [
+        {label:'Show', startDecorator: <KeyboardDoubleArrowUp/>, value:SHOW, tooltip:'Show other TAP services'},
+        {label:'Hide', startDecorator: <KeyboardDoubleArrowDown/>, value:HIDE, tooltip:'Hide other TAP services'}
+    ];
+
+    return (
+            <RadioGroupInputFieldView {...{
+                options, value:currState, label:'TAP Services: ', orientation:'horizontal', buttonGroup:true,
+                slotProps: {button: {sx: {'--Button-minHeight' : 22, '--Button-gap': '.2rem', }}},
+                onChange:() => setServicesShowing(!servicesShowing)
+            }}/>
+    );
+}
+
+function GotoPanelButton({currentPanel, setNextPanel}) {
+    const options= [ {label:'UI assisted', value:SINGLE}, {label:'Edit ADQL', value:ADQL}];
+    const tooltip= 'Please select an interface type to use';
+
+    return (
+            <RadioGroupInputFieldView {...{
+                options, value:currentPanel,
+                label:'View: ', orientation:'horizontal', tooltip, buttonGroup:true, inline:true,
+                onChange: () => setNextPanel(currentPanel===SINGLE ? ADQL : SINGLE)
+            }}/>
+    );
+}
+
+export function TableTypeButton({sx, lockToObsCore, setLockToObsCore}) {
+    const tooltip= lockToObsCore ? 'Selected an image Search' : 'Selected search for catalog or other tables';
+
+    return (
+        <SwitchInputFieldView  {...{
+            sx,
+            slotProps: {
+                input: {
+                    sx:{ '--Switch-trackWidth': '20px', '--Switch-trackHeight': '12px', }
+                }
+            },
+            size:'sm',
+            endDecorator: 'Use Image Search (ObsTAP)',
+            tooltip, value: lockToObsCore,
+            onChange: () => setLockToObsCore(!lockToObsCore)
+        }}/>
+    );
+}
+
+export function DebugObsCore({constraintResult, includeSia=true}) {
+
+    const {current:divElementRef}= useRef({divElement:undefined});
+
+    useEffect(() => {
+        divElementRef.divElement&& Prism.highlightAllUnder(divElementRef.divElement);// highlight help text/code snippets
+    });
+    if (!getAppOptions().tapObsCore?.debug) return false;
+
+    const siaFrag= (
+        <>
+            <span style={{fontStyle: 'italic', fontSize: 'smaller'}}>sia: </span>
+            <code style={{fontSize: 'smaller'}}>
+                { constraintResult?.siaConstraints?.join('&')}
+            </code>
+        </>
+    );
+
+    const adqlFrag = (
+        <code className='language-sql' style={{background: 'none'}}>
+            {constraintResult?.adqlConstraint}
+        </code>
+    );
+
+    return (
+        <div ref={(c) => divElementRef.divElement = c} style={{marginTop: 5}}>
+            <span style={{fontStyle: 'italic', fontSize: 'smaller'}}>adql: </span>
+            <span>
+                {constraintResult?.adqlConstraint ? adqlFrag : <span>&#8709;</span>}
+            </span> <br/>
+            {includeSia && siaFrag}
+        </div> );
+}
+
+
+
+export function TitleCustomizeButton({groupKey, tapBrowserState, selectBy}) {
+
+    const [getUserTitle,setUserTitle]= useFieldGroupValue(USER_ENTERED_TITLE,groupKey);
+    const [getADQL,]= useFieldGroupValue(ADQL_QUERY_KEY,groupKey);
+    const getDefTitle= () =>
+        selectBy === 'adql' ?
+            makeTapSearchTitle(getADQL(), tapBrowserState.serviceUrl) :
+            makeTapSearchTitle(undefined, tapBrowserState.serviceUrl, tapBrowserState.tableName);
+
+    const onClick= () => {
+        const defTitle= getDefTitle();
+        showResultTitleDialog(getUserTitle(), defTitle, (newTitle) => setUserTitle(newTitle===defTitle ? undefined : newTitle) );
+    };
+
+    const title= getUserTitle() || getDefTitle();
+    if (!title) return undefined;
+
+    return (
+            <Stack direction='row' alignItems='center' sx={{pl:3}}>
+                <IconButton onClick={onClick} sx={{minWidth:0}}>
+                    <EditOutlinedIcon/>
+                </IconButton>
+                <Typography
+                    {...{
+                        level: 'body-sm',
+                        sx: {
+                            textAlign:'left',
+                            width: '13rem',
+                            textWrap: 'nowrap',
+                            textOverflow: 'ellipsis',
+                            overflow: 'hidden'
+                        }
+                    }}
+                >
+                    <Typography level='title-md'>Title: </Typography>
+                    {`${getUserTitle() || getDefTitle() || ''}`}
+                </Typography>
+
+            </Stack>
+    );
+}
+
+
+
+
+/**
+ * @typedef {Object} FieldErrorList
+ * @prop {Function} addError - add a string error message, addError(string)
+ * @prop {Function} checkForError - check and FieldGroupField for errors and add if found, checkForError(field)
+ * @prop {Function} getErrors - return the arrays of errors, const errAry= errList.getErrors()
+ */
+
+/**
+ * @typedef {Object} InputConstraints
+ *
+ * @prop {boolean} valid
+ * @prop {Array.<String>} errAry
+ * @props {Array.<String>} adqlConstraintsAry
+ * @props {Array.<String>} siaConstraints
+ * @props {Array.<String>} constraintErrors
+ */
+
+/**
+ * @typedef {Object} ConstraintResult
+ *
+ * @prop {String} adqlConstraint
+ * @props {Array.<String>} adqlConstraintErrors
+ * @props {Array.<String>} siaConstraints
+ * @props {Array.<String>} siaConstraintErrors
+ * @prop {String} simpleError
+ * @prop {boolean } upload
+ * @prop {Array.<String>} uploadColumns
+ * @prop {Object} TAP_UPLOAD
+ * @prop {String} uploadFile
+ */

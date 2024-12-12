@@ -1,7 +1,10 @@
 import React, {memo, PureComponent} from 'react';
-import PropTypes from 'prop-types';
+import PropTypes, {object, shape} from 'prop-types';
 import ReactDOM from 'react-dom';
 import {get, isArray, isUndefined, debounce} from 'lodash';
+import {dispatchHideDialog, dispatchShowDialog, isDialogVisible} from '../core/ComponentCntlr.js';
+import DialogRootContainer from './DialogRootContainer.jsx';
+import {DropDownMenuWrapper} from './DropDownMenu.jsx';
 import {useFieldGroupConnector} from './FieldGroupConnector.jsx';
 import {logger} from '../util/Logger.js';
 
@@ -12,11 +15,10 @@ import './SuggestBoxInputField.css';
 
 /**
  *  Make sure a component (like highlighted suggestion) is visible
- *  @param {ReactComponent} c
+ *  @param  el
  *  @param {Number} highlightedIdx
  */
-function ensureVisible(c, highlightedIdx) {
-    const el = ReactDOM.findDOMNode(c); //DOMElement
+function ensureVisible(el, highlightedIdx) {
     if (el && highlightedIdx) {
         const nSuggestions = el.children.length;
         if (nSuggestions>1) {
@@ -97,6 +99,33 @@ const SuggestBox = (props) => {
     );
 };
 
+function computeDropdownXY(element) {
+    const bodyRect = document.body.parentElement.getBoundingClientRect();
+    const elemRect = element.getBoundingClientRect();
+    const x = elemRect.left - bodyRect.left;
+    const y = elemRect.bottom -10;
+    return {x,y};
+}
+
+const dropKey= 'suggestion-box-drop';
+
+function showDrop(entryElement,dropDown, offComponentCB) {
+
+    const beforeVisible= (e) =>{
+        if (!e) return;
+        const {x,y}= computeDropdownXY(entryElement);
+        e.style.left= x+'px';
+        e.style.top= y+'px';
+    };
+    const dd= <DropDownMenuWrapper x={0} y={0} content={dropDown} beforeVisible={beforeVisible}/>;
+    DialogRootContainer.defineDialog(dropKey,dd);
+    dispatchShowDialog(dropKey);
+    document.removeEventListener('mousedown', offComponentCB);
+    setTimeout(() => {
+        document.addEventListener('mousedown', offComponentCB);
+    },10);
+}
+
 export class SuggestBoxInputFieldView extends PureComponent {
     constructor(props) {
         super(props);
@@ -116,6 +145,7 @@ export class SuggestBoxInputFieldView extends PureComponent {
         this.changeHighlighted = this.changeHighlighted.bind(this);
         this.handleKeyPress = this.handleKeyPress.bind(this);
         this.updateSuggestions = debounce(this.updateSuggestions.bind(this), 200);
+        this.offComponentCallback= this.offComponentCallback.bind(this);
     }
 
 
@@ -135,6 +165,18 @@ export class SuggestBoxInputFieldView extends PureComponent {
         this.setState({displayValue, valid, message, inputWidth});
         this.updateSuggestions(displayValue);
         this.props.fireValueChange({ value : displayValue, message, valid});
+    }
+
+    componentWillUnmount() {
+        document.removeEventListener('mousedown', this.offComponentCallback);// just in case
+        setTimeout(() => {
+            if (isDialogVisible(dropKey)) dispatchHideDialog(dropKey);
+        },5);
+    }
+
+    offComponentCallback(ev) {
+        this.setState({isOpen: false, highlightedIdx: undefined});
+        document.removeEventListener('mousedown', this.offComponentCallback);// just in case
     }
 
     updateSuggestions(displayValue) {
@@ -192,6 +234,7 @@ export class SuggestBoxInputFieldView extends PureComponent {
 
     handleKeyPress(ev) {
         const {isOpen, highlightedIdx, suggestions} = this.state;
+        this.divElement= ev.target;
 
         switch (ev.keyCode) {
             case 13: // enter
@@ -216,40 +259,51 @@ export class SuggestBoxInputFieldView extends PureComponent {
     render() {
 
         const {displayValue, valid, message, highlightedIdx, isOpen, inputWidth, suggestions, mouseTrigger } = this.state;
-        var {label, labelWidth, tooltip, inline, renderSuggestion, wrapperStyle, popStyle, popupIndex, inputStyle, readonly=false} = this.props;
+        const {label, tooltip, renderSuggestion, wrapperStyle, placeholder, slotProps={}, sx,
+            popStyle, popupIndex, readonly=false, required=false} = this.props;
 
-        const leftOffset = (labelWidth?labelWidth:0)+4;
+        const leftOffset = 0;
         const minWidth = (inputWidth?inputWidth-4:50);
-        const style = Object.assign({display: inline?'inline-block':'block'}, wrapperStyle);
+        const style = Object.assign({display: 'flex'}, wrapperStyle);
         const pStyle = Object.assign({left: leftOffset, minWidth, zIndex: popupIndex}, popStyle);
+
+        if (isOpen) {
+            if ((!isDialogVisible(dropKey) || this.lastHightlighedIdx!==highlightedIdx || this.lastSuggestions!==suggestions))  {
+                this.lastHightlighedIdx= highlightedIdx;
+                this.lastSuggestions= suggestions;
+                const box= (
+                    <div className={'SuggestBoxPopup'} style={pStyle} onMouseLeave={() => this.setState({highlightedIdx : undefined})}>
+                        <SuggestBox
+                            suggestions={suggestions}
+                            highlightedIdx={highlightedIdx}
+                            renderSuggestion={renderSuggestion || ((suggestion) => <span>{suggestion}</span>)}
+                            onChange={this.changeHighlighted.bind(this, true)}
+                            onComplete={this.changeValue}
+                            mouseTrigger={mouseTrigger}
+                        />
+                    </div>);
+                setTimeout(() => {
+                    showDrop(this.divElement,box,this.offComponentCallback);
+                },5);
+            }
+        }
+        else {
+            setTimeout(() => dispatchHideDialog(dropKey),5);
+        }
 
         return (
             <div className={'SuggestBoxInputField'} style={style} onKeyDown={this.handleKeyPress}>
-                <div>
-                    <InputFieldView
-                        valid={Boolean(valid)}
-                        onChange={this.onValueChange}
-                        onBlur={() => {isOpen && this.changeValue(undefined);}}
-                        value={displayValue}
-                        message={message}
-                        label={label}
-                        labelWidth={labelWidth}
-                        tooltip={tooltip}
-                        style={inputStyle}
-                        readonly={readonly}
-                    />
-                </div>
-
-                {isOpen && <div className={'SuggestBoxPopup'} style={pStyle} onMouseLeave={() => this.setState({highlightedIdx : undefined})}>
-                    <SuggestBox
-                        suggestions={suggestions}
-                        highlightedIdx={highlightedIdx}
-                        renderSuggestion={renderSuggestion || ((suggestion) => <span>{suggestion}</span>)}
-                        onChange={this.changeHighlighted.bind(this, true)}
-                        onComplete={this.changeValue}
-                        mouseTrigger={mouseTrigger}
-                    />
-                </div>}
+                <InputFieldView {...{
+                    valid: Boolean(valid),
+                    onChange: this.onValueChange,
+                    placeholder,
+                    value: displayValue,
+                    message, label, tooltip, readonly, required,
+                    onBlur: () => isOpen && this.changeValue(undefined),
+                    endDecorator: this.props.endDecorator,
+                    slotProps: { tooltip: {placement: 'right'}, ...slotProps },
+                    sx
+                }} />
             </div>
         );
     }
@@ -261,19 +315,27 @@ SuggestBoxInputFieldView.propTypes = {
     fieldKey : PropTypes.string,
     inline : PropTypes.bool,
     label:  PropTypes.string,
+    sx: PropTypes.object,
+    placeholder:  PropTypes.string,
     tooltip:  PropTypes.string,
-    labelWidth : PropTypes.number,
     popStyle : PropTypes.object, //style for the popup list
     wrapperStyle: PropTypes.object,     //style to merge into the container div
     getSuggestions : PropTypes.func,   //suggestionsArr = getSuggestions(displayValue)
     valueOnSuggestion : PropTypes.func, //newDisplayValue = valueOnSuggestion(prevValue, suggestion),
     renderSuggestion : PropTypes.func,   // ReactElem = renderSuggestion(suggestion)
     popupIndex: PropTypes.number,
-    inputStyle: PropTypes.object,
+    endDecorator : PropTypes.object,
     valid: PropTypes.bool,
     message: PropTypes.string,
     readonly: PropTypes.bool,
     validator: PropTypes.func,
+    required: PropTypes.bool,
+    slotProps: shape({
+        input: object,
+        control: object,
+        label: object,
+        tooltip: object
+    }),
 };
 
 
@@ -289,14 +351,17 @@ SuggestBoxInputField.propTypes = {
     groupKey : PropTypes.string,
     inline : PropTypes.bool,
     label:  PropTypes.string,
+    placeholder:  PropTypes.string,
+    sx: PropTypes.object,
     tooltip:  PropTypes.string,
-    labelWidth : PropTypes.number,
     popStyle : PropTypes.object, //style for the popup list
     wrapperStyle: PropTypes.object,     //style to merge into the container div
     getSuggestions : PropTypes.func,   //suggestionsArr = getSuggestions(displayValue)
     valueOnSuggestion : PropTypes.func, //newDisplayValue = valueOnSuggestion(prevValue, suggestion),
     renderSuggestion : PropTypes.func,   // ReactElem = renderSuggestion(suggestion)
+    endDecorator : PropTypes.object,
     popupIndex: PropTypes.number,
+    required: PropTypes.bool,
     initialState: PropTypes.shape({
         value: PropTypes.string,
         tooltip: PropTypes.string,

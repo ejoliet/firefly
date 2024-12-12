@@ -13,6 +13,23 @@ import {isHiPS} from './WebPlot.js';
 import {getHealpixPixel} from './HiPSUtil';
 import {STANDARD_READOUT} from './MouseReadoutCntlr';
 
+/**
+ * @typedef MouseState
+ * @prop NONE,
+ * @prop ENTER,
+ * @prop EXIT,
+ * @prop DOWN,
+ * @prop UP,
+ * @prop DRAG_COMPONENT,
+ * @prop DRAG,
+ * @prop MOVE,
+ * @prop CLICK,
+ * @prop WHEEL_UP,
+ * @prop WHEEL_DOWN,
+ * @prop DOUBLE_CLICK,
+ * @type {Enum}
+ */
+/** @type MouseState */
 export const MouseState= new Enum(['NONE', 'ENTER', 'EXIT', 'DOWN', 'UP',
     'DRAG_COMPONENT', 'DRAG', 'MOVE', 'CLICK', 'WHEEL_UP', 'WHEEL_DOWN',
     'DOUBLE_CLICK']);
@@ -72,7 +89,7 @@ export function fireMouseCtxChange(mouseCtx) {
  * @param {string} readoutData.readoutType
  * @param {string} readoutData.plotId
  * @param {Object} readoutData.readoutItems
- * @param {boolean} readoutData.threeColor
+ * @param {boolean} [readoutData.threeColor]
  */
 export function fireMouseReadoutChange({readoutType= STANDARD_READOUT, plotId, readoutItems={}, threeColor=false}) {
     lastReadout=  {readoutType,plotId,readoutItems,threeColor};
@@ -102,6 +119,7 @@ export function makeMouseStatePayload(plotId,mouseState,screenPt,screenX,screenY
     payload.plotId= plotId;
     payload.imagePt= cc.getImageCoords(screenPt);
     const worldPt= cc.getWorldCoords(screenPt);
+    payload.devicePt= cc.getDeviceCoords(screenPt);
     payload.worldPt= worldPt;
     if (isHiPS(plot) && worldPt) {
         const result= getHealpixPixel(plot,worldPt);

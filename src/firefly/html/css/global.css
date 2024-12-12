@@ -23,12 +23,12 @@
 */
 
 .rootStyle {
-    background-color: #e3e3e3;
+    /*background-color: #e3e3e3;*/
     padding: 0 1px 0 1px;
     border:0 none;
-    font-family: tahoma,arial,helvetica,sans-serif;
+    /*font-family: tahoma,arial,helvetica,sans-serif;*/
     font-size: 11px;
-    line-height: 1;
+    /*line-height: 1;*/
     text-align: initial;
 }
 
@@ -59,8 +59,8 @@ div.rootStyle img {
 
 #App > main {
     display: flex;
-    margin: 4px;
-    padding: 5px;
+    margin: 2px 4px 4px 4px;
+    padding: 0;
     -webkit-flex: auto;
     -ms-flex: auto;
     flex: auto;
@@ -107,6 +107,24 @@ div.rootStyle img {
     cursor: pointer;
 }
 
+.button.disabled {
+    opacity: .3;
+    pointer-events: none;
+}
+
+.button.text {
+    line-height: 1.5;
+    padding: 0 5px;
+    border: 1px solid #acacac;
+    border-radius: 2px;
+    white-space: nowrap;
+    font-weight: normal;}
+
+.button.text:hover {
+    border: 1px solid #878787;
+    background-color: #c4c4c4;
+}
+
 .button.large {
     white-space: nowrap;
     border: 2px solid white;
@@ -135,16 +153,10 @@ div.rootStyle img {
 }
 
 .disable-select {
-    -moz-user-select : none;
-    -ms-user-select : none;
-    -webkit-user-select : none;
     user-select :  none;
 }
 
 .enable-select {
-    -moz-user-select : text;
-    -ms-user-select : text;
-    -webkit-user-select : text;
     user-select :  text;
 }
 
@@ -167,25 +179,6 @@ div.rootStyle img {
 /* react-split-pane style <BEGIN> */
 .Pane.vertical, .Pane.horizontal {
     display: flex;
-}
-
-.Pane.vertical .content, .Pane.horizontal  .content{
-    overflow: hidden;
-    position: absolute;
-    top: 5px;
-    bottom: 5px;
-    left: 5px;
-    right: 5px;
-}
-
-.Pane.vertical .wrapper, .Pane.horizontal .wrapper{
-    flex: auto;
-    display: flex;
-    overflow: hidden;
-    /*border: 1px solid #a3aeb9;*/
-    border-radius: 5px;
-    margin: 3px;
-    position: relative;
 }
 
 .Resizer {
@@ -247,6 +240,10 @@ div.rootStyle img {
     align-items: center;
 }
 
+.ComponentBackground {
+    background-color: #c8c8c8;
+}
+
 .PanelToolbar__button {
     width: 24px;
     height: 24px;
@@ -291,35 +288,26 @@ div.rootStyle img {
     font-weight: bold;
 }
 
-
-.keyword-label  {
-    font-weight: bold;
-    margin-right: 3px;
+.round-btn {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    padding: 1px;
+    justify-content: center;
 }
 
-.keyword-value  {
-    color: maroon;
-    margin-right: 10px;
+.round-btn:hover {
+    background-color: rgba(0,0,0, .15);
+    border-radius: 50%;
+    cursor: pointer;
+    border: 1px solid rgba(0,0,0, 0.15);
 }
+
 
 
 
 /*-------------------< loading mask ---------------------*/
-.loading-mask {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-}
-
-.loading-mask::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    background-color: rgba(0, 0, 0, 0.25);
-}
 @-webkit-keyframes spin {
     from { transform: rotate(0deg);}
     to {transform: rotate(359deg);}
@@ -334,23 +322,6 @@ div.rootStyle img {
     border-style: solid;
     border-color: transparent rgb(255, 255, 255) rgb(255, 255, 255);
     border-radius: 50%;
-    top: calc(50% - 12px);
-    left: calc(50% - 12px);
-    animation-name: spin;
-    animation-duration: 2s;
-    animation-iteration-count: infinite;
-    animation-timing-function: linear;
-}
-
-.loading-mask::after {
-    content: "";
-    position: absolute;
-    border-width: 3px;
-    border-style: solid;
-    border-color: transparent rgb(255, 255, 255) rgb(255, 255, 255);
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
     top: calc(50% - 12px);
     left: calc(50% - 12px);
     animation-name: spin;
@@ -409,28 +380,24 @@ div.rootStyle img {
 
 
 .text-ellipsis {
-    display: inline-block;
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
 }
 
-.alerts__msg {
-    color: #1A2739;
-    text-align: center;
-    background-color: #FFF7C2;
-    padding: 5px 20px;
-    border: 1px solid #BDB05D;
-    font: 12px sans-serif;
-    text-shadow: none;
-    vertical-align: middle;
-    width: 100%;
-    box-sizing: border-box;
+.file-drop-zone {
+    border: none;
+    transition: border 0.3s ease-in-out;
+    position: relative;
+    top: 0;
+    left: 0;
+    z-index: 10; /* Adjust z-index to ensure it's above other FileUploadViewPanel content */
 }
 
-.alerts__msg a {
-    color: blue;
-    text-decoration: none;
+.file-drop-zone.dragging {
+    border: 2px dashed #007bff; /* Change border color when dragging over */
+    background-color: #f0f0f0; /* Add a background color when dragging over */
+    opacity: 65%;
 }
 
 /*------------------- reusable layout styles >---------------------*/
@@ -487,6 +454,7 @@ div.rootStyle img {
 }
 
 .arrow-down {
+    margin-right: 2px;
     width: 0;
     height: 0;
     border-left: 5px solid transparent;
@@ -514,4 +482,37 @@ div.rootStyle img {
     display: flex;
     flex-direction: column;
     flex-grow: 1;
+}
+
+[data-joy-color-scheme="dark"] img.old-ff-icon-img {
+    filter: invert(1);
+}
+
+#app img {
+    -webkit-user-drag: none;
+}
+
+/*------------------- generic-browser scrollbars ---------------------*/
+/* from https://developer.chrome.com/docs/css-ui/scrollbar-styling */
+:root {
+    --scrollbar-color-thumb: var(--joy-palette-neutral-softActiveBg);
+    --scrollbar-color-track: var(--joy-palette-background-surface);
+    --scrollbar-color-thumb-active: var(--joy-palette-neutral-softDisabledColor); /* one shade darker than softActiveBg */
+}
+
+/* Modern browsers with `scrollbar-*` support */
+@supports (scrollbar-width: auto) {
+    body {
+        scrollbar-color: var(--scrollbar-color-thumb) var(--scrollbar-color-track);
+    }
+}
+
+/* Legacy browsers with `::-webkit-scrollbar-*` support */
+@supports selector(::-webkit-scrollbar) {
+    body::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-color-thumb);
+    }
+    body::-webkit-scrollbar-track {
+        background: var(--scrollbar-color-track);
+    }
 }

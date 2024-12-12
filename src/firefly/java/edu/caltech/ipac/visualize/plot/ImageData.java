@@ -8,9 +8,8 @@ import edu.caltech.ipac.util.Assert;
 import edu.caltech.ipac.visualize.plot.plotdata.FitsRead;
 import edu.caltech.ipac.visualize.plot.plotdata.ImageStretch;
 import edu.caltech.ipac.visualize.plot.plotdata.RGBIntensity;
-import nom.tam.fits.Header;
 
-import java.awt.*;
+import java.awt.Transparency;
 import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
@@ -30,16 +29,12 @@ import java.util.Arrays;
  *   Add a new method to create an IndexColorModel dynamically according to the input ImageMask array
  */
 public class ImageData implements Serializable {
-
-
     public enum ImageType {TYPE_8_BIT, TYPE_24_BIT}
     private ColorModel cm;
     private int colorTableID = 0;   // this is not as flexible as color model and will be set to -1 when color model is set
     private BufferedImage bufferedImage;
     private boolean imageOutOfDate = true;
     private ImageMask[] imageMasks=null;
-    private byte[] saveStandardStretch;
-    private byte[][] save3CStretch;
 
     private final ImageType imageType;
     private final RangeValues[] rangeValuesAry;
@@ -50,7 +45,7 @@ public class ImageData implements Serializable {
     private final int lastPixel;
     private final int lastLine;
 
-    private WritableRaster raster;
+    private WritableRaster internalRaster= null;
 
     // used for hue-preserving RGB only
     private RGBIntensity rgbIntensity; // stats for intensity
@@ -77,14 +72,6 @@ public class ImageData implements Serializable {
                      int height) {
         this(imageType,x,y,width,height,rangeValues);
         this.colorTableID = colorTableID;
-        cm = imageType==ImageType.TYPE_24_BIT ?
-                new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_sRGB), false, false,
-                                                             Transparency.OPAQUE, DataBuffer.TYPE_BYTE) :
-                ColorTable.getColorModel(colorTableID);
-
-        raster = imageType==ImageType.TYPE_24_BIT ?
-                Raster.createBandedRaster( DataBuffer.TYPE_BYTE, this.width, this.height,3, null) :
-                Raster.createInterleavedRaster(DataBuffer.TYPE_BYTE, this.width, this.height, 1, null);
     }
 
     //LZ 7/20/15 add this to make an ImageData with given IndexColorModel
@@ -97,26 +84,25 @@ public class ImageData implements Serializable {
 
         this(ImageType.TYPE_8_BIT,x,y,width,height,rangeValues);
         imageMasks=iMasks;
-        cm =  getIndexColorModelForMask(iMasks);
-        raster = Raster.createInterleavedRaster(DataBuffer.TYPE_BYTE, width, height, 1, null);
+    }
+
+    private WritableRaster getRaster() {
+        if (internalRaster==null) {
+            internalRaster = imageType==ImageType.TYPE_24_BIT ?
+                    Raster.createBandedRaster( DataBuffer.TYPE_BYTE, this.width, this.height,3, null) :
+                    Raster.createInterleavedRaster(DataBuffer.TYPE_BYTE, this.width, this.height, 1, null);
+        }
+        return internalRaster;
+
     }
 
     public void setRGBIntensity(RGBIntensity rgbIntensity) {
         this.rgbIntensity = rgbIntensity;
     }
 
-    public BufferedImage getImage(FitsRead fitsReadAry[])       {
+    public BufferedImage getImage(FitsRead[] fitsReadAry)       {
         if (imageOutOfDate) constructImage(fitsReadAry);
         return bufferedImage;
-    }
-
-
-    public void freeResources() {
-        cm = null;
-        bufferedImage = null;
-        raster = null;
-        imageOutOfDate = true;
-        rgbIntensity = null;
     }
 
     public int getX() { return x;}
@@ -141,7 +127,20 @@ public class ImageData implements Serializable {
     void setColorTableIdOnly(int colorTableID) { this.colorTableID = colorTableID; }
 
 
-    ColorModel getColorModel() { return cm; }
+    ColorModel getColorModel() {
+        if (cm!=null) return cm;
+        if (imageMasks==null) {
+            cm = imageType==ImageType.TYPE_24_BIT ?
+                    new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_sRGB), false, false,
+                            Transparency.OPAQUE, DataBuffer.TYPE_BYTE) :
+                    ColorTable.getColorModel(colorTableID);
+        }
+        else {
+            cm =  getIndexColorModelForMask(imageMasks);
+        }
+        return cm;
+
+    }
 
     void markImageOutOfDate() { imageOutOfDate = true; }
 
@@ -151,15 +150,6 @@ public class ImageData implements Serializable {
         imageOutOfDate = true;
         rangeValuesAry[idx] = updatedRangeValues;
     }
-
-    public void setRangeValuesAry(RangeValues[] rvAry) {
-        for(int i= 0; i<3; i++) {
-            if (i<rvAry.length && rvAry[i]!=null) {
-                this.rangeValuesAry[i]= rvAry[i];
-            }
-        }
-    }
-
 
    // Testing Mask 07/16/16 LZ
     /**
@@ -198,15 +188,15 @@ public class ImageData implements Serializable {
         return new IndexColorModel(8, lsstMasks.length+1, cmap, 0, true);
     }
 
-    private void constructImage(FitsRead fitsReadAry[])  {
-        DataBufferByte db= (DataBufferByte) raster.getDataBuffer();
+    private void constructImage(FitsRead[] fitsReadAry)  {
+        DataBufferByte db= (DataBufferByte) getRaster().getDataBuffer();
         if (imageType ==ImageType.TYPE_8_BIT) {
             if (imageMasks!=null && imageMasks.length!=0){
-                bufferedImage = new BufferedImage(cm, raster, false, null);
+                bufferedImage = new BufferedImage(getColorModel(), getRaster(), false, null);
                 fitsReadAry[0].doStretchMask( db.getData(0), x, lastPixel, y, lastLine, imageMasks);
             }
             else {
-                bufferedImage = new BufferedImage(cm, raster, false, null);
+                bufferedImage = new BufferedImage(getColorModel(), getRaster(), false, null);
                 ImageHeader imHead= new ImageHeader(fitsReadAry[0].getHeader());
                 ImageStretch.stretchPixels8Bit(rangeValuesAry[Band.NO_BAND.getIdx()],
                                                fitsReadAry[0].getRawFloatAry(), db.getData(0),
@@ -218,7 +208,7 @@ public class ImageData implements Serializable {
         else if (imageType ==ImageType.TYPE_24_BIT) {
             float[][] float1dAry= new float[3][];
             byte[][] pixelDataAry= new byte[3][];
-            ImageHeader imHeadAry[]= new ImageHeader[3];
+            ImageHeader[] imHeadAry= new ImageHeader[3];
             Histogram[] histAry= new Histogram[3];
             for(int i=0;i<3; i++) {
                 if (fitsReadAry[i] == null) {
@@ -235,62 +225,12 @@ public class ImageData implements Serializable {
             }
             ImageStretch.stretchPixels3Color(rangeValuesAry, float1dAry, pixelDataAry, imHeadAry, histAry,
                     rgbIntensity, x, lastPixel, y, lastLine );
-            bufferedImage = new BufferedImage(cm, raster, false, null);
+            bufferedImage = new BufferedImage(getColorModel(), getRaster(), false, null);
         }
         else {
             Assert.tst(false, "image type must be TYPE_8_BIT or TYPE_24_BIT");
         }
         imageOutOfDate =false;
     }
-
-
-    public byte[][] stretch3Color(float [][] float1dAry, ImageHeader [] imHeadAry, Histogram[] histAry, Header header, RGBIntensity rgbIntensity) {
-        byte[][] pixelDataAry= new byte[3][];
-        for(int i=0;i<3; i++) {
-            pixelDataAry[i]= new byte[this.width * this.height];
-        }
-
-        ImageStretch.stretchPixels3Color(rangeValuesAry, float1dAry, pixelDataAry, imHeadAry, histAry,
-                rgbIntensity, x, lastPixel, y, lastLine );
-        return pixelDataAry;
-    }
-
-
-    public byte[] stretch8bit(final float [] float1d, final Header header, final Histogram histogram) {
-        final ImageHeader imHead= new ImageHeader(header) ;
-        byte [] byteAry= new byte[this.width * this.height];
-        ImageStretch.stretchPixels8Bit(rangeValuesAry[Band.NO_BAND.getIdx()],
-                float1d, byteAry,
-                imHead,  histogram,
-                x, lastPixel, y, lastLine );
-        return byteAry;
-    }
-
-    public byte[] stretchMask(final float [] float1d, final int naxis1) {
-        byte [] byteAry= new byte[this.width * this.height];
-        byte blank_pixel_value = (byte) 255;
-        int[] pixelhist = new int[256];
-
-        ImageStretch.stretchPixelsForMask(x, lastPixel, y, lastLine, naxis1,
-                blank_pixel_value, float1d, byteAry, pixelhist, imageMasks);
-        return byteAry;
-    }
-
-    public void stretch8bitAndSave(final float [] float1d, final Header header, final Histogram histogram) {
-        this.saveStandardStretch = stretch8bit(float1d,header,histogram);
-    }
-
-    public void stretchMaskAndSave(final float [] float1d, final int naxis1) {
-        this.saveStandardStretch = stretchMask(float1d,naxis1);
-    }
-
-    public byte[] getSavedStandardStretch() { return this.saveStandardStretch; }
-
-    public void stretch3ColorAndSave(float [][] float1dAry, ImageHeader [] imHeadAry, Histogram[] histAry,
-                                  Header header, RGBIntensity rgbIntensity) {
-        this.save3CStretch = stretch3Color(float1dAry,imHeadAry,histAry,header,rgbIntensity);
-    }
-
-    public byte[][] getSaved3CStretch() { return this.save3CStretch; }
 }
 

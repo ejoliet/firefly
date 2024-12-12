@@ -8,7 +8,7 @@
  * firefly. It may do import from external packages such as lodash and immutability-helper below
  */
 
-import { fromPairs, get, has, isArray, isUndefined, isBoolean, isEqual, isFunction, isNil, isObject,
+import { fromPairs, get, has, isString, isArray, isUndefined, isBoolean, isEqual, isFunction, isNil, isObject,
     isPlainObject, last, mergeWith, omit, once, set, union } from 'lodash';
 import update from 'immutability-helper';
 
@@ -38,6 +38,7 @@ const globalObj= (() => {
 })();
 
 export const getGlobalObj= () => globalObj;
+export const inWorker= () => !getGlobalObj().document;
 
 /*global __PROPS__*/        // this is defined at build-time.
 export const getGlobalProps= once( () => __PROPS__ ?? {});
@@ -52,13 +53,15 @@ const getScriptURL = once(() => {
 });
 
 export const getRootURL = once(() => {
-    if (getProp('SCRIPT_NAME') === undefined) return '//localhost:8080/';
+    if (getProp('SCRIPT_NAME') === undefined) return 'http://localhost:8080/';
     const workingURL = getScriptURL() || globalObj?.location.href;
     return workingURL.substring(0, workingURL.lastIndexOf('/')) + '/';
 });
 
-export const getCmdSrvURL = () => `${getRootURL()}sticky/CmdSrv`;
-export const getCmdSrvNoZipURL = () => `${getRootURL()}sticky/CmdSrvNoZip`;
+// export const getCmdSrvURL = () => `${getRootURL()}sticky/CmdSrv`;                // @Deprecated but, still supported by the server for fireflyclient
+export const getCmdSrvSyncURL = () => `${getRootURL()}CmdSrv/sync`;
+export const getCmdSrvNoZipURL = () => `${getRootURL()}CmdSrv/NoZip`;
+export const getCmdSrvAsyncURL = () => `${getRootURL()}CmdSrv/async`;
 
 export const isGPUAvailableInWorker= once(() => Boolean(getGlobalObj().OffscreenCanvas));
 // export const isGPUAvailableInWorker= () => false;
@@ -107,13 +110,14 @@ export function modifyURLToFull(url, rootPath) {
     const lastSlash = docUrl.lastIndexOf('/');
     if (!url && !rootPath) return (lastSlash === docUrl.indexOf('//') + 1) ? docUrl : docUrl.substring(0, lastSlash + 1);
     if (!url) return rootPath;
-    if (isFull(url)) return url;
+    if (isFullURL(url)) return url;
     if (rootPath) return rootPath.endsWith('/') ? rootPath + url : rootPath + '/' + url;
     if (lastSlash === docUrl.indexOf('//') + 1) return docUrl + '/' + url;
     return docUrl.substring(0, lastSlash + 1) + url;
 }
 
-function isFull(url) {
+export function isFullURL(url) {
+    if (!url) return false;
     const hPref = ['http', 'https', '/', 'file'];
     url = url.toLowerCase();
     return hPref.some((s) => url.startsWith(s));
@@ -223,6 +227,7 @@ export function documentReady() {
  */
 export function loadCancelableImage(src) {
     const im = new Image();
+    im.crossOrigin='anonymous';
     let promiseReject;
     let continueExecution= true;
     let imageCompleted= false;
@@ -249,6 +254,23 @@ export function loadCancelableImage(src) {
     return {promise, cancelImageLoad};
 }
 
+/**
+ * @param urlString     a URL string
+ * @param baseUrl       base URL if given a relative URL
+ * @returns {string}    a properly encoded URL.
+ */
+export const encodeUrlString= (urlString, baseUrl = getRootURL()) => {
+    try {
+        const url = new URL(urlString, baseUrl);
+        let query = url.searchParams.toString();
+            query = query ? '?' + query : '';
+        const port = url.port ? `:${url.port}` : '';
+        const hash = url.hash ? '#' + encodeURIComponent(url.hash.substring(1)) : '';
+        return `${url.protocol}//${url.hostname}${port}${url.pathname}${query}${hash}`;
+    } catch (e) {
+        return urlString;
+    }
+};
 
 /**
  * Returns a string where all characters that are not valid for a complete URL have been escaped.
@@ -300,7 +322,7 @@ export function toNameValuePairs(params) {
  * this function supports nested object.  if the value of a param is an object
  * or an array of {name, value}, it will encode the child, and then encode the parent as well.
  * @param {Object|Object[]} params key/value object or an array of {name,value}.
- * @returns {*}
+ * @returns {String}
  */
 export function encodeParams(params) {
     params = toNameValuePairs(params);  // convert to name-value pairs if params is a plain object.
@@ -316,7 +338,7 @@ export function encodeParams(params) {
 /**
  * Returns a string where all characters that are not valid for a complete URL have been escaped.
  * Also, it will do URL rewriting for session tracking if necessary.
- * Fires SESSION_MISMATCH if the seesion ID on the client is different from the one on the server.
+ * Fires SESSION_MISMATCH if the session ID on the client is different from the one on the server.
  *
  * @param url    this could be a full or partial url.  Delimiter characters will be preserved.
  * @param params parameters to be appended to the url.  These parameters may contain
@@ -572,8 +594,8 @@ export function updateDelete(object, path, value) {
 
 /**
  * similar to deep merge, except when a value is an array, it will replace the value instead of merging.
- * @param {Object} target  - the target or destination object
- * @param {Object} sources - the source objects
+ * @param {Object|undefined} target  - the target or destination object
+ * @param {Object|undefined} sources - the source objects
  */
 export function mergeObjectOnly(target, sources) {
     return mergeWith(target, sources,
@@ -588,22 +610,26 @@ export function mergeObjectOnly(target, sources) {
 /**
  *
  * Return a function that will only do a search once.
- * The function that takes 2 parameters, validateSearch:Function|boolean, doSearch:Function|undefined
- * When validateSearch search returns true then doSearch is called and search is considered done.
+ * The function that takes 2 parameters:
+ *       validateSearch:Function|boolean,
+ *       doSearch:Function|undefined
+ *       [id]: string, optional
+ * When validateSearch search returns true then doSearch is called and search is considered done for that id
  * To mark the search as done without actually doing it then just pass true as first parameter
  * makeSearchOnce is similar to lodash once but includes a validate as a way to make it done.
+ * It also includes an id so that it runs once per id
  * Note that the execution of the doSearch function is deferred.
- * @param {boolean } defer - if true run the search deferred
+ * @param {boolean } [defer] - if true run the search deferred
  * @return {Function} a function with the signature f(validateSearch,doSearch)
  */
 export function makeSearchOnce(defer=true) {
-    let executionComplete= false;
-    return (validateSearch, doSearch) => {
-        if (executionComplete) return;
+    const completedIds=[];
+    return (validateSearch, doSearch, id='default-id-param') => {
+        if (completedIds.includes(id)) return;
         const valid= (isBoolean(validateSearch) && validateSearch) || (isFunction(validateSearch) && validateSearch());
         if (!valid) return;
         if (doSearch) defer ? setTimeout(doSearch,5) : doSearch();
-        executionComplete=true;
+        completedIds.push(id);
     };
 }
 
@@ -748,6 +774,7 @@ export function flattenObject(object, prefix='', testFunc=isPlainObject) {
 
 
 export function hashCode(str) {
+    if (!str) return '';
     let hash = 5381;
     let i = str.length;
 
@@ -771,6 +798,13 @@ export const isNumeric= (n) => !isNaN(parseFloat(n)) && isFinite(n);
  */
 export const crunch= (s = '') => s && s.replace(/[ \t\n\r\f]/g, ' ').trim().replace(/\s{2,}/g, ' ');
 
+/**
+ * split the string with any number white space between
+ * @param s
+ * @return {Array.<string>} an array of string without which space, bad input will return an empty array
+ */
+export const splitByWhiteSpace= (s='') => (isString(s) && s.split( /\s+/).filter( (s) => s)) || [];
+
 export function matches(s, regExp, ignoreCase) {
     if (isNil(s)) return false;
     const re = ignoreCase ? new RegExp(regExp, 'i') : new RegExp(regExp);
@@ -791,6 +825,21 @@ export function uuid() {
         seed = Math.floor(seed/16);
         return (c === 'x' ? r : r & (0x3|0x8)).toString(16);
     });
+}
+
+
+export function tokenSub(valObs, str='') {
+    if (!str || !isString(str))  return str;
+    const vars = str.match(/\${[\w -.]+}/g);
+    if (!vars) return str;
+    let replaceStr = str;
+    vars.forEach((v) => {
+        const [,keyName] = v.match(/\${([\w -.]+)}/) || [];
+        if (isDefined(valObs[keyName])) {
+            replaceStr = replaceStr.replace(v, valObs[keyName]);
+        }
+    });
+    return replaceStr;
 }
 
 /**
@@ -837,4 +886,17 @@ export async function lowLevelDoFetch(url, options, doValidation, loggerFunc) {
     if (!doValidation || response.ok) return response;
     else if (response.status === 401) throw new Error('You are no longer logged in');
     else throw new Error(`Request failed with status ${response.status}: ${url}`);
+}
+
+export function getStatusFromFetchError(eStr) {
+    return Number(eStr?.match(/status \d+:/)?.[0]?.match(/\d+/)?.[0]);
+}
+
+/*
+  Works like lodash set.  However, it will only set if predicate returns true
+  predicate is invoked with the current value at the path.  Defaults to isUndefined
+ */
+export function setIf(object, path, value, predicate=isUndefined) {
+    const cv = get(object, path);
+    if (predicate?.(cv)) set(object, path, value);
 }

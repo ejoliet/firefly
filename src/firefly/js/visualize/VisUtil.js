@@ -6,15 +6,10 @@
  * @author Trey, Booth and many more
  */
 import {flattenDeep, isArray, isEmpty} from 'lodash';
-import pointInPolygon from 'point-in-polygon';
 import CoordinateSys from './CoordSys.js';
-import {CCUtil, CysConverter} from './CsysConverter.js';
-import DrawOp from './draw/DrawOp.js';
 import {doConv} from '../astro/conv/CoordConv.js';
-import {makeDevicePt, makeImagePt, makeImageWorkSpacePt, makeScreenPt, makeWorldPt, pointEquals} from './Point.js';
-import {getPixScaleDeg} from './WebPlot.js';
+import {makeImagePt, makeScreenPt, makeWorldPt, pointEquals} from './Point.js';
 import {memorizeUsingMap} from '../util/WebUtil';
-import {SelectedShape} from '../drawingLayers/SelectedShape';
 
 
 /** Constant for conversion Degrees => Radians */
@@ -51,7 +46,7 @@ export const computeScreenDistance= function (x1, y1, x2, y2) {
  * @param p2 WorldPt
  * @return {number}
  */
-export const computeDistance= (p1, p2) => computeDistanceAngularDistance(p1.x, p1.y, p2.x, p2.y);
+export const computeDistance= (p1, p2) => (p1 && p2) ? computeDistanceAngularDistance(p1.x, p1.y, p2.x, p2.y) : 0;
 
 
 const computeDistanceAngularDistance= memorizeUsingMap( (lon1,lat1,lon2,lat2) => {
@@ -72,19 +67,24 @@ const computeDistanceAngularDistance= memorizeUsingMap( (lon1,lat1,lon2,lat2) =>
  * @param {Point} p2
  * @return {number}
  */
-const computeSimpleDistance= function(p1, p2) {
+export const computeSimpleDistance= function(p1, p2) {
     const dx = p1.x - p2.x;
     const dy = p1.y - p2.y;
     return Math.sqrt(dx * dx + dy * dy);
 };
 
 
-const computeSimpleSlopeAngle = function (fromPt, toPt) {
+export const computeSimpleSlopeAngle = function (fromPt, toPt) {
     const dx = toPt.x - fromPt.x;
     const dy = toPt.y - fromPt.y;
     return Math.atan2(dy, dx);
 };
 
+export const computeSimpleSlope= function (fromPt, toPt) {
+    const dx = toPt.x - fromPt.x;
+    const dy = toPt.y - fromPt.y;
+    return dy/dx;
+};
 
 export function getLonDist(lon1,lon2) {
     if (lon1>lon2) {
@@ -105,16 +105,16 @@ export function getLatDist(lat1,lat2) {
 }
 
 /**
- * Convert from one coordinate system to another.
+ * Convert from one coordinate system to another. No action, if the world point coordinate system is non-celestial.
  *
  * @param {WorldPt} wpt the world point to convert
- * @param {CoordinateSys} to CoordSys, the coordinate system to convert to
- * @return {WorldPt} the world point in the new coordinate system
+ * @param {CoordinateSys} to CoordSys, the coordinate system to convert to; defaults to J2000, ignored for non-celestial world points
+ * @return {WorldPt|undefined} the world point in the new coordinate system
  */
-export function convert(wpt, to= CoordinateSys.EQ_J2000) {
+export function convertCelestial(wpt, to= CoordinateSys.EQ_J2000) {
     if (!wpt) return;
     const from = wpt.getCoordSys();
-    if (!to || from===to) return wpt;
+    if (!to || !from.isCelestial() || from===to) return wpt;
 
     const tobs=  (from===CoordinateSys.EQ_B1950) ? 1983.5 : 0;
     const ll = doConv(
@@ -124,7 +124,7 @@ export function convert(wpt, to= CoordinateSys.EQ_J2000) {
     return makeWorldPt(ll.lon, ll.lat, to);
 }
 
-const convertToJ2000= (wpt) => convert(wpt);
+const convertToJ2000= (wpt) => convertCelestial(wpt);
 
 /**
  * Find an approximate central point and search radius for a group of positions
@@ -182,29 +182,31 @@ export function computeCentralPointAndRadius(inPoints) {
     return {centralPoint, maxRadius};
 }
 
+
 /**
  * call computeCentralPointAndRadius in 2 ways first with a flatten version of the 2d array
  * then again with group of points.  This allows us not to overweight a larger group when computing the center.
  *
  * @param {Array.<Array.<WorldPt>>} inPoints2dAry  a 2d array of world points. Each array represents a group of points
- * @return {{centralPoint:WorldPt, maxRadius:number, avgOfCenters:WorldPt}}
+ * @param {number} minSizeDeg
+ * @return {{centralPoint:WorldPt, avgOfCenters:WorldPt, fovSize:number}}
  */
-export function computeCentralPtRadiusAverage(inPoints2dAry) {
+export function computeCentralPtRadiusAverage(inPoints2dAry,minSizeDeg=.11) {
 
     const testAry= flattenDeep(inPoints2dAry);
 
-    if (isEmpty(testAry)) return {centralPoint:undefined, maxRadius: 0, avgOfCenters:undefined};
-    if (isOnePoint(testAry)) return {centralPoint:testAry[0], maxRadius: .05, avgOfCenters:testAry[0]};
+    if (isEmpty(testAry)) return {centralPoint:undefined, fovSize: 0, avgOfCenters:undefined};
+    if (isOnePoint(testAry)) return {centralPoint:testAry[0], fovSize: minSizeDeg, avgOfCenters:testAry[0]};
 
     const {centralPoint, maxRadius}= computeCentralPointAndRadius(testAry);
-    if (inPoints2dAry.length===1) return {centralPoint, maxRadius, avgOfCenters:centralPoint};
+    if (inPoints2dAry.length===1) return {centralPoint, fovSize:Math.max(maxRadius,minSizeDeg), avgOfCenters:centralPoint};
 
     const centers= inPoints2dAry
         .map( (ptAry) => isOnePoint(ptAry) ? ptAry[0] : computeCentralPointAndRadius(ptAry).centralPoint)
         .filter((pt) => pt); // filter out undefined centers
 
     const {centralPoint:avgOfCenters}= computeCentralPointAndRadius(centers);
-    return {centralPoint, maxRadius, avgOfCenters};
+    return {centralPoint, fovSize: Math.max(maxRadius,minSizeDeg), avgOfCenters};
 }
 
 function isOnePoint(wpList) {
@@ -383,97 +385,11 @@ const getNewPosition= function(ra, dec, dist, phi) {
 };
 
 
-export const getRotationAngle= (plot) => {
-    const iWidth = plot.dataWidth;
-    const iHeight = plot.dataHeight;
-    const ix = iWidth / 2;
-    const iy = iHeight / 2;
-    const cc= CysConverter.make(plot);
-    const wptC = cc.getWorldCoords(makeImageWorkSpacePt(ix, iy));
-    const wpt2 = cc.getWorldCoords(makeImageWorkSpacePt(ix, iy+iHeight/4));
-    if (wptC && wpt2) return getPositionAngle(wptC.getLon(), wptC.getLat(), wpt2.getLon(), wpt2.getLat());
-    return 0;
-};
 
 
 
-/**
- * Is the image positioned so that north is up.
- * @param {WebPlot} plot
- * @param {CoordinateSys} csys
- * @return {boolean}
- */
-export function isPlotNorth(plot, csys= CoordinateSys.EQ_J2000) {
-    const ix = plot.dataWidth/ 2;
-    const iy = plot.dataHeight/ 2;
-    const cc= CysConverter.make(plot);
-    const wpt1 = cc.getWorldCoords(makeImageWorkSpacePt(ix, iy), csys);
-    if (!wpt1) return false;
-    const cdelt1 = getPixScaleDeg(plot);
-    const wpt2 = makeWorldPt(wpt1.getLon(), wpt1.getLat() + (Math.abs(cdelt1) / plot.zoomFactor) * (5), csys);
-    const spt1 = cc.getScreenCoords(wpt1);
-    const spt2 = cc.getScreenCoords(wpt2);
-    if (spt1 && spt2) return (spt1.x===spt2.x && spt1.y > spt2.y);
-    return false;
-}
 
-export function isPlotRotatedNorth(plot, csys= CoordinateSys.EQ_J2000) {
-    if (!plot) return false;
-    const cc= CysConverter.make(plot);
-    const wpt1 = cc.getWorldCoords(makeImageWorkSpacePt(plot.dataWidth/2, plot.dataHeight/2), csys);
-    if (!wpt1) return false;
-    const cdelt1 = getPixScaleDeg(plot);
-    const wpt2 = makeWorldPt(wpt1.getLon(), wpt1.getLat() + (Math.abs(cdelt1) / plot.zoomFactor) * (5), csys);
-    if (!wpt2) return false;
-    const dpt1 = cc.getDeviceCoords(wpt1);
-    const dpt2 = cc.getDeviceCoords(wpt2);
-    return Boolean(dpt1 && dpt2 && (Math.abs(dpt1.x-dpt2.x)  < .9) && dpt1.y > dpt2.y);
-}
-
-/**
- * Return true if east if left of north.  If east is right of north return false. This works regardless of the rotation
- * of the image.
- * @param {WebPlot} plot
- * @return {boolean} true if is is left of north.
- */
-export function isEastLeftOfNorth(plot) {
-    if (!plot) return true;
-    if (!plot.projection.isSpecified() || !plot.projection.isImplemented()) return true;
-
-    const mx = plot.dataWidth/2;
-    const my = plot.dataHeight/2;
-
-
-    const worldOffset= plot.projection.getPixelScaleDegree() * 10;
-
-    const cc= CysConverter.make(plot);
-    const wptC = cc.getWorldCoords(makeImageWorkSpacePt(mx, my));
-    if (!wptC) return true;
-    const wptNorth = makeWorldPt(wptC.x, wptC.y+worldOffset);
-    const wptE = makeWorldPt(wptC.x+worldOffset, wptC.y);
-    if (!wptE) return true;
-
-    const impNorth= cc.getImageCoords(wptNorth);
-    const impE= cc.getImageCoords(wptE);
-
-
-    const angleN= getAngleInDeg(mx,my,impNorth.x,impNorth.y);
-    const angleE= getAngleInDeg(mx,my,impE.x,impE.y);
-
-    return ((angleE-angleN) + 360)%360 < 180;
-}
-
-/**
- *
- * @param {WebPlot} p1
- * @param {WebPlot} p2
- * @return {boolean}
- */
-export const isCsysDirMatching= (p1,p2) => isEastLeftOfNorth(p1)===isEastLeftOfNorth(p2);
-
-
-
-function getAngleInDeg(cx,cy,x,y) {
+export function getAngleInDeg(cx,cy,x,y) {
     const ptX= Math.round(x)-Math.round(cx);
     const ptY= Math.round(y)-Math.round(cy);
     if (ptY===0) return ptX >= 0 ? 0 : 180;
@@ -513,6 +429,48 @@ export const intersects= function(x0, y0, w0, h0, x, y, w, h) {
     return (x + w > x0 && y + h > y0 && x < x0 + w0 && y < y0 + h0);
 };
 
+export function linesIntersect1(a,b,c,d,p,q,r,s) {
+  var det, gamma, lambda;
+  det = (c - a) * (s - q) - (r - p) * (d - b);
+  if (det === 0) {
+    return false;
+  } else {
+    lambda = ((s - q) * (r - a) + (p - r) * (s - b)) / det;
+    gamma = ((b - d) * (r - a) + (c - a) * (s - b)) / det;
+    return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
+  }
+}
+
+export function lineIntersect2(x1,y1,x2,y2, x3,y3,x4,y4) {
+    var x=((x1*y2-y1*x2)*(x3-x4)-(x1-x2)*(x3*y4-y3*x4))/((x1-x2)*(y3-y4)-(y1-y2)*(x3-x4));
+    var y=((x1*y2-y1*x2)*(y3-y4)-(y1-y2)*(x3*y4-y3*x4))/((x1-x2)*(y3-y4)-(y1-y2)*(x3-x4));
+    if (isNaN(x)||isNaN(y)) {
+        return false;
+    } else {
+        if (x1>=x2) {
+            if (!(x2<=x&&x<=x1)) {return false;}
+        } else {
+            if (!(x1<=x&&x<=x2)) {return false;}
+        }
+        if (y1>=y2) {
+            if (!(y2<=y&&y<=y1)) {return false;}
+        } else {
+            if (!(y1<=y&&y<=y2)) {return false;}
+        }
+        if (x3>=x4) {
+            if (!(x4<=x&&x<=x3)) {return false;}
+        } else {
+            if (!(x3<=x&&x<=x4)) {return false;}
+        }
+        if (y3>=y4) {
+            if (!(y4<=y&&y<=y3)) {return false;}
+        } else {
+            if (!(y3<=y&&y<=y4)) {return false;}
+        }
+    }
+    return true;
+}
+
 
 /**
  * test to see if a point is in a rectangle
@@ -524,7 +482,7 @@ export const intersects= function(x0, y0, w0, h0, x, y, w, h) {
  * @param y the second point y, top left
  * @return {boolean} true if rectangles intersect
  */
-export const contains= function(x0, y0, w0, h0, x, y) {
+export function contains(x0, y0, w0, h0, x, y) {
     return (x >= x0 && y >= y0 && x < x0 + w0 && y < y0 + h0);
 };
 
@@ -552,7 +510,7 @@ export const containsEllipse=function(x, y, centerX, centerY, radius1, radius2) 
     return (Math.pow((x - centerX)/radius1, 2) + Math.pow((y - centerY)/radius2, 2)) < 1;
 };
 
-const getArrowCoords= function(x1, y1, x2, y2) {
+export const getArrowCoords= function(x1, y1, x2, y2) {
 
     const barbLength = 10;
 
@@ -618,23 +576,6 @@ export function getBoundingBox(ptAry) {
 }
 
 
-/**
- * @param {WebPlot} plot
- * @return {{x: number, y: number, w: number, h: number}|undefined}
- */
-export function computeBoundingBoxInDeviceCoordsForPlot(plot) {
-    if (!plot) return;
-    const {dataWidth:w,dataHeight:h}= plot;
-    const cc= CysConverter.make(plot);
-    return getBoundingBox([
-        cc.getDeviceCoords(makeImagePt(0,0)),
-        cc.getDeviceCoords(makeImagePt(w,0)),
-        cc.getDeviceCoords(makeImagePt(w,h)),
-        cc.getDeviceCoords(makeImagePt(0,h))
-    ]);
-}
-
-
 
 /**
  * @param {object} selection obj with two properties pt0 & pt1
@@ -643,14 +584,14 @@ export function computeBoundingBoxInDeviceCoordsForPlot(plot) {
  * @param selectedShape shape of selected area
  * @return {Array} indexes from the objList array that are selected
  */
-export function getSelectedPts(selection, plot, objList, selectedShape) {
-
-    if (selectedShape === SelectedShape.circle.key) {
-        return getSelectedPtsFromEllipse(selection, plot, objList);
-    } else {
-        return getSelectedPtsFromRect(selection, plot, objList);
-    }
-}
+// export function getSelectedPts(selection, plot, objList, selectedShape) {
+//
+//     if (selectedShape === SelectedShape.circle.key) {
+//         return getSelectedPtsFromEllipse(selection, plot, objList);
+//     } else {
+//         return getSelectedPtsFromRect(selection, plot, objList);
+//     }
+// }
 
 /**
  * get selected points from circular selected area
@@ -659,79 +600,68 @@ export function getSelectedPts(selection, plot, objList, selectedShape) {
  * @param objList
  * @returns {Array}
  */
-function getSelectedPtsFromEllipse(selection, plot, objList) {
-    const selectedList= [];
-    if (selection && plot && objList && objList.length) {
-        const cc= CysConverter.make(plot);
-        const pt0= cc.getDeviceCoords(selection.pt0);
-        const pt1= cc.getDeviceCoords(selection.pt1);
-        if (!pt0 || !pt1) return selectedList;
-
-        const c_x = (pt0.x + pt1.x)/2;
-        const c_y = (pt0.y + pt1.y)/2;
-        const r1 =  Math.abs(pt0.x-pt1.x)/2;
-        const r2 =  Math.abs(pt0.y-pt1.y)/2;
-
-        objList.forEach( (obj,idx) => {
-            const testObj = cc.getDeviceCoords(DrawOp.getCenterPt(obj));
-
-            if (testObj &&  containsEllipse(testObj.x, testObj.y, c_x, c_y, r1, r2)) {
-                selectedList.push(idx);
-            }
-        });
-    }
-    return selectedList;
-
-}
+// function getSelectedPtsFromEllipse(selection, plot, objList) {
+//     const selectedList= [];
+//     if (selection && plot && objList && objList.length) {
+//         const cc= CysConverter.make(plot);
+//         const pt0= cc.getDeviceCoords(selection.pt0);
+//         const pt1= cc.getDeviceCoords(selection.pt1);
+//         if (!pt0 || !pt1) return selectedList;
+//
+//         const c_x = (pt0.x + pt1.x)/2;
+//         const c_y = (pt0.y + pt1.y)/2;
+//         const r1 =  Math.abs(pt0.x-pt1.x)/2;
+//         const r2 =  Math.abs(pt0.y-pt1.y)/2;
+//
+//         objList.forEach( (obj,idx) => {
+//             const testObj = cc.getDeviceCoords(DrawOp.getCenterPt(obj));
+//
+//             if (testObj &&  containsEllipse(testObj.x, testObj.y, c_x, c_y, r1, r2)) {
+//                 selectedList.push(idx);
+//             }
+//         });
+//     }
+//     return selectedList;
+//
+// }
 
 /**
- * get selected points from rectanglur selected area
+ * get selected points from rectangular selected area
  * @param {object} selection obj with two properties pt0 & pt1
  * @param {WebPlot} plot web plot
  * @param objList array of DrawObj (must be an array and contain a getCenterPt() method)
  * @return {Array} indexes from the objList array that are selected
  */
-function getSelectedPtsFromRect(selection, plot, objList) {
-    const selectedList= [];
-    if (selection && plot && objList && objList.length) {
-        const cc= CysConverter.make(plot);
-        const pt0= cc.getDeviceCoords(selection.pt0);
-        const pt1= cc.getDeviceCoords(selection.pt1);
-        if (!pt0 || !pt1) return selectedList;
-
-        const x= Math.min( pt0.x,  pt1.x);
-        const y= Math.min(pt0.y, pt1.y);
-        const width= Math.abs(pt0.x-pt1.x);
-        const height= Math.abs(pt0.y-pt1.y);
-        objList.forEach( (obj,idx) => {
-            const testObj = cc.getDeviceCoords(DrawOp.getCenterPt(obj));
-            if (testObj && contains(x,y,width,height,testObj.x, testObj.y)) {
-                selectedList.push(idx);
-            }
-        });
-    }
-    return selectedList;
-}
-
-/**
- * get the world point at the center of the plot
- * @param {WebPlot} plot
- * @return {WorldPt}
- */
-export function getCenterPtOfPlot(plot) {
-    if (!plot) return undefined;
-    const ip= makeImagePt(plot.dataWidth/2,plot.dataHeight/2);
-    return CCUtil.getWorldCoords(plot,ip);
-}
+// function getSelectedPtsFromRect(selection, plot, objList) {
+//     const selectedList= [];
+//     if (selection && plot && objList && objList.length) {
+//         const cc= CysConverter.make(plot);
+//         const pt0= cc.getDeviceCoords(selection.pt0);
+//         const pt1= cc.getDeviceCoords(selection.pt1);
+//         if (!pt0 || !pt1) return selectedList;
+//
+//         const x= Math.min( pt0.x,  pt1.x);
+//         const y= Math.min(pt0.y, pt1.y);
+//         const width= Math.abs(pt0.x-pt1.x);
+//         const height= Math.abs(pt0.y-pt1.y);
+//         objList.forEach( (obj,idx) => {
+//             const testObj = cc.getDeviceCoords(DrawOp.getCenterPt(obj));
+//             if (testObj && contains(x,y,width,height,testObj.x, testObj.y)) {
+//                 selectedList.push(idx);
+//             }
+//         });
+//     }
+//     return selectedList;
+// }
 
 /**
  * Return a WorldPt that is offset by the relative ra and dec from the passed in position
  * @param {WorldPt} pos1
- * @param {number} offsetRa
- * @param {number} offsetDec
+ * @param {number} offsetRa in arcseconds
+ * @param {number} offsetDec in arcseconds
  * @return {WorldPt}
  */
-function calculatePosition(pos1, offsetRa, offsetDec ) {
+export function calculatePosition(pos1, offsetRa, offsetDec ) {
     const ra = toRadians(pos1.getLon());
     const dec = toRadians(pos1.getLat());
     const de = toRadians(offsetRa/3600.0); // east
@@ -826,86 +756,6 @@ export function convertAngle(from, to, angle) {
  * @param {number} yOff
  * @return {DevicePt} the found point
  */
-export function getTopmostVisiblePoint(plot,viewDim,xOff, yOff) {
-    const cc= CysConverter.make(plot);
-    const ipt= cc.getImageCoords(makeDevicePt(xOff,yOff));
-    if (isImageCoveringArea(plot,ipt,2,2)) return ipt;
-
-
-    const {dataWidth,dataHeight}= plot;
-
-    const lineSegs= [
-       {pt1: cc.getDeviceCoords(makeImagePt(0,0)), pt2: cc.getDeviceCoords(makeImagePt(dataWidth,0))},
-       {pt1: cc.getDeviceCoords(makeImagePt(dataWidth,0)), pt2: cc.getDeviceCoords(makeImagePt(dataWidth,dataHeight))},
-       {pt1: cc.getDeviceCoords(makeImagePt(dataWidth,dataHeight)), pt2: cc.getDeviceCoords(makeImagePt(0,dataHeight))},
-       {pt1: cc.getDeviceCoords(makeImagePt(0,dataHeight)), pt2: cc.getDeviceCoords(makeImagePt(0,0))}
-    ];
-
-    const foundSegs= lineSegs
-        .filter((lineSeg) => {
-                 const {pt1,pt2}= lineSeg;
-                 const iPt= findIntersectionPt(pt1.x,pt1.y,pt2.x,pt2.y, 0,0,viewDim.width-1,0);
-                 return iPt && iPt.onSeg1 && iPt.onSeg2;
-             })
-        .sort( (l1, l2) => l1.pt1.x - l2.pt1.x);
-
-    if (foundSegs[0]) {
-        const pt= findIntersectionPt(foundSegs[0].pt1.x,foundSegs[0].pt1.y,
-                                     foundSegs[0].pt2.x,foundSegs[0].pt2.y, 0,0,viewDim.width-1,0);
-        return makeDevicePt(pt.x+xOff, pt.y+yOff);
-    }
-
-    const zXoff= xOff/plot.zoomFactor;
-    const zYoff= xOff/plot.zoomFactor;
-
-    const tryPts= [
-        makeImagePt(1+zXoff,1+zXoff),
-        makeImagePt(plot.dataWidth-zXoff,1+zYoff),
-        makeImagePt(plot.dataWidth-zXoff,plot.dataHeight-zYoff),
-        makeImagePt(1+zXoff, plot.dataHeight-zYoff),
-    ];
-
-
-    const highPts= tryPts
-        .map( (p) => cc.getDeviceCoords(p) )
-        .filter( (p) => cc.pointOnDisplay(p))
-        .sort( (p1,p2) => p1.y!==p2.y ? p1.y - p2.y : p1.x - p2.x);
-
-    return highPts[0];
-}
-
-
-/**
- * return true if the image is completely covering the area passed. The width and height are in Device coordinate
- * system.
- * @param {WebPlot} plot
- * @param {Point} pt
- * @param {number} width in device coordinates
- * @param {number} height in device coordinates
- * @return {boolean} true if covering
- */
-export function isImageCoveringArea(plot,pt, width,height) {
-    const cc= CysConverter.make(plot);
-    pt= cc.getDeviceCoords(pt);
-    const testPts= [
-        makeDevicePt(pt.x,pt.y),
-        makeDevicePt(pt.x+width,pt.y),
-        makeDevicePt(pt.x+width,pt.y+height),
-        makeDevicePt(pt.x,pt.y+height),
-    ];
-
-    const polyPts= [
-        cc.getDeviceCoords(makeImagePt(1,1)),
-        cc.getDeviceCoords(makeImagePt(plot.dataWidth,1)),
-        cc.getDeviceCoords(makeImagePt(plot.dataWidth,plot.dataHeight)),
-        cc.getDeviceCoords(makeImagePt(1, plot.dataHeight))
-    ];
-
-
-    const polyPtsAsArray= polyPts.map( (p) => [p.x,p.y]);
-
-    return testPts.every( (p) => pointInPolygon([p.x,p.y], polyPtsAsArray));
-}
 
 /**
  * Find the point at intersection of two line segments.
@@ -965,7 +815,7 @@ export function lineCrossesRect(segX1, segY1, segX2, segY2, x, y, w,h) {
 function direction(a, b, c) {
     const d = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
 
-    if (d == 0) {
+    if (d===0) {
         return 0;   // a, b, c collinear
     } else {
         return (d < 0) ? 2 : 1;
@@ -1112,16 +962,98 @@ export function distanceToCircle(radius, pts, cc, pt) {
 }
 
 
-export function isFullyOnScreen(plot,viewDim) {
-    const box = computeBoundingBoxInDeviceCoordsForPlot(plot);
-    return Boolean(box) && containsRec(0, 0, viewDim.width + 3, viewDim.height + 3, box.x, box.y, box.w, box.h);
+/**
+ * This function will create a line. either based on y or based on x depend on which is farther apart. The is will return
+ * a point with x,y
+ * @param beginPt
+ * @param endPt
+ * @param independentValue
+ * @return {number}
+ */
+export function getXorYinEquation(beginPt,endPt, independentValue) {
+    const x1 = beginPt.x;
+    const y1 = beginPt.y;
+    const x2 = endPt.x;
+    const y2 = endPt.y;
+
+    // delta X and Y in image pixels
+    const deltaX = Math.abs(x2 - x1);
+    const deltaY = Math.abs(y2 - y1);
+
+    if (deltaX > deltaY) {
+        const slope = (y2-y1)/(x2-x1);
+        const yIntercept = y1-slope*x1;
+        const y= (slope*independentValue + yIntercept);
+        return {x:independentValue, y};
+    } else if (y1 !== y2) {
+        const  islope = (x2-x1)/(y2-y1);
+        const xIntercept = x1-islope*y1;
+        const x = (islope*independentValue + xIntercept);
+        return {x, y:independentValue};
+    }
+}
+
+
+export function getLinePointAry(pt1, pt2) {
+    const {x:x1,y:y1} = pt1;
+    const {x:x2,y:y2} = pt2;
+
+    // delta X and Y in image pixels
+    const deltaX = Math.abs(x2-x1);
+    const deltaY = Math.abs(y2-y1);
+
+    let x, y;
+    const pts = [];
+    if (deltaX > deltaY) {
+        const slope = (y2-y1)/(x2-x1);
+        const yIntercept = y1-slope*x1;
+        const minX = Math.trunc(Math.min(x1, x2));
+        const maxX = Math.trunc(Math.max(x1, x2));
+        for (x=minX; x<=maxX; x+=1) {
+            y = Math.trunc(slope*x + yIntercept);
+            pts.push(makeImagePt(x,y));
+        }
+        return pts;
+    } else if (y1!==y2) {
+        const islope = (x2-x1)/(y2-y1);
+        const xIntercept = x1-islope*y1;
+        const minY = Math.trunc(Math.min(y1, y2));
+        const maxY = Math.trunc(Math.max(y1, y2));
+        for (y=minY; y<=maxY; y+=1) {
+            x = Math.trunc(islope*y + xIntercept);
+            pts.push(makeImagePt(x,y));
+        }
+        return pts;
+    }
+    return;
+}
+
+function getEllipsePointForAngle(cx, cy, rx, ry, rotationAngle, theta) {
+    const { abs, sin, cos } = Math;
+    const M = abs(rx) * cos(theta);
+    const N = abs(ry) * sin(theta);
+    return [
+        cx + cos(rotationAngle) * M - sin(rotationAngle) * N,
+        cy + sin(rotationAngle) * M + cos(rotationAngle) * N
+    ];
+}
+
+export function getEllipseArcEndPoints(cx, cy, rx, ry,  theta, dTheta, rotationAngle=0) {
+
+    const [x1, y1] = getEllipsePointForAngle(cx, cy, rx, ry, rotationAngle, theta);
+    const [x2, y2] = getEllipsePointForAngle(cx, cy, rx, ry, rotationAngle, theta + dTheta);
+    const fa = Math.abs(dTheta) > Math.PI ? 1 : 0;
+    const fs = dTheta > 0 ? 1 : 0;
+    return { x1, y1, x2, y2, fa, fs };
+}
+
+export function getPointOnEllipse(cx, cy, rx, ry, angle) {
+    const [x, y] = getEllipsePointForAngle(cx, cy, rx, ry, 0, angle);
+    return {x,y};
 }
 
 
 export default {
-    computeScreenDistance, computeDistance, computeSimpleDistance,convert,
-    computeCentralPointAndRadius, getPositionAngle, getRotationAngle,getTranslateAndRotatePosition,
-    intersects, contains, containsRec,containsCircle, getArrowCoords, calculatePosition,
-    convertAngle, distToLine, distanceToPolygon, distanceToCircle, computeSimpleSlopeAngle
+    convert: convertCelestial,
 };
 

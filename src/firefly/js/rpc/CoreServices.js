@@ -8,9 +8,9 @@ import {ServerParams} from '../data/ServerParams.js';
 import {doJsonRequest} from '../core/JsonUtils.js';
 import {WebPlotRequest} from '../visualize/WebPlotRequest';
 import {fetchUrl} from '../util/fetch';
-import {getCmdSrvURL} from '../util/WebUtil';
+import {getCmdSrvSyncURL} from '../util/WebUtil';
 
-const getUploadURL= () => `${getCmdSrvURL()}?${ServerParams.COMMAND}=${ServerParams.UPLOAD}`;
+const getUploadURL= () => `${getCmdSrvSyncURL()}?${ServerParams.COMMAND}=${ServerParams.UPLOAD}`;
 
 /**
  * tableRequest will be sent to the server as a json string.
@@ -31,7 +31,9 @@ export function notifyServerAppInit({spaName}={}) {
     return doJsonRequest(ServerParams.INIT_APP, {spaName});
 }
 
-
+export function getJsonProperty(property) {
+    return doJsonRequest(ServerParams.JSON_PROPERTY, {[ServerParams.PROP]:property});
+}
 
 
 /**
@@ -70,9 +72,10 @@ function buildUploadParam(item) {
 /**
  * parse an upload result
  * @param {String} text - the result text from the upload call
- * @return {{cacheKey: String, analysisResult: Object, message: String, status: String}}
+ * @return {{cacheKey: String, analysisResult: String, message: String, status: String}}
  */
 export function parseUploadResults(text) {
+    // TODO: refactor analysisResult to be an Object?
                      // text is in format ${status}::${message}::${message}::${cacheKey}::${analysisResult}
     const [status, message, cacheKey, anaResultPart, ...rest] = text.split('::');
                      // there are '::' in the analysisResults.. put it back

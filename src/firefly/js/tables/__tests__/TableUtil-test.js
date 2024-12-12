@@ -1,12 +1,13 @@
-import {get} from 'lodash';
+import {get, set} from 'lodash';
 
 import * as TblUtil from '../TableUtil.js';         // used for named import
-import TableUtil from '../TableUtil.js';            // using default import
+import TableUtil, {formatValue, fixPageSize, getTblInfo} from '../TableUtil.js';            // using default import
 import {SelectInfo} from '../SelectInfo';
 import {MetaConst} from '../../data/MetaConst';
 import {dataReducer} from '../reducer/TableDataReducer.js';
 import {TABLE_LOADED} from '../TablesCntlr.js';
 import {NULL_TOKEN} from '../FilterInfo.js';
+import {MAX_ROW} from '../TableRequestUtil.js';
 
 
 describe('TableUtil: ', () => {
@@ -32,35 +33,27 @@ describe('TableUtil: ', () => {
     });
 
     test('isColumnType', () => {
-        const float1 = {name: 'float1', type: 'f'};
+        const float1 = {name: 'float1', type: 'real'};
         const float2 = {name: 'float2', type: 'float'};
-        const float3 = {name: 'float3', type: 'd'};
-        const float4 = {name: 'float4', type: 'double'};
+        const float3 = {name: 'float4', type: 'double'};
 
         expect(TblUtil.isColumnType(float1, TblUtil.COL_TYPE.FLOAT)).toBe(true);
         expect(TblUtil.isColumnType(float2, TblUtil.COL_TYPE.FLOAT)).toBe(true);
         expect(TblUtil.isColumnType(float3, TblUtil.COL_TYPE.FLOAT)).toBe(true);
-        expect(TblUtil.isColumnType(float4, TblUtil.COL_TYPE.FLOAT)).toBe(true);
 
-        const int1 = {name: 'int1', type: 'i'};
+        const int1 = {name: 'int1', type: 'long'};
         const int2 = {name: 'int2', type: 'int'};
-        const int3 = {name: 'int3', type: 'l'};
-        const int4 = {name: 'int4', type: 'long'};
+        const int3 = {name: 'int3', type: 'short'};
+        const int4 = {name: 'int4', type: 'integer'};
 
         expect(TblUtil.isColumnType(int1, TblUtil.COL_TYPE.INT)).toBe(true);
         expect(TblUtil.isColumnType(int2, TblUtil.COL_TYPE.INT)).toBe(true);
         expect(TblUtil.isColumnType(int3, TblUtil.COL_TYPE.INT)).toBe(true);
         expect(TblUtil.isColumnType(int4, TblUtil.COL_TYPE.INT)).toBe(true);
 
-        const char1 = {name: 'char1', type: 'c'};
-        const char2 = {name: 'char2', type: 'char'};
-        const char3 = {name: 'char3', type: 's'};
-        const char4 = {name: 'char4', type: 'str'};
+        const char1 = {name: 'char2', type: 'char'};
 
         expect(TblUtil.isColumnType(char1, TblUtil.COL_TYPE.TEXT)).toBe(true);
-        expect(TblUtil.isColumnType(char2, TblUtil.COL_TYPE.TEXT)).toBe(true);
-        expect(TblUtil.isColumnType(char3, TblUtil.COL_TYPE.TEXT)).toBe(true);
-        expect(TblUtil.isColumnType(char4, TblUtil.COL_TYPE.TEXT)).toBe(true);
 
         expect(TblUtil.isColumnType(char1, TblUtil.COL_TYPE.ANY)).toBe(true);
         expect(TblUtil.isColumnType(int1, TblUtil.COL_TYPE.ANY)).toBe(true);
@@ -134,6 +127,146 @@ describe('TableUtil: ', () => {
                     ]
                 );
             });
+    });
+
+    test('formatValue', () => {
+
+        // test java-like String.format using fmtDisp column meta
+        let res = formatValue({fmtDisp: 'cost $%.2f'}, 123.3432);
+        expect(res).toEqual('cost $123.34');
+
+        // test java-like String.format using format column meta
+        res = formatValue({format: 'cost $%.2f'}, 123.3432);
+        expect(res).toEqual('cost $123.34');
+
+        //for DMS, islat = true therefore latitude (dec)
+        res = formatValue({type: 'float', precision: 'DMS'}, '30.263'); //valid DMS range value
+        expect(res).toEqual('+30d15m46.8s');
+
+        //for HMS, islat = false therefore longitutde (ra)
+        res = formatValue({type: 'float', precision: 'HMS'}, '30.263'); //valid HMS range value
+        expect(res).toEqual('2h01m03.12s');
+
+        res = formatValue({type: 'float', precision: 'DMS5'}, '-15.530694'); //n=5 will be ignored
+        expect(res).toEqual('-15d31m50.5s');
+
+        res = formatValue({type: 'float', precision: 'HMS3'}, '324.42'); //n=3 will be ignored
+        expect(res).toEqual('21h37m40.80s');
+
+        //Testing out of range values for DMS [-90, 90] & HMS [0, 360]
+        //These should throw latitude out of range, longitude out of range
+        //and longitude cannot be negative errors respectively
+        //- uncomment these after ticket FIREFLY-1056 is closed
+
+        //res = formatValue({type: 'float', precision: 'DMS'}, '100.5');
+        //res = formatValue({type: 'float', precision: 'HMS'}, '370.2');
+        //res = formatValue({type: 'float', precision: 'HMS'}, '-10.0');
+
+        //non-numeric val=null returns '', precision/type does not matter here
+        res = formatValue({type: 'float', precision: 'E2'}, null);
+        expect(res).toEqual('');
+
+        res = formatValue({type: 'float', precision: 'E3'}, 453.450664); //3 significant digits after decimal
+        expect(res).toEqual('4.535E+2');
+
+        res = formatValue({type: 'double', precision: 'E1'}, 57.365); //1 significant digit after decimal
+        expect(res).toEqual('5.7E+1');
+
+        res = formatValue({type: 'double', precision: 'E0'}, 46.365); //rounds to 5E+1
+        expect(res).toEqual('5E+1');
+
+        res = formatValue({type: 'int', precision: 'E3'}, 453445.678); //post decimal value is truncated, as type=int
+        expect(res).toEqual('453445');
+
+        res = formatValue({type: 'long', precision: 'E3'}, 57345); //value should be unchanged for type=long
+        expect(res).toEqual('57345');
+
+        res = formatValue({type: 'float', precision: 'G3'}, 43.450664); //3 significant digits
+        expect(res).toEqual('43.5'); //rounding post decimal and truncating the rest
+
+        res = formatValue({type: 'float', precision: 'G2'}, 43.6); //2 significant digits
+        expect(res).toEqual('44'); //rounds to 44
+
+        res = formatValue({type: 'int', precision: 'G5'}, 43.5); //post decimal value is truncated, as type=int
+        expect(res).toEqual('43');
+
+        res = formatValue({type: 'long', precision: 'G1'}, 450); //value should be unchanged for type=long
+        expect(res).toEqual('450');
+
+        res = formatValue({type: 'double', precision: 'G5'}, 43); //5 significant digits
+        expect(res).toEqual('43.000');
+
+        res = formatValue({type: 'float', precision: 'F2'}, 1.999); //2 significant digits after decimal
+        expect(res).toEqual('2.00'); //rounds to 2.00
+
+        res = formatValue({type: 'float', precision: 'F3'}, 43); //2 significant digits after decimal
+        expect(res).toEqual('43.000');
+
+        res = formatValue({type: 'int', precision: 'F3'}, 99.87); //post decimal value is truncated, as type=int
+        expect(res).toEqual('99');
+
+        res = formatValue({type: 'long', precision: 'F3'}, 125); //value should be unchanged for type=long
+        expect(res).toEqual('125');
+
+        res = formatValue({type: 'double', precision: 'F3'}, 45.19256); //3 significant digits after decimal
+        expect(res).toEqual('45.193');
+    });
+
+    test('fixPageSize', () => {
+
+        expect(fixPageSize(123)).toEqual(123);
+        expect(fixPageSize('123')).toEqual(123);
+        expect(fixPageSize(12.3)).toEqual(12);
+        expect(fixPageSize('12.3')).toEqual(12);
+        expect(fixPageSize('12a')).toEqual(12);
+        expect(fixPageSize('')).toEqual(MAX_ROW);
+        expect(fixPageSize('abc')).toEqual(MAX_ROW);
+        expect(fixPageSize(undefined)).toEqual(MAX_ROW);
+        expect(fixPageSize(null)).toEqual(MAX_ROW);
+        expect(fixPageSize(NaN)).toEqual(MAX_ROW);
+    });
+
+    test('getTblInfo: paging', () => {
+
+        const table = {
+            totalRows: 999,
+            request:{pageSize:100},
+            highlightedRow: 0,
+        };
+        let info = getTblInfo(table);
+        expect(info.totalRows).toEqual(999);
+        expect(info.highlightedRow).toEqual(0);
+        expect(info.startIdx).toEqual(0);
+        expect(info.endIdx).toEqual(100);
+        expect(info.hlRowIdx).toEqual(0);
+        expect(info.currentPage).toEqual(1);
+        expect(info.pageSize).toEqual(100);
+        expect(info.totalPages).toEqual(10);
+
+        // override pageSize
+        info = getTblInfo(table, 200);
+        expect(info.startIdx).toEqual(0);
+        expect(info.endIdx).toEqual(200);
+        expect(info.pageSize).toEqual(200);
+        expect(info.totalPages).toEqual(5);
+
+        // highlightedRow in the middle of the table
+        table.highlightedRow = 125;
+        info = getTblInfo(table);           // page size is still 100
+        expect(info.startIdx).toEqual(100);
+        expect(info.endIdx).toEqual(200);
+        expect(info.hlRowIdx).toEqual(25);      // hlRowIdx is relative to current page
+        expect(info.currentPage).toEqual(2);
+
+        // missing pageSize with highlighted row in the middle
+        table.request.pageSize = undefined;
+        table.highlightedRow = 125;
+        info = getTblInfo(table);
+        expect(info.hlRowIdx).toEqual(125);
+        expect(info.startIdx).toEqual(0);
+        expect(info.endIdx).toEqual(999);
+        expect(info.pageSize).toEqual(MAX_ROW);
+        expect(info.totalPages).toEqual(1);
     });
 
 });
@@ -350,5 +483,44 @@ describe('TableUtil: client_table', () => {
         expect(TblUtil.getColumnValues(res, 'c1')).toEqual(['abc', undefined, '123', null]); // testing IS NOT NULL
     });
 
+    test('smartMerge', () => {
+        const table = {
+            totalRows: 3,
+            request:{pageSize:100},
+            highlightedRow: 0,
+            tableData: {
+                columns: [ {name: 'a'}, {name: 'b'}, {name: 'c'}],
+                data: [
+                    ['a-1', 'b-1', 'c-1'],
+                    ['a-2', 'b-2', 'c-2'],
+                    ['a-3', 'b-3', 'c-3'],
+                ],
+            }
+        };
+
+        // simple update
+        let ntable = TblUtil.smartMerge(table, { request:{pageSize:999}} );
+        expect(ntable.request.pageSize).toBe(999);
+
+        // remove a path
+        ntable = TblUtil.smartMerge(table, { request: undefined});
+        expect(ntable.request).toBe(undefined);
+
+        // add rows
+        let changes = {totalRows: 5};
+        set(changes, 'tableData.data.3', ['a-4', 'b-4', 'c-4']);
+        set(changes, 'tableData.data.4', ['a-5', 'b-5', 'c-5']);
+
+        ntable = TblUtil.smartMerge(table, changes);
+        expect(ntable.totalRows).toBe(5);
+        expect(ntable.tableData.data.length).toBe(5);
+        expect(ntable.tableData.data[4][2]).toBe('c-5');
+
+        // clear tableData
+        ntable = TblUtil.smartMerge(table, { totalRows: 0, tableData: undefined});
+        expect(ntable.totalRows).toBe(0);
+        expect(ntable.tableData).toBe(undefined);
+
+    });
 });
 

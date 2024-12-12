@@ -13,15 +13,16 @@ import edu.caltech.ipac.visualize.draw.VectorObject;
 import edu.caltech.ipac.visualize.plot.ActiveFitsReadGroup;
 import edu.caltech.ipac.visualize.plot.ImageDataGroup;
 import edu.caltech.ipac.visualize.plot.ImagePlot;
-import edu.caltech.ipac.visualize.plot.Plot;
-import edu.caltech.ipac.visualize.plot.PlotContainerImpl;
+import edu.caltech.ipac.visualize.plot.PlotContainer;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
-import java.awt.*;
+import java.awt.AlphaComposite;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -29,7 +30,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 public class PlotOutput {
@@ -39,8 +39,8 @@ public class PlotOutput {
     public static final int BMP=  82;
 
     public enum Quality {HIGH, MEDIUM}
-    private static final int _trySizes[]= {512,640,500,630,748,760,494,600,700,420,800,825,650};
-    public static final int CREATE_ALL= -1;
+    private static final int[] _trySizes= {512,640,500,630,748,760,494,600,700,420,800,825,650};
+    public static final int CREATE_ALL= 1;
     private final ImagePlot _plot;
     private final ActiveFitsReadGroup _frGroup;
     private GridLayer _gridLayer;
@@ -48,8 +48,8 @@ public class PlotOutput {
     private List<VectorObject> _vectorList= null;
     private List<ScalableObjectPosition> _scaleList= null;
 
-    public PlotOutput(Plot plot, ActiveFitsReadGroup frGroup) {
-        _plot= (ImagePlot)plot;
+    public PlotOutput(ImagePlot plot, ActiveFitsReadGroup frGroup) {
+        _plot= plot;
         _frGroup= frGroup;
     }
 
@@ -61,119 +61,7 @@ public class PlotOutput {
     public void setVectorList(List<VectorObject> vectorList) { _vectorList= vectorList; }
     public void setScaleList(List<ScalableObjectPosition> scaleList) { _scaleList= scaleList; }
 
-//    public void save(OutputStream out, int outType) throws IOException {
-//
-//        Assert.tst(outType == JPEG ||
-//                   outType == BMP  ||
-//                   outType == PNG  ||
-//                   outType == GIF);
-//
-//        BufferedImage   image;
-//        if (outType==JPEG) {
-//            image= new BufferedImage(_plot.getScreenWidth(),
-//                                     _plot.getScreenHeight(),
-//                                     BufferedImage.TYPE_BYTE_INDEXED);
-//        }
-//        else {
-//            image= createImage(_plot.getScreenWidth(),
-//                                    _plot.getScreenHeight(),
-//                                    Quality.HIGH);
-//        }
-//        Graphics2D g2= image.createGraphics();
-//        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-//        g2.setClip(0,0, _plot.getScreenWidth(), _plot.getScreenHeight() );
-//        _plot.getPlotGroup().beginPainting(g2);
-//
-//        PlotContainer container= new PlotContainerImpl();
-//        ((PlotContainerImpl)container).getPlotList().add(_plot);
-//        container.firePlotPaint(_plot, _frGroup, g2);
-//        saveImage(image,outType,out);
-//    }
-
-
-    /**
-     * Find a tiles size the divides evenly into the the zoom factor.
-     * This is to prevent round off errors in the image
-     * @return the file size
-     */
-
-//    private int findTileSizeEXPERIMENTAL() {
-//
-//        int retval= -1;
-//        float zoomLevel= _plot.getZoomFactor();
-//        int intZoomLevel= (int)zoomLevel;
-//
-//        int baseTile;
-//        int w= _plot.getImageDataWidth();
-//        if (w>4000) baseTile= 200;
-//        else if (w>2000) baseTile= 160;
-//        else if (w>1000) baseTile= 100;
-//        else if (w>500) baseTile= 80;
-//        else baseTile= 60;
-//
-//        if (intZoomLevel<.50001 && intZoomLevel>.49999) {
-//            retval= baseTile/2;
-//        }
-//
-//        if (intZoomLevel<.250001 && intZoomLevel>.24999) {
-//            retval= baseTile/4;
-//        }
-//
-//
-//        if (intZoomLevel==1 ||
-//            intZoomLevel==2 ||
-//            intZoomLevel==4 ||
-//            intZoomLevel==8 ||
-//            intZoomLevel==16 ) {
-//            retval= baseTile*intZoomLevel;
-//        }
-//
-//
-//
-//        if (retval==-1) {
-//            if (_plot.getZoomFactor()<0) {
-//                retval= 500;
-//            }
-//            else {
-//
-//                for(int size : _trySizes) {
-//                    if ((size % intZoomLevel) == 0) {
-//                        retval= size;
-//                        break;
-//                    }
-//                }
-//
-//
-//                if (retval==-1) {
-//                    if (intZoomLevel < 21) {
-//                        retval= intZoomLevel*35;
-//                    }
-//                    else if (intZoomLevel < 31) {
-//                        retval= intZoomLevel*25;
-//                    }
-//                    else if (intZoomLevel < 41) {
-//                        retval= intZoomLevel*15;
-//                    }
-//                    else if (intZoomLevel < 51) {
-//                        retval= intZoomLevel*12;
-//                    }
-//                    else {
-//                        retval= intZoomLevel*10;
-//                    }
-//                }
-//            }
-//        }
-//
-//
-//
-//        return retval;
-//    }
-
-    private int findTileSize() {
-
-        return findTileSize(_plot.getZoomFactor());
-    }
-
+    private int findTileSize() { return findTileSize(_plot.getZoomFactor()); }
 
     private static int findTileSize(float zfact) {
 
@@ -191,8 +79,6 @@ public class PlotOutput {
                     break;
                 }
             }
-
-
             if (retval==-1) {
                 if (intZoomLevel < 21) {
                     retval= intZoomLevel*35;
@@ -217,33 +103,25 @@ public class PlotOutput {
     }
 
     private static String getExt(int outType) {
-        String retval= FileUtil.png;
-        switch (outType) {
-            case JPEG : retval= FileUtil.jpg; break;
-            case PNG : retval= FileUtil.png; break;
-            case BMP : retval= FileUtil.bmp; break;
-        }
-        return retval;
-
+        return switch (outType) {
+            case JPEG -> FileUtil.jpg;
+            case PNG -> FileUtil.png;
+            case BMP -> FileUtil.bmp;
+            default -> FileUtil.png;
+        };
     }
 
 
-    public List<TileFileInfo> writeTilesFullScreen(File dir,
-                                                  String baseName,
-                                                  int outType,
-                                                  boolean requiresTransparency,
-                                                  boolean createTile) throws IOException {
-
-
-
-
-        List<TileFileInfo> retval;
+    public void writeTilesFullScreen(File dir,
+                                     String baseName,
+                                     int outType,
+                                     boolean requiresTransparency,
+                                     boolean createTile) throws IOException {
         if (_plot.getZoomFactor()<1) {
             int tileSize= findTileSize();
-            retval= writeTiles(dir,baseName,outType,requiresTransparency, tileSize,10);
+            writeTiles(dir,baseName,outType,requiresTransparency, tileSize,10);
         }
         else {
-            retval= new ArrayList<TileFileInfo>(1);
             int width= _plot.getScreenWidth();
             int height= _plot.getScreenHeight();
             BufferedImage image= createImage(width,height, requiresTransparency?Quality.HIGH:Quality.MEDIUM);
@@ -251,28 +129,8 @@ public class PlotOutput {
             if (createTile) {
                 writeTile(f,outType,requiresTransparency,0,0,width,height,image);
             }
-            retval.add(new TileFileInfo(0,0,width, height,f,createTile));
         }
-
-        return retval;
     }
-
-
-
-    public List<TileFileInfo> writeTiles(File dir,
-                                         String baseName,
-                                         int outType,
-                                         boolean requiresTransparaency,
-                                         int createOnly ) throws IOException {
-
-
-        // this is because of a bug in ImagePlot.paintTile, the tile size needs to
-        // divid evenly into the zoom level
-        int tileSize= findTileSize();
-
-        return writeTiles(dir,baseName,outType,requiresTransparaency, tileSize,createOnly);
-    }
-
 
     public List<TileFileInfo> writeTiles(File dir,
                                          String baseName,
@@ -288,7 +146,7 @@ public class PlotOutput {
 
 
         ImagePlot plot= _plot;
-        PlotContainerImpl container= new PlotContainerImpl();
+        PlotContainer container= new PlotContainer();
         container.getPlotList().add(_plot);
 
 
@@ -300,7 +158,7 @@ public class PlotOutput {
         if (createOnly>0) defImage= createImage(defTileSize,defTileSize, requiresTransparency?Quality.HIGH:Quality.MEDIUM);
 
         ImageDataGroup imageDataGrp= plot.getImageData();
-        List<TileFileInfo> retList= new ArrayList<TileFileInfo>(imageDataGrp.size());
+        List<TileFileInfo> retList= new ArrayList<>(imageDataGrp.size());
         BufferedImage image;
         int screenWidth= plot.getScreenWidth();
         int screenHeight= plot.getScreenHeight();
@@ -332,66 +190,15 @@ public class PlotOutput {
         return retList;
     }
 
-
-    public static List<TileFileInfo> defineTiles(File dir,
-                                                 float zfact,
-                                                 String baseName,
-                                                 int outType,
-                                                 int screenWidth,
-                                                 int screenHeight) {
-
-        String ext= getExt(outType);
-        Assert.argTst(outType == JPEG || outType == BMP  || outType == PNG,  "ext must be jpeg, bmp, or png");
-        int defTileSize= findTileSize(zfact);
-        int width= defTileSize;
-        int height;
-        File file;
-
-        List<TileFileInfo> retList= new ArrayList<TileFileInfo>(20);
-
-
-        for(int x= 0; (x<screenWidth);  x+=width) {
-            for(int y= 0; (y<screenHeight);  y+=height) {
-                width= ((x+defTileSize) > screenWidth-defTileSize) ? screenWidth - x : defTileSize;
-                height= ((y+defTileSize) > screenHeight-defTileSize) ? screenHeight - y : defTileSize;
-                file= getTileFile(dir,baseName,x,y,ext);
-                retList.add(new TileFileInfo(x,y,width, height, file,false));
-            }
-        }
-
-        return retList;
-    }
-
-
-
     private static File getTileFile(File dir, String baseName, int x, int y, String ext) {
         return new File(dir,baseName+"_"+x+"_"+y+"."+ext);
     }
 
-    public void writeThumbnail(File f, int outType ) throws IOException {
-        int screenWidth= _plot.getScreenWidth();
-        int screenHeight= _plot.getScreenHeight();
-        BufferedImage image= createImage(screenWidth,screenHeight, Quality.MEDIUM);
-        writeTile(f,outType,false, 0,0,screenWidth,screenHeight,image);
-    }
-
-
     private BufferedImage createImage(int width, int height, Quality quality) {
-        BufferedImage retval;
-
-        switch (quality) {
-            case HIGH:
-                retval=  new BufferedImage(width,height, BufferedImage.TYPE_INT_ARGB);
-                break;
-            case MEDIUM:
-                retval= new BufferedImage(width,height, BufferedImage.TYPE_USHORT_565_RGB);
-                break;
-            default :
-                Assert.argTst(false, "quality must be HIGH or MEDIUM");
-                retval= null;
-                break;
-        }
-        return retval;
+        return switch (quality) {
+            case HIGH ->  new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            case MEDIUM ->  new BufferedImage(width, height, BufferedImage.TYPE_USHORT_565_RGB);
+        };
     }
 
 
@@ -420,7 +227,7 @@ public class PlotOutput {
         _plot.preProcessImageTiles(_frGroup);
         _plot.paintTile(g2,_frGroup,x,y,width,height);
 
-        PlotContainerImpl container= new PlotContainerImpl();
+        PlotContainer container= new PlotContainer();
         container.getPlotList().add(_plot);
 
         if (_fogList!=null && _fogList.size()>0) {
@@ -452,9 +259,7 @@ public class PlotOutput {
     }
 
 
-    private void saveTileToFile(File f,
-                           BufferedImage image,
-                           int outType) throws IOException {
+    private void saveTileToFile(File f, BufferedImage image, int outType) throws IOException {
         BufferedOutputStream stream= null;
         try {
             stream= new BufferedOutputStream( new FileOutputStream(f),4096);
@@ -470,46 +275,28 @@ public class PlotOutput {
             ImageIO.write(image, "bmp", out);
         }
         else if (outType == PNG) {
-//            ImageIO.write(image, "png", out);
-
-            Iterator writers = ImageIO.getImageWritersByFormatName("png");
+            var writers = ImageIO.getImageWritersByFormatName("png");
             ImageWriter writer = (ImageWriter)writers.next();
             ImageOutputStream ios = ImageIO.createImageOutputStream(out);
             writer.setOutput(ios);
             ImageWriteParam param= writer.getDefaultWriteParam();
-//            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT) ;
-//            param.setCompressionQuality(1.0F);
             param.setSourceSubsampling(1,1,0,0);
-//            param.setDestinationType(new ImageTypeSpecifier(
-//                    new DirectColorModel(24, 0x0000ff00, 0x0000ff00, 0x000000ff ),
-//                    new SinglePixelPackedSampleModel(DataBuffer.TYPE_INT,image.getWidth(), image.getHeight(),)
             param.setDestinationType(new ImageTypeSpecifier(image));
-
             writer.write(image);
-
-
             FileUtil.silentClose(ios);
-
         }
         else if (outType == JPEG) {
             try {
-                //ImageIO.write(image, "jpg", out);
-                Iterator writers = ImageIO.getImageWritersByFormatName("jpg");
-                ImageWriter writer = (ImageWriter)writers.next();
+                var writers = ImageIO.getImageWritersByFormatName("jpg");
+                ImageWriter writer = writers.next();
                 ImageOutputStream ios = ImageIO.createImageOutputStream(out);
                 writer.setOutput(ios);
                 ImageWriteParam param= writer.getDefaultWriteParam();
                 param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT) ;
                 param.setCompressionQuality(1.0F);
                 param.setSourceSubsampling(1,1,0,0);
-
-
                 writer.write(image);
-
-
                 FileUtil.silentClose(ios);
-                //JPEGImageEncoder jpeg= JPEGCodec.createJPEGEncoder(out);
-                //jpeg.encode(image);
             } catch (Exception e) {
                 System.out.println("PlotJpeg: " + e);
             }
@@ -519,34 +306,7 @@ public class PlotOutput {
         }
     }
 
-    public static class TileFileInfo {
-        private final int _x;
-        private final int _y;
-        private final int _width;
-        private final int _height;
-        private final File _file;
-        private final boolean _created;
-
-        public TileFileInfo( int x,
-                             int y,
-                             int width,
-                             int height,
-                             File file,
-                             boolean created) {
-            _x= x;
-            _y= y;
-            _width= width;
-            _height= height;
-            _file= file;
-            _created= created;
-        }
-        public int getX() { return _x; }
-        public int getY() { return _y; }
-        public int getWidth() { return _width; }
-        public int getHeight() { return _height; }
-        public File getFile() { return _file; }
-        public boolean isCreated() { return _created; }
-    }
+    public record TileFileInfo(int x, int y, int width, int height, File file, boolean created) { }
 
 
 }

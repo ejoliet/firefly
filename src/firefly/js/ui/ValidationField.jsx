@@ -1,6 +1,5 @@
 import React, {memo} from 'react';
 import {has} from 'lodash';
-import {clone} from '../util/WebUtil.js';
 import {useFieldGroupConnector, fgConnectPropsTypes} from './FieldGroupConnector.jsx';
 import {InputFieldView} from './InputFieldView.jsx';
 
@@ -15,8 +14,8 @@ function onChange(ev, validator, fireValueChange) {
 
 export const ValidationField = memo( (props) => {
         const {viewProps, fireValueChange}=  useFieldGroupConnector(props);
-        return <InputFieldView {...viewProps}
-                               onChange={(ev) => onChange(ev,viewProps.validator, fireValueChange)}/> ;
+        return (<InputFieldView {...viewProps}
+                               onChange={(ev) => onChange(ev,viewProps.validator, fireValueChange)}/>);
 });
 
 ValidationField.propType= {

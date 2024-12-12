@@ -14,6 +14,7 @@
         <url-pattern>/admin/*</url-pattern>
         <url-pattern>/servlet/*</url-pattern>
         <url-pattern>/sticky/*</url-pattern>
+        <url-pattern>/CmdSrv/*</url-pattern>
     </filter-mapping>
 
     <!--NoCacheFilter-->
@@ -23,7 +24,6 @@
     </filter>
     <filter-mapping>
         <filter-name>NoCacheFilter</filter-name>
-        <url-pattern>*.nocache.js</url-pattern>
         <url-pattern>/firefly_loader.js</url-pattern>
     </filter-mapping>
 
@@ -38,9 +38,21 @@
         <url-pattern>*.css</url-pattern>
         <url-pattern>*.js</url-pattern>
         <url-pattern>/sticky/CmdSrv</url-pattern>
+        <url-pattern>/CmdSrv/sync</url-pattern>
+        <url-pattern>/CmdSrv/async</url-pattern>
+        <url-pattern>/CmdSrv/async/*</url-pattern>
         <url-pattern>/sticky/firefly/events</url-pattern>
     </filter-mapping>
 
+    <!--CORS Filter-->
+    <filter>
+        <filter-name>CorsFilter</filter-name>
+        <filter-class>edu.caltech.ipac.firefly.server.filters.CorsFilter</filter-class>
+    </filter>
+    <filter-mapping>
+        <filter-name>CorsFilter</filter-name>
+        <url-pattern>*.woff2</url-pattern>
+    </filter-mapping>
 
     <!-- Firefly servlet and its mappings -->
     <servlet>
@@ -50,15 +62,6 @@
     <servlet-mapping>
         <servlet-name>FireFly Any FileDownload</servlet-name>
         <url-pattern>/servlet/Download</url-pattern>
-    </servlet-mapping>
-
-    <servlet>
-        <servlet-class>edu.caltech.ipac.firefly.server.servlets.ImageDownload</servlet-class>
-        <servlet-name>FireFly ImageDownload</servlet-name>
-    </servlet>
-    <servlet-mapping>
-        <servlet-name>FireFly ImageDownload</servlet-name>
-        <url-pattern>/sticky/FireFly_ImageDownload</url-pattern>
     </servlet-mapping>
 
     <servlet>
@@ -86,10 +89,21 @@
     <servlet-mapping>
         <servlet-name>FireFly CommandService</servlet-name>
         <url-pattern>/sticky/CmdSrv</url-pattern>
+        <url-pattern>/CmdSrv/sync</url-pattern>
     </servlet-mapping>
     <servlet-mapping>
         <servlet-name>FireFly CommandService</servlet-name>
-        <url-pattern>/sticky/CmdSrvNoZip</url-pattern>
+        <url-pattern>/CmdSrv/NoZip</url-pattern>
+    </servlet-mapping>
+
+    <servlet>
+        <servlet-class>edu.caltech.ipac.firefly.api.Async</servlet-class>
+        <servlet-name>FireFly Async API</servlet-name>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>FireFly Async API</servlet-name>
+        <url-pattern>/CmdSrv/async</url-pattern>
+        <url-pattern>/CmdSrv/async/*</url-pattern>
     </servlet-mapping>
 
     <servlet>
@@ -125,7 +139,7 @@
     <security-constraint>
       <web-resource-collection>
         <web-resource-name> Admin Area </web-resource-name>
-        <url-pattern>/admin/* </url-pattern>
+        <url-pattern>${ADMIN_PROTECTED:-/admin/*} </url-pattern>
       </web-resource-collection>
       <auth-constraint>
         <!-- Roles that have access -->

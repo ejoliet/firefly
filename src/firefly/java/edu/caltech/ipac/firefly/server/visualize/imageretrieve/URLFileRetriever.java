@@ -58,11 +58,16 @@ public class URLFileRetriever implements FileRetriever {
         if (urlStr.toLowerCase().startsWith("file:///")) {
             return new LocalFileRetriever().getFileByName(urlStr.substring(7));
         }
-        if (urlStr.contains("+")) { // i think this is a hack for IRSA image that have a plus in files names as ra+dec
-            try {
-                urlStr = urlStr.replaceAll("\\+", URLEncoder.encode("+", "UTF-8"));
-            } catch (UnsupportedEncodingException e) {
-                // do nothing
+        if ((urlStr.toLowerCase().contains("irsa") || urlStr.toLowerCase().contains("ceres.ipac"))) { // this is a hack for IRSA images that have a plus in files names as ra+dec
+            int plusIdx= urlStr.indexOf("+");
+            if (plusIdx>-1 && plusIdx+1 < urlStr.length()) { // if there is a plus and is in the form of num+num such as 4+5
+                try {
+                    String before= urlStr.charAt(plusIdx-1)+"";
+                    String after= urlStr.charAt(plusIdx+1)+"";
+                    Integer.parseInt(before);
+                    Integer.parseInt(after);
+                    urlStr = urlStr.replaceAll("\\+", URLEncoder.encode("+", "UTF-8"));
+                } catch (NumberFormatException|UnsupportedEncodingException  ignore) {}
             }
         }
         try {
@@ -75,16 +80,12 @@ public class URLFileRetriever implements FileRetriever {
                     params.addCookie(name, cookies.get(name));
                 }
             }
-            if (!ro.getUserInfo().isGuestUser()) {
-                params.setLoginName(ro.getUserInfo().getLoginName());
-                params.setSecurityCookie(ro.getRequestAgent().getAuthKey());
-            }
             params.setCheckForNewer(request.getUrlCheckForNewer());
             params.setLocalFileExtensions(extsList);
             params.setMaxSizeToDownload(VisContext.FITS_MAX_SIZE);
             if (request.getUserDesc() != null) params.setDesc(request.getUserDesc()); // set file description
 
-            PlotServUtils.updatePlotCreateProgress(request, ProgressStat.PType.READING, PlotServUtils.READ_PERCENT_MSG);
+            PlotServUtils.updateProgress(request, ProgressStat.PType.READING, PlotServUtils.READ_PERCENT_MSG);
 
             fitsFileInfo = LockingVisNetwork.retrieveURL(params);
 

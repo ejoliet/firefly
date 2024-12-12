@@ -1,133 +1,141 @@
-import React, {memo} from 'react';
-import PropTypes from 'prop-types';
-import {get, has, isFunction, isNil, isString} from 'lodash';
-
+import {Button, CircularProgress, Input, Stack, Tooltip, Typography} from '@mui/joy';
+import React, {memo, useEffect} from 'react';
+import {object, bool, func, number, string, shape} from 'prop-types';
+import {has, isFunction, isNil, isString} from 'lodash';
+import {getHttpErrorMessage} from '../util/HttpErrorMessage.js';
+import {validateUrl} from '../util/Validate.js';
+import {getStatusFromFetchError} from '../util/WebUtil.js';
 import {InputFieldView} from './InputFieldView.jsx';
 import {useFieldGroupConnector} from './FieldGroupConnector.jsx';
-
-import LOADING from 'html/images/gxt/loading.gif';
 import {upload} from '../rpc/CoreServices.js';
 
 
-function FileUploadView({fileType, isLoading, label, valid, wrapperStyle,  message, onChange, value, labelWidth,
-                         innerStyle, isFromURL, onUrlAnalysis, fileNameStyle}) {
-    var style = !isFromURL ? Object.assign({color: 'transparent', border: 'none', background: 'none'}, innerStyle) : (innerStyle || {});
-    var fileName = (!isFromURL && value) ?  value.split(/(\\|\/)/g).pop() : 'No file chosen';
+const DD_FILE_TXT= 'or drag & drop a file here';
+const DD_ANOTHER_FILE_TXT= 'or drag & drop another file';
+const NO_FILE_TXT= 'No file chosen';
 
-    const inputEntry = () => {
-        const labelW = isNil(labelWidth) ? 0 : labelWidth;
-
-        return (
-            <InputFieldView
-                valid={valid}
-                visible={true}
-                message={message}
-                onChange={onChange}
-                type={isFromURL ? 'text' : 'file'}
-                label={label}
-                value={value}
-                tooltip={isFromURL ? 'enter a URL to upload from' : 'click to choose a file'}
-                labelWidth={labelW}
-                inline={true}
-                style={style}
-                wrapperStyle={wrapperStyle}
-            />
-        );
-    };
-
-    const actionPart = () => {
-        if (isFromURL) {
-            return (
-                <div style={{display:'inline-block', whiteSpace:'nowrap'}}>
-                    <button type='button' className='button std hl'
-                            onClick={() =>  onUrlAnalysis(value)}>{'Upload'}</button>
-                </div>
-            );
-        } else {
-            let fPos = {marginLeft: -150, width: '30em'};
-
-            if (!isNil(fileNameStyle)) fPos = Object.assign(fPos, fileNameStyle);
-            return (
-                fileName && <div style={{...fPos}} className='text-ellipsis' title={fileName}>{fileName}</div>
-            );
-        }
-    };
-
+function FileUploadView({isLoading=false, label, valid, message, onChange, value,  sx, hasUploadedData,
+                         isFromURL=false, onUrlAnalysis, canDragDrop}) {
     return (
-        <div>
-            {inputEntry() }
-            {actionPart() }
-            {isLoading && <img style={{display: 'inline-block', marginLeft: 10, width:14,height:14}} src={LOADING}/> }
-        </div>
+        <Stack {...{ direction:'row', spacing:1, alignItems:'center', whiteSpace:'nowrap', sx}}>
+            {isFromURL ?
+                <ChooseUrl {...{valid, message, onChange, label, value,canDragDrop, onUrlAnalysis, hasUploadedData}}/> :
+                <ChooseUploadFile {...{onChange, value, canDragDrop,
+                    fileName: value ?  value.split(/([\\/])/g).pop() : ''}}/>}
+            {isLoading && <CircularProgress size='sm'/>}
+        </Stack>
     );
 }
 
+const ChooseUrl= ({valid, message, onChange, label, value,canDragDrop, onUrlAnalysis, hasUploadedData}) => (
+    <Stack {...{className:'ff-FileUpload-url', direction:'row', spacing:2, alignItems:'flex-end'}}>
+        <InputFieldView {...{
+            endDecorator: (
+                <Button color='success' variant={hasUploadedData?'soft':'solid'}
+                        onClick={() =>  onUrlAnalysis(value)}>{hasUploadedData?'Upload again':'Upload'}
+                </Button>),
+            sx:{width: '50rem', '.MuiInput-root':{ 'paddingInlineEnd': 1, }},
+            valid, message, onChange, label, value, type:'text',
+            tooltip:!value?'enter a URL to upload from' : `Upload URL: ${value}`,
+        }} />
+        {canDragDrop &&
+            <Typography color={value?'neutral':'warning'} level='body-md'>
+                {hasUploadedData ? DD_ANOTHER_FILE_TXT : DD_FILE_TXT}
+            </Typography>
+        }
+    </Stack>
+);
+
+
+const ChooseUploadFile= ({onChange, value, fileName, canDragDrop}) => (
+    <Stack {...{className:'ff-FileUpload-upload', maxWidth: '50rem', direction:'row', alignItems:'center', spacing:2}}>
+        <Tooltip title={`Click to choose a file${canDragDrop ?' or just drag and drop a file':''}`}>
+            <label htmlFor='upload-file'>
+                <Input id='upload-file' type='file' onChange={onChange} sx={{display:'none'}}/>
+                <Button color='warning' variant={fileName?'soft':'solid'} aria-label='upload file' component='span'>
+                    {fileName?'Replace File':'Choose File'}
+                </Button>
+            </label>
+        </Tooltip>
+        {value &&
+            <Tooltip title={`Upload File: ${value}`}>
+                <Typography {...{level:'title-lg',
+                    sx:{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'} }}>
+                    {fileName||NO_FILE_TXT}
+                </Typography>
+            </Tooltip>
+        }
+        {canDragDrop ?
+            <Typography color={value?'neutral':'warning'} level='body-md'>
+                { value? DD_ANOTHER_FILE_TXT  : `Choose a file ${DD_FILE_TXT}` }
+            </Typography>
+            : !value ? <Typography color='warning' level='body-md'>Choose a file</Typography> : undefined
+        }
+    </Stack>
+);
+
+
+
+
 
 FileUploadView.propTypes = {
-    fileType   : PropTypes.string.isRequired,
-    isLoading: PropTypes.bool.isRequired,
-    message: PropTypes.string.isRequired,
-    onChange: PropTypes.func.isRequired,
-    value : PropTypes.string.isRequired,
-    innerStyle: PropTypes.object,
-    label: PropTypes.string,
-    labelWidth: PropTypes.number,
-    valid: PropTypes.bool,
-    wrapperStyle: PropTypes.object,
-    isFromURL: PropTypes.bool.isRequired,
-    onUrlAnalysis: PropTypes.func,
-    fileNameStyle: PropTypes.object
+    fileType: string,
+    isLoading: bool,
+    message: string.isRequired,
+    onChange: func.isRequired,
+    value : string.isRequired,
+    label: string,
+    valid: bool,
+    sx: object,
+    isFromURL: bool,
+    onUrlAnalysis: func,
+    canDragDrop: bool
 };
 
-FileUploadView.defaultProps = {
-    fileType: 'TABLE',
-    isLoading: false,
-    isFromURL: false,
-    labelWidth: 0
-};
 
 export const FileUpload= memo( (props) => {
     const {viewProps, fireValueChange}=  useFieldGroupConnector(props);
+    const {fileType='TABLE'} = viewProps;
     let modViewProps;
-    if (viewProps.isFromURL) {
+
+    useEffect(() => {
+        if (viewProps.dropEvent) {
+            handleChange(viewProps.dropEvent, fireValueChange, fileType, viewProps.fileAnalysis);
+        }
+    },[viewProps.dropEvent]);
+
+    if (viewProps.isFromURL && !viewProps.dropEvent) {
         modViewProps= {
             ...viewProps,
             onChange: (ev) => onUrlChange(ev, viewProps, fireValueChange),
             value:  viewProps.displayValue,
-            onUrlAnalysis: (value) => doUrlAnalysis(value, fireValueChange, viewProps.fileType, viewProps.fileAnalysis)
+            onUrlAnalysis: (value) => doUrlAnalysis(value, fireValueChange, fileType, viewProps.fileAnalysis)
         };
     }
     else {
         modViewProps= {
             ...viewProps,
             value: viewProps.displayValue,
-            onChange: (ev) => handleChange(ev, fireValueChange, viewProps.fileType, viewProps.fileAnalysis)
+            onChange: (ev) => handleChange(ev, fireValueChange, fileType, viewProps.fileAnalysis)
         };
     }
-    return <FileUploadView {...modViewProps } /> ;
+    return <FileUploadView {...{...modViewProps, hasUploadedData:Boolean(modViewProps.analysisResult) }}/> ;
 });
 
 FileUpload.propTypes = {
-    fieldKey : PropTypes.string.isRequired,
-    isFromURL: PropTypes.bool,
-    innerStyle: PropTypes.object,
-    label: PropTypes.string,
-    labelWidth: PropTypes.number,
-    wrapperStyle: PropTypes.object,
-    fileNameStyle: PropTypes.object,
-    fileAnalysis: PropTypes.func,
-
-    initialState: PropTypes.shape({
-        tooltip: PropTypes.string,
-        label:  PropTypes.string,
+    fieldKey : string.isRequired,
+    isFromURL: bool,
+    label: string,
+    sx: object,
+    fileAnalysis: func,
+    canDragDrop: bool,
+    setDropEvent: func,
+    dropEvent: object,
+    initialState: shape({
+        tooltip: string,
+        label:  string,
     }),
 };
-
-
-
-
-
-
 
 /*---------------------------- private ----------------------------*/
 
@@ -135,7 +143,7 @@ FileUpload.propTypes = {
 function onUrlChange(ev, store, fireValueChange) {
     const displayValue = ev.target.value;
     const {valid,message, ...others}= store.validator(displayValue);
-    let value;
+    let value= displayValue;
 
     has(others, 'value') && (value = others.value);    // allow the validator to modify the value.. useful in auto-correct.
 
@@ -149,9 +157,12 @@ function doUrlAnalysis(value, fireValueChange, type, fileAnalysis) {
 
 
 function handleChange(ev, fireValueChange, type, fileAnalysis) {
-    var file = get(ev, 'target.files.0');
-    var displayValue = get(ev, 'target.value');
-
+    let file = ev?.target?.files?.[0];
+    let displayValue = ev?.target?.value;
+    if (ev.type === 'drop') { //drag drop files - instead of picking file from 'Choose File'
+        file = Array.from(ev.dataTransfer.files)[0];
+        displayValue = file?.name;
+    }
     fireValueChange({
         displayValue,
         value: !fileAnalysis ? makeDoUpload(file, type) : makeDoUpload(file, type, false, fileAnalysis)()
@@ -160,10 +171,10 @@ function handleChange(ev, fireValueChange, type, fileAnalysis) {
 
 function makeDoUpload(file, type, isFromURL, fileAnalysis) {
     return () => {
-        return doUpload(file, fileAnalysis, {}).then(({status, message, cacheKey, fileFormat, analysisResult}) => {
+        return doUpload(isFromURL, file, fileAnalysis, {}).then(({status, message, cacheKey, fileFormat, analysisResult}) => {
             let valid = status === '200';
-            if (valid) {        // json file is not supported currently
-                if (!isNil(fileFormat)) {
+            if (valid) {        // json file is not supported currently (among many others)
+                if (!isNil(fileFormat)) { // TODO: doUpload is not returning fileFormat field (analysisResult JSON string has this field though), has to be refactored
                     if (fileFormat.toLowerCase() === 'json') {
                         valid = false;
                         message = 'json file is not supported';
@@ -171,22 +182,33 @@ function makeDoUpload(file, type, isFromURL, fileAnalysis) {
                     }
                 }
             }
+            else {
+                throw new Error(isFromURL ?
+                                        `Unable to upload file from ${file}, status ${status} (${getHttpErrorMessage(status)})` :
+                                        `Unable to upload file: ${file?.name}`);
+            }
 
             return {isLoading: false, valid, message, value: cacheKey, analysisResult};
-        }).catch((err) => {
-            return {isLoading: false, valid: false,
-                    message: (isFromURL ? `Unable to upload file from ${file}` : `Unable to upload file: ${get(file, 'name')}`)};
+        }).catch((e) => {
+            return {isLoading: false, valid: false, message: e.message};
         });
     };
 }
 
-function doUpload(fileOrUrl, fileAnalysis, params={}) {
-
+function doUpload(isFromURL, fileOrUrl, fileAnalysis, params={}) {
+    if (isFromURL && !validateUrl('',fileOrUrl).valid) {
+        return Promise.resolve({status:404,message:'bad Url'});
+    }
     const faFunction= isFunction(fileAnalysis) && fileAnalysis;
     faFunction && faFunction(true, isString(fileOrUrl) ? fileOrUrl : fileOrUrl?.name ? fileOrUrl.name : undefined);
     if (fileAnalysis) fileAnalysis=true;
-    return upload(fileOrUrl, Boolean(fileAnalysis), params).then( (results) => {
-        faFunction && faFunction(false);
-        return results;
-    });
+    return upload(fileOrUrl, Boolean(fileAnalysis), params)
+        .then( (results) => {
+            faFunction && faFunction?.(false);
+            return results;
+        })
+        .catch((e) => {
+            faFunction && faFunction?.(false);
+            return {status:getStatusFromFetchError(e.message),message:e.message};
+        });
 }

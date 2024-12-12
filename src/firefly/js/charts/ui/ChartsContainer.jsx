@@ -2,41 +2,42 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {PureComponent} from 'react';
+import React, {useEffect} from 'react';
 import PropTypes from 'prop-types';
 import {isEqual, isEmpty} from 'lodash';
 
 import {LO_VIEW, LO_MODE, dispatchSetLayoutMode} from '../../core/LayoutCntlr.js';
-import {PLOT2D, DEFAULT_PLOT2D_VIEWER_ID, dispatchAddViewerItems, dispatchRemoveViewerItems, dispatchUpdateCustom, getViewerItemIds, getMultiViewRoot} from '../../visualize/MultiViewCntlr.js';
-import {monitorChanges, findGroupByTblId, getActiveTableId, isFullyLoaded} from '../../tables/TableUtil.js';
-import {TBL_RESULTS_ACTIVE, TABLE_LOADED} from '../../tables/TablesCntlr';
-import {CHART_ADD, CHART_REMOVE, getChartIdsInGroup, getChartData, dispatchChartAdd} from '../ChartsCntlr.js';
-import {getDefaultChartProps} from '../ChartUtil.js';
+import {PLOT2D, DEFAULT_PLOT2D_VIEWER_ID, dispatchAddViewerItems, dispatchRemoveViewerItems, dispatchUpdateCustom, getViewerItemIds, getMultiViewRoot, dispatchChangeViewerLayout} from '../../visualize/MultiViewCntlr.js';
+import {monitorChanges, findGroupByTblId, getActiveTableId, isFullyLoaded, } from '../../tables/TableUtil.js';
+import {TBL_RESULTS_ACTIVE, TABLE_LOADED, TABLE_SELECT} from '../../tables/TablesCntlr';
+import {CHART_ADD, CHART_REMOVE, getChartIdsInGroup, getChartData, dispatchChartAdd, getExpandedChartProps} from '../ChartsCntlr.js';
+import {getDefaultChartProps, allowPinnedCharts} from '../ChartUtil.js';
 
 import {CloseButton} from '../../ui/CloseButton.jsx';
-import {ChartPanel} from './ChartPanel.jsx';
+import {ChartPanel, ChartToolbar} from './ChartPanel.jsx';
 import {MultiChartViewer, getActiveViewerItemId} from './MultiChartViewer.jsx';
+import {PinnedChartContainer} from 'firefly/charts/ui/PinnedChartContainer.jsx';
+import {Stack} from '@mui/joy';
 
 
 
 // DEFAULT_PLOT2D_VIEWER_ID, 'main'
 function watchTblGroup(viewerId, tblGroup, addDefaultChart) {
-    return () => {
-        if (!tblGroup) return;
-        const accept = (a) => {
-            const {tbl_id, tbl_group, chartId} = a.payload;
-            return chartId || tblGroup === (tbl_group || findGroupByTblId(tbl_id));
-        };
-        const actions = [CHART_ADD, CHART_REMOVE, TBL_RESULTS_ACTIVE];
-        if (addDefaultChart) actions.push(TABLE_LOADED);
-        return monitorChanges(actions, accept, updateViewer(viewerId, tblGroup), `wtg-${viewerId}-${tblGroup}`);
+    if (!tblGroup) return;
+    const accept = (a) => {
+        const {tbl_id, tbl_group, chartId} = a.payload;
+        return chartId || tblGroup === (tbl_group || findGroupByTblId(tbl_id));
     };
+    const actions = [CHART_ADD, CHART_REMOVE, TBL_RESULTS_ACTIVE];
+    if (addDefaultChart) actions.push(TABLE_LOADED, TABLE_SELECT);
+    return monitorChanges(actions, accept, updateViewer(viewerId, tblGroup), `wtg-${viewerId}-${tblGroup}`);
 }
 
 function updateViewer(viewerId, tblGroup) {
     return (action) => {
         switch (action.type) {
             case TABLE_LOADED:
+            case TABLE_SELECT:
                 const {tbl_id} = action.payload;
                 ensureDefaultChart(tbl_id);
                 break;
@@ -50,25 +51,35 @@ function updateViewer(viewerId, tblGroup) {
     };
 }
 
-function ensureDefaultChart(tbl_id) {
-    if (getChartIdsInGroup(tbl_id).length === 0) {
+/**
+ * Ensure there's a chart for the given tbl_id.  If not, create a default one.
+ * @param tbl_id
+ * @return {string} return the chartId for the given tbl_id
+ */
+export function ensureDefaultChart(tbl_id) {
+    const chartIds = getChartIdsInGroup(tbl_id);
+    if (chartIds.length === 0) {
         const defaultChartProps = getDefaultChartProps(tbl_id);
         if (!isEmpty(defaultChartProps))  {
             // default chart
+            const chartId = 'default-' + tbl_id;
             dispatchChartAdd({
-                chartId: 'default-' + tbl_id,
+                chartId,
                 chartType: 'plot.ly',
                 groupId: tbl_id,
                 ...defaultChartProps
             });
+            return chartId;
         }
-    }
+    } else return chartIds[0];
 }
 
 function doUpdateViewer(viewerId, tblGroup, chartId, useOnlyChartsInViewer) {
     const currentIds = getViewerItemIds(getMultiViewRoot(), viewerId);
     if (useOnlyChartsInViewer) {
-        dispatchUpdateCustom(viewerId, {activeItemId: currentIds[0]});
+        if (!getActiveViewerItemId(viewerId)) {
+            dispatchUpdateCustom(viewerId, {activeItemId: currentIds[0]});
+        }
         return;
     }
     const tblId = getActiveTableId(tblGroup);
@@ -92,19 +103,38 @@ function doUpdateViewer(viewerId, tblGroup, chartId, useOnlyChartsInViewer) {
 }
 
 
+export const ChartsContainer = (props)  =>{
+    const {chartId, expandedMode} = props;
+
+    return expandedMode || chartId || !allowPinnedCharts() ?
+        <ActiveChartsPanel {...props}/>:
+        <PinnedChartContainer {...props}/> ;
+};
+
+ChartsContainer.propTypes = {
+    expandedMode: PropTypes.bool,
+    closeable: PropTypes.bool,
+    chartId: PropTypes.string,
+    viewerId : PropTypes.string,
+    tbl_group : PropTypes.string,
+    addDefaultChart : PropTypes.bool,
+    noChartToolbar : PropTypes.bool,
+    useOnlyChartsInViewer :PropTypes.bool
+};
+
+
 /**
  * Default viewer
  * When tbl_group is defined, only the charts related to the active chart in this table group are displayed
  * When addDefaultChart is true, a default chart is created for each table in the group
+ * @param props properties for this component
  */
-export class ChartsContainer extends PureComponent {
-    constructor(props) {
-        super(props);
+export const ActiveChartsPanel = (props) => {
 
-    }
+    const {viewerId=DEFAULT_PLOT2D_VIEWER_ID, tbl_group, addDefaultChart, chartId, useOnlyChartsInViewer,
+        expandedMode, closeable, noChartToolbar, toolbarVariant, useBorder} = props;
 
-    componentDidMount() {
-        const {viewerId=DEFAULT_PLOT2D_VIEWER_ID, tbl_group, addDefaultChart, chartId, useOnlyChartsInViewer} = this.props;
+    useEffect(() => {
         if (tbl_group) {
             if (addDefaultChart) {
                 const tbl_id = getActiveTableId(tbl_group);
@@ -118,87 +148,94 @@ export class ChartsContainer extends PureComponent {
         }
 
         if (!useOnlyChartsInViewer) {
-            const monitor = watchTblGroup(viewerId, tbl_group, addDefaultChart, useOnlyChartsInViewer);
-            this.removeMonitor = monitor();
+            return watchTblGroup(viewerId, tbl_group, addDefaultChart, useOnlyChartsInViewer);
         }
-    }
 
-    componentWillUnmount() {
-        this.removeMonitor && this.removeMonitor();
-        this.removeMonitor = undefined;
-    }
+    }, [tbl_group, viewerId, chartId, useOnlyChartsInViewer]);
 
-    render() {
-        const {chartId, expandedMode, closeable, viewerId=DEFAULT_PLOT2D_VIEWER_ID, noChartToolbar} = this.props;
-
-        if (chartId) {
-            if (expandedMode) {
-                return (
-                    <ExpandedView {...{
-                        key: 'chart-expanded',
-                        closeable,
-                        chartId,
-                        noChartToolbar
-                    }}/>
-                );
-            } else {
-                return (
-                    <ChartPanel {...{
-                        key: chartId,
-                        expandable: true,
-                        chartId,
-                        showToolbar: !Boolean(noChartToolbar),
-                        glass: Boolean(noChartToolbar)
-                    }}/>
-                );
-            }
+    if (chartId) {
+        if (expandedMode) {
+            return (
+                <ExpandedView {...{
+                    key: 'chart-expanded',
+                    closeable,
+                    chartId,
+                    tbl_group,
+                    noChartToolbar,
+                    toolbarVariant,
+                    viewerId
+                }}/>
+            );
         } else {
             return (
+                <ChartPanel {...{
+                    key: chartId,
+                    expandable: true,
+                    chartId,
+                    tbl_group,
+                    toolbarVariant,
+                    showToolbar: !Boolean(noChartToolbar),
+                }}/>
+            );
+        }
+    } else {
+           return (
                 <MultiChartViewer {...{
                     closeable,
                     viewerId,
+                    tbl_group,
                     expandedMode,
-                    noChartToolbar}}
+                    noChartToolbar,
+                    toolbarVariant,
+                    useBorder,
+                    showAddChart: true}}
                 />
             );
-        }
     }
-}
-
-ChartsContainer.propTypes = {
-    expandedMode: PropTypes.bool,
-    closeable: PropTypes.bool,
-    chartId: PropTypes.string,
-    viewerId : PropTypes.string,
-    tbl_group : PropTypes.string,
-    addDefaultChart : PropTypes.bool,
-    noChartToolbar : PropTypes.bool,
-    useOnlyChartsInViewer :PropTypes.bool
 };
 
+ActiveChartsPanel.propTypes = ChartsContainer.propTypes;
+
+
 function ExpandedView(props) {
-    const {closeable, chartId, noChartToolbar} = props;
+    const {closeable, chartId, viewerId} = props;
     return (
-        <div  style={{position: 'absolute', top: 0, left: 0, right: 0, bottom: 0}}>
-            <ChartPanel {...{
-                key: 'expanded-'+chartId,
-                expandedMode: true,
-                expandable: false,
-                chartId,
-                showToolbar: !Boolean(noChartToolbar),
-                glass: Boolean(noChartToolbar)
-            }}/>
-            {closeable &&
-            <CloseButton
-                style={{position: 'absolute', top: 0, left: 0, paddingLeft: 10}}
-                onClick={() => dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none)}/>
-            }
-        </div>
+        <Stack height={1}>
+            <ChartToolbarExt {...{chartId, closeable, viewerId}}/>
+            <Stack flexGrow={1}>
+                <ChartPanel {...{
+                    key: 'expanded-'+chartId,
+                    expandedMode: true,
+                    expandable: false,
+                    chartId,
+                    showToolbar: false
+                }}/>
+            </Stack>
+        </Stack>
     );
 }
 
 ExpandedView.propTypes = {
     closeable: PropTypes.bool,
     chartId: PropTypes.string,
-    noChartToolbar : PropTypes.bool
+    noChartToolbar : PropTypes.bool,
+    viewerId: PropTypes.string
+};
+
+
+export function closeExpandedChart(viewerId) {
+    const {layout} = getExpandedChartProps();
+    viewerId && layout && dispatchChangeViewerLayout(viewerId, layout);                      // switch back to previous layout if exists
+    dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none);
+}
+
+const ChartToolbarExt = ({chartId, viewerId, tbl_group, noChartToolbar, closeable=true}) => {
+    if (!closeable && noChartToolbar) return null;
+
+    return (
+        <Stack direction='row' justifyContent='space-between'>
+            {closeable && <CloseButton onClick={() => closeExpandedChart(viewerId)}/>}
+            {!noChartToolbar && <ChartToolbar {...{chartId, viewerId, tbl_group, expandable:false, expandedMode:true}}/>}
+        </Stack>
+    );
 };

@@ -2,6 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {Box} from '@mui/joy';
 import React from 'react';
 import {parseWorldPt} from 'firefly/visualize/Point.js';
 import {ServerParams} from 'firefly/data/ServerParams.js';
@@ -13,20 +14,24 @@ import {FieldGroup} from 'firefly/ui/FieldGroup.jsx';
 import {getWorkspaceConfig} from 'firefly/visualize/WorkspaceCntlr.js';
 import {VoSearchPanel} from 'firefly/ui/VoSearchPanel.jsx';
 import {NedSearchPanel} from 'firefly/ui/NedSearchPanel.jsx';
-import {irsaCatalogGroupKey} from 'firefly/visualize/ui/CatalogSelectViewPanel.jsx';
+import {irsaCatalogGroupKey} from 'firefly/visualize/ui/IrsaCatalogSearch.jsx';
 import {FormPanel} from 'firefly/ui/FormPanel.jsx';
 import {showInfoPopup} from 'firefly/ui/PopupUtil.jsx';
 
 
 
 const FormTemplate= ({children, onSuccess,groupKey, help_id}) => (
-        <div style={{width:'100%'}} >
-            <FormPanel width='auto' height='auto' groupKey={groupKey} onSubmit={onSuccess}
-                       params={{hideOnInvalid: false}} buttonStyle={{justifyContent: 'left'}}
-                       submitBarStyle={{padding: '2px 3px 3px'}} help_id = {help_id} >
+        <Box sx={{width:1, height:1}} >
+            <FormPanel groupKey={groupKey}
+                       onSuccess={onSuccess}
+                       cancelText=''
+                       help_id = {help_id}
+                       slotProps={{
+                           searchBar:{px:1, py:1/2, justifyContent: 'left'},
+                       }}>
                 <FieldGroup groupKey={groupKey} keepState={true}> {children} </FieldGroup>
             </FormPanel>
-        </div>
+        </Box>
     );
 
 
@@ -44,7 +49,7 @@ export const ClassicCatalogUploadPanel= () => (
                                          tooltips={{local: 'Select an IPAC catalog table file to upload',
                                              workspace: 'Select an IPAC catalog table file from workspace to upload'}}/>
                     <div>
-                        <em style={{color:'gray'}}>Custom catalog in IPAC, CSV, TSV, VOTABLE, or FITS table format</em>
+                        <em style={{color:'gray'}}>Custom catalog or table in IPAC, CSV, TSV, VOTABLE, or FITS table format</em>
                     </div>
                 </div>
             </div>
@@ -88,7 +93,7 @@ function doVoSearch(request, providerName = '') {
     let accessUrl;//.replace('&', 'URL_PARAM_SEP');
     const wp = parseWorldPt(request[ServerParams.USER_TARGET_WORLD_PT]);
     if (!wp) {
-        showInfoPopup('Target is required');
+        showInfoPopup('Target is required', 'Error');
         return false;
     }
     const nameUsed = wp.getObjName() || wp.toString();

@@ -5,6 +5,7 @@ import edu.caltech.ipac.firefly.data.sofia.Sofia1DSpectraExtractor;
 import edu.caltech.ipac.firefly.data.sofia.SofiaFitsConverterUtil;
 import edu.caltech.ipac.firefly.data.sofia.SofiaSpectraModel;
 import edu.caltech.ipac.firefly.server.ServerContext;
+import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.table.DataGroup;
 import edu.caltech.ipac.table.io.VoTableReader;
 import edu.caltech.ipac.table.io.VoTableWriter;
@@ -76,7 +77,7 @@ public class SofiaAnalyzer implements DataProductAnalyzer {
         if (inst.equals("FORCAST")) {
             if (level.equals("LEVEL_2") && (code.equals("rspspec") || code.equals("mrgspec"))) { //params.containsKey("replace") && Boolean.parseBoolean(params.get("replace"))) {
                 return  true;
-            } else if (level.equals("LEVEL_3") && (code.equals("combspec") || code.equals("calspec"))) { //params.containsKey("replace") && Boolean.parseBoolean(params.get("replace"))) {
+            } else if ((level.equals("LEVEL_3") && (code.equals("combspec"))) || (level.equals("LEVEL_3") && (code.equals("combined_spectrum")))  || code.equals("calspec")) { //params.containsKey("replace") && Boolean.parseBoolean(params.get("replace"))) {
                 return  true;
             }
         } else if (inst.equals("EXES") && level.equals("LEVEL_3")) {
@@ -275,7 +276,7 @@ public class SofiaAnalyzer implements DataProductAnalyzer {
     private File extractSpectraTable(String fitsPath, SofiaSpectraModel.SpectraInstrument instrument) throws Exception {
         Sofia1DSpectraExtractor model = new Sofia1DSpectraExtractor(instrument);
         DataGroup dataObjects = model.extract(new File(fitsPath));
-        File tempSpectraFile = File.createTempFile("sofia1d-spectra-", ".xml", ServerContext.getTempWorkDir());
+        File tempSpectraFile = File.createTempFile("sofia1d-spectra-", ".xml", QueryUtil.getTempDir());
         VoTableWriter.save(tempSpectraFile, dataObjects, VO_TABLE_TABLEDATA);
         return tempSpectraFile;
     }

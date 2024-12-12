@@ -2,55 +2,47 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {memo,Fragment} from 'react';
-import PropTypes from 'prop-types';
-import {isEmpty, isString} from 'lodash';
-import {
-    primePlot,getPlotViewById, isMultiHDUFits, getCubePlaneCnt, getHDU, getActivePlotView,
-    convertHDUIdxToImageIdx, convertImageIdxToHDU, getFormattedWaveLengthUnits,
-    getHDUCount, getHDUIndex, getPtWavelength, hasPlaneOnlyWLInfo, hasPlaneOnlyVRADInfo, isImageCube, getPtVrad
-} from '../PlotViewUtil.js';
-import {getHeader} from '../FitsHeaderUtil.js';
-import {isHiPS, isImage} from '../WebPlot.js';
-import {HdrConst} from '../FitsHeaderUtil.js';
-import {ToolbarButton, ToolbarHorizontalSeparator} from '../../ui/ToolbarButton.jsx';
-import {RadioGroupInputFieldView} from '../../ui/RadioGroupInputFieldView.jsx';
-import {dispatchExtensionActivate} from '../../core/ExternalAccessCntlr.js';
-import {dispatchChangePrimePlot, dispatchChangeHiPS,
-    dispatchChangeHipsImageConversion, visRoot} from '../ImagePlotCntlr.js';
-import {makePlotSelectionExtActivateData} from '../../core/ExternalAccessUtils.js';
-import {ListBoxInputFieldView} from '../../ui/ListBoxInputField';
-import {showHiPSSurverysPopup} from '../../ui/HiPSImageSelect.jsx';
-import {CoordinateSys} from '../CoordSys.js';
-import {convertToHiPS, convertToImage, doHiPSImageConversionIfNecessary} from '../task/PlotHipsTask.js';
-import {RequestType} from '../RequestType.js';
-import {StateInputField} from '../../ui/StatedInputfield.jsx';
-import Validate from '../../util/Validate.js';
-import {sprintf} from '../../externalSource/sprintf';
-import {
-    clearFilterDrawingLayer,
-    crop, filterDrawingLayer,
-    recenterToSelection,
-    selectDrawingLayer,
-    stats,
-    unselectDrawingLayer,
-    zoomIntoSelection
-} from './CtxToolbarFunctions';
+import {Divider, Stack, Tooltip, Typography} from '@mui/joy';
+import {DropDownToolbarButton} from 'firefly/ui/DropDownToolbarButton.jsx';
 
-import CROP from 'html/images/icons-2014/24x24_Crop.png';
-import STATISTICS from 'html/images/icons-2014/24x24_Statistics.png';
-import SELECTED from 'html/images/icons-2014/24x24_Checkmark.png';
-import UNSELECTED from 'html/images/icons-2014/24x24_CheckmarkOff_Circle.png';
-import FILTER from 'html/images/icons-2014/24x24_FilterAdd.png';
-import CLEAR_FILTER from 'html/images/icons-2014/24x24_FilterOff_Circle.png';
-import PAGE_RIGHT from 'html/images/icons-2014/20x20_PageRight.png';
-import PAGE_LEFT from 'html/images/icons-2014/20x20_PageLeft.png';
 import SELECTED_ZOOM from 'html/images/icons-2014/ZoomFitToSelectedSpace.png';
-import SELECTED_RECENTER from 'html/images/icons-2014/RecenterImage-selection.png';
-import {pvEqualExScroll} from '../PlotViewUtil';
+import {isEmpty, isString} from 'lodash';
+import {arrayOf, bool, func, number, object, oneOf, string} from 'prop-types';
+import React, {Fragment, memo} from 'react';
 import shallowequal from 'shallowequal';
-
-
+import {dispatchExtensionActivate} from '../../core/ExternalAccessCntlr.js';
+import {makePlotSelectionExtActivateData} from '../../core/ExternalAccessUtils.js';
+import {sprintf} from '../../externalSource/sprintf';
+import {ActionsDropDownButton, isSpacialActionsDropVisible} from '../../ui/ActionsDropDownButton.jsx';
+import {SingleColumnMenu} from '../../ui/DropDownMenu.jsx';
+import {showHiPSSurveysPopup} from '../../ui/HiPSImageSelect.jsx';
+import {StateInputField} from '../../ui/StatedInputfield.jsx';
+import {DropDownVerticalSeparator, ToolbarButton, ToolbarHorizontalSeparator} from '../../ui/ToolbarButton.jsx';
+import BrowserInfo from '../../util/BrowserInfo.js';
+import Validate from '../../util/Validate.js';
+import {CoordinateSys} from '../CoordSys.js';
+import {getExtName, getExtType, getHeader} from '../FitsHeaderUtil.js';
+import {
+    dispatchChangeCenterOfProjection, dispatchChangeHiPS, dispatchChangeHipsImageConversion, dispatchChangePrimePlot,
+    visRoot
+} from '../ImagePlotCntlr.js';
+import {PlotAttribute} from '../PlotAttribute';
+import {
+    canConvertBetweenHipsAndFits, convertHDUIdxToImageIdx, convertImageIdxToHDU, getActivePlotView, getCubePlaneCnt,
+    getFormattedWaveLengthUnits, getHDU, getHDUCount, getHDUIndex, getPlotViewById, getPtWavelength, hasPlaneOnlyWLInfo,
+    isImageCube, isMultiHDUFits, primePlot, pvEqualExScroll,
+} from '../PlotViewUtil.js';
+import {makeWorldPt} from '../Point.js';
+import {convertToHiPS, convertToImage, doHiPSImageConversionIfNecessary} from '../task/PlotHipsTask.js';
+import {isHiPS, isHiPSAitoff, isImage} from '../WebPlot.js';
+import {
+    BeforeButton, CenterOnSelection, CheckedButton, CheckedClearButton, CropButton, FilterAddButton, FiltersOffButton,
+    NextButton, StatsButton
+} from './Buttons.jsx';
+import {
+    clearFilterDrawingLayer, crop, filterDrawingLayer, recenterToSelection, selectDrawingLayer, stats,
+    unselectDrawingLayer, zoomIntoSelection
+} from './CtxToolbarFunctions';
 
 const image24x24={width:24, height:24};
 
@@ -61,36 +53,30 @@ function makeExtensionButtons(extensionAry,pv) {
             return (
                 <ToolbarButton icon={ext.imageUrl} text={ext.title}
                                tip={ext.toolTip} key={ext.id} shortcutKey={ext.shortcutKey}
-                               horizontal={true} enabled={true} useBorder={true}
                                lastTextItem={idx===(extensionAry.length-1)}
                                onClick={() => {
                                    if (getActivePlotView(visRoot())?.plotId===pv.plotId) {
                                        dispatchExtensionActivate(ext,makePlotSelectionExtActivateData(ext,pv));
                                    }
                                }}/>
-                );
+            );
         }
     );
 }
 
 
-export function canConvertHipsAndFits(pv) {
-    if (!pv || !pv.plotViewCtx.hipsImageConversion) return false;
-    const {allSkyRequest, hipsRequestRoot, imageRequestRoot}= pv.plotViewCtx.hipsImageConversion;
-    return (hipsRequestRoot && ( allSkyRequest ||imageRequestRoot));
-}
-
-function doConvert(pv,target) {
-    if (!canConvertHipsAndFits(pv)) return;
+function doHiPSFitsConvert(pv,target) {
+    if (!canConvertBetweenHipsAndFits(pv)) return;
     if (target==='fits') {
-        convertToImage(pv,false,true);
+        if (isHiPS(primePlot(pv))) convertToImage(pv,true);
     }
-    else if (target==='hips') {
-        const fromAllsky= pv.request.getRequestType()===RequestType.ALL_SKY;
-        convertToHiPS(pv,fromAllsky, fromAllsky);
+    else if (target==='sin') {
+        if (isImage(primePlot(pv))) convertToHiPS(pv,true, false);
+        else dispatchChangeCenterOfProjection({plotId:pv.plotId, fullSky:false});
     }
-    else if (target==='allsky') {
-        convertToImage(pv,true);
+    else if (target==='aitoff') {
+        if (isImage(primePlot(pv))) convertToHiPS(pv,true, true);
+        else dispatchChangeCenterOfProjection({plotId:pv.plotId, fullSky:true});
     }
 
 }
@@ -101,87 +87,155 @@ function changeAutoConvert(pv, auto) {
     if (auto) doHiPSImageConversionIfNecessary(nextPv);
 }
 
-
-const defHFOptions= [
-    {label: 'FITS', value: 'fits', tooltip: 'Scientific pixel data over limited regions'},
-    {label: 'HiPS', value: 'hips', tooltip: 'All-sky multi-resolution picture with spherical projection'},
-];
-
-function HipsFitsConvertButton({pv}) {
+function HipsOptionsDropdown({pv}) {
+    const AITOFF_TEXT= 'Aitoff';
+    const SPHER_TEXT= 'Spherical';
     const plot= primePlot(pv);
     if (!plot) return undefined;
-    const {allSkyRequest}= pv.plotViewCtx.hipsImageConversion;
+    const {plotId}= plot;
+    const csysText= plot.imageCoordSys===CoordinateSys.GALACTIC ? 'Gal' : 'Equ';
+    const projText= isHiPSAitoff(plot) ? AITOFF_TEXT : SPHER_TEXT;
 
-    let value= 'hips';
-    if (isImage(plot)) value= (pv.request.getRequestType()===RequestType.ALL_SKY) ? 'allsky' : 'fits';
+    // const canConvertHF= canConvertBetweenHipsAndFits(pv);
+    // const text= canConvertHF ? 'Coverage Options' : `${csysText} / ${projText}`;
+    const text= `${csysText} / ${projText}`;
 
-    const options= [...defHFOptions];
-    allSkyRequest && options.push({label: 'Aitoff', value: 'allsky',
-                            tooltip:'All-Sky single-resolution picture with Aitoff projection'});
 
-    const buttonGroupTip= allSkyRequest  ? 'Auto-transition between FITS, HiPS, and Aitoff depending on zoom' :
-                                           'Auto-transition between FITS and HiPS depending on zoom';
+    const dropDown= (
+        <SingleColumnMenu sx={ (theme) => ({
+            background:ctxToolbarBG(theme, 98),
+        })}>
+            {isHiPS(plot) &&
+                <>
+                    <Tooltip title='Choose the orientation of the HiPS all-sky image'>
+                        <Typography sx={{whiteSpace:'nowrap'}}>Orientation</Typography>
+                    </Tooltip>
+                    <ToolbarButton text='Galactic' tip='Use Galactic coordinate system' key={'gal'}
+                                   hasCheckBox={true}
+                                   checkBoxOn={plot.imageCoordSys===CoordinateSys.GALACTIC}
+                                   onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.GALACTIC})}/>
+                    <ToolbarButton text='Eq J2000' tip='Use Equatorial J2000 coordinate system' key={'eqj'}
+                                   hasCheckBox={true}
+                                   checkBoxOn={plot.imageCoordSys===CoordinateSys.EQ_J2000}
+                                   onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.EQ_J2000})}/>
+                    <DropDownVerticalSeparator useLine={true}/>
+                    <ToolbarButton text='Center Galactic' tip='Align Aitoff HiPS to Galactic 0,0'
+                                   sx={{button:{px:0}}}
+                                   onClick={() => dispatchChangeHiPS({
+                                       plotId:pv.plotId,
+                                       coordSys:CoordinateSys.GALACTIC,
+                                       centerProjPt:makeWorldPt(0, 0, CoordinateSys.GALACTIC) })
+                                   } />
+                    <DropDownVerticalSeparator useLine={true}/>
+                    <Tooltip title='Choose the projection for the all-sky HiPS image'>
+                        <Typography>Projection</Typography>
+                    </Tooltip>
+                    <ToolbarButton {...{
+                        hasCheckBox: true,
+                        checkBoxOn: !isHiPSAitoff(plot),
+                        key: 'change Hips',
+                        text: SPHER_TEXT,
+                        tip: 'All-sky multi-resolution image with spherical projection, up to 180 degrees',
+                        onClick: () => dispatchChangeCenterOfProjection({plotId: pv.plotId, fullSky: false})
+                    }}/>
+                    <ToolbarButton {...{
+                        hasCheckBox: true,
+                        checkBoxOn: isHiPSAitoff(plot),
+                        key: 'change aitoff',
+                        text: AITOFF_TEXT,
+                        tip: 'All-sky multi-resolution image with Aitoff projection, up to 360 degrees',
+                        onClick: () => dispatchChangeCenterOfProjection({plotId: pv.plotId, fullSky: true})
+                    }}/>
+                </>
+            }
+        </SingleColumnMenu>
+    );
 
-    const {autoConvertOnZoom:auto}= pv.plotViewCtx.hipsImageConversion;
+
     return (
-        <div style={{display: 'flex', alignItems: 'center', padding: '1px 2px 1px 2px', margin: '0 5px 0 5px',
-            border: '1px solid rgba(60,60,60,.2)', borderRadius: '5px'}}>
-            <RadioGroupInputFieldView options={options}  value={value}
-                                      buttonGroup={true}
-                                      onChange={(ev) => doConvert(pv,ev.target.value)} />
-            <div style={{paddingLeft: 3, display:'flex', alignItems:'center'}} title={buttonGroupTip}>
-                <input type='checkbox' checked={auto} onChange={() => changeAutoConvert(pv, !auto)} />
-                Auto
-            </div>
-        </div>
+        <DropDownToolbarButton {...{
+            sx:{button:{minWidth: '11rem', px:0}},
+            text,
+            tip:'Change image orientation and projection',
+            useDropDownIndicator:true, dropDown}} />
+    );
+
+
+}
+
+function HiPSDataSelect({pv}) {
+    const plot= primePlot(pv);
+    if (!plot) return undefined;
+    const mi= pv.plotViewCtx.menuItemKeys;
+    const imageTitle= pv.plotViewCtx.hipsImageConversion?.imageRequestRoot?.getTitle()  ?? '';
+    const autoTipStart= 'Auto-transition between FITS and HiPS depending on zoom:';
+    const canConvertHF= canConvertBetweenHipsAndFits(pv);
+    const {autoConvertOnZoom:auto=false}= pv.plotViewCtx.hipsImageConversion ?? {};
+    // const text= canConvertHF ? 'Coverage Options' : `${csysText} / ${projText}`;
+
+    const dropDown= (
+        <SingleColumnMenu sx={ (theme) => ({
+            background:ctxToolbarBG(theme, 98),
+        })}>
+            {isHiPS(plot) && <>
+                <Typography sx={{whiteSpace:'nowrap'}}>Data Options</Typography>
+                <ToolbarButton text='Change HiPS' tip='Choose a different HiPS (all-sky multi-resolution) image'
+                               key='change Hips'
+                               hasCheckBox={true}
+                               visible={mi.hipsSurveyPopup}
+                               onClick={()=>showHiPSSurveysPopup(pv)} />
+                <ToolbarButton text='Add MOC Layer' tip='Add a new MOC layer to the HiPS Survey'
+                               key='add'
+                               hasCheckBox={true}
+                               visible={mi.mocLayerPopup}
+                               onClick={()=>showHiPSSurveysPopup(pv,true)} />
+            </>
+            }
+            {canConvertHF  && isHiPS(plot) && <DropDownVerticalSeparator useLine={true}/>}
+            {canConvertHF && <>
+                <Typography sx={{whiteSpace:'nowrap'}}>HiPS to FITS Conversion</Typography>
+                <ToolbarButton {...{
+                    hasCheckBox: true, checkBoxOn: auto, key: 'autoFITS',
+                    text: isHiPS(plot) ? `Auto Zoom-in to ${imageTitle} FITS` : 'Auto Zoom-out to HiPS',
+                    tip: isHiPS(plot) ?
+                        `${autoTipStart} Switch to ${imageTitle} FITS image at current view center; coverage extent will be limited` :
+                        `${autoTipStart} Switch to All-Sky (HiPS) image`,
+                    onClick: () => changeAutoConvert(pv, !auto)
+                }}/>
+                <ToolbarButton {...{
+                    hasCheckBox: true, key: 'toFITS',
+                    text: isHiPS(plot) ? `Switch to ${imageTitle} FITS image` : 'Switch to HiPS',
+                    tip: isHiPS(plot) ?
+                        `Switch to ${imageTitle} FITS image at current view center; coverage extent will be limited` :
+                        'Switch to All-Sky (HiPS) image',
+                    onClick: () => doHiPSFitsConvert(pv,isHiPS(plot) ? 'fits' : 'sin')
+                }}/>
+
+            </>}
+        </SingleColumnMenu>
+    );
+
+    return (
+        <DropDownToolbarButton {...{
+            text: canConvertHF ? 'HiPS / FITS / MOC' : 'HiPS / MOC',
+            tip:'Select all-sky images and data collection coverage maps',
+            sx:{button:{px:0}}, useDropDownIndicator:true, dropDown }}/>
     );
 }
 
-HipsFitsConvertButton.propTypes= { pv : PropTypes.object.isRequired};
-
-// Auto-transition
-
-function makeHiPSImageTable(pv) {
-    if (!primePlot(pv)) return null;
+function HipsControls({pv})  {
+    const plot= primePlot(pv);
+    const hips= isHiPS(plot);
+    const convert= canConvertBetweenHipsAndFits(pv);
+    if (!hips && !convert) return;
     return (
-        <div style={{display:'flex'}}>
-            <div style={{margin: '0 5px 0 4px'}}>
-                <input  type='button'
-                        value='Change HiPS'
-                        title={'Choose a different HiPS Survey'}
-                        onClick={()=>showHiPSSurverysPopup(pv)} />
-            </div>
-        </div>
+        <Stack pl={1} direction='row' alignItems='center' flexWrap='wrap' divider={<ToolbarHorizontalSeparator/>}>
+            { (hips|| convert) && <HiPSDataSelect pv={pv}/>}
+            { (hips) && <HipsOptionsDropdown pv={pv}/>}
+            { (hips || convert) && <></>}
+        </Stack>
     );
 }
-
-
-
-const hipsCoordOptions= [
-    {label: 'Galactic', value:0, c: CoordinateSys.GALACTIC},
-    {label: 'Eq J2000', value:1, c: CoordinateSys.EQ_J2000},
-];
-
-
-const HiPSCoordSelect= memo(({plotId, imageCoordSys}) =>{
-    if (!imageCoordSys || !plotId) return undefined;
-    const selectedIdx= Math.max(hipsCoordOptions.findIndex( (s) => s.c===imageCoordSys), 0);
-    return (
-        <div>
-            <ListBoxInputFieldView
-                inline={true} value={selectedIdx}
-                onChange={(ev) => dispatchChangeHiPS( {plotId,  coordSys: hipsCoordOptions[Number(ev.target.value)].c})}
-                labelWidth={0} label={' '} tooltip={ 'Change HiPS survey coordinate system'}
-                options={hipsCoordOptions} multiple={false}
-            />
-        </div>
-    );
-});
-HiPSCoordSelect.propTypes= {
-    plotId : PropTypes.string,
-    imageCoordSys : PropTypes.object,
-};
-
 
 /**
  * @param {Object} props
@@ -192,121 +246,107 @@ HiPSCoordSelect.propTypes= {
  * @param props.showCatUnSelect
  * @param props.showFilter
  * @param props.showClearFilter
+ * @param props.searchActions
  * @param props.showMultiImageController
- * @return {XML}
  */
 export const VisCtxToolbarView= memo((props) => {
     const {
         plotView:pv, extensionAry, showSelectionTools=false,
         showCatSelect=false, showCatUnSelect=false, width,
         showFilter=false, showClearFilter=false,
-        showMultiImageController=false }= props;
+        searchActions= undefined,
+        showMultiImageController=false,
+        makeToolbar}= props;
 
-    const rS= {
-        width: '100%',
-        display:'flex',
-        height: 28,
-        position: 'relative',
-        verticalAlign: 'top',
-        whiteSpace: 'nowrap',
-        flexDirection:'row',
-        flexWrap:'nowrap',
-        background:'rgba(227, 227, 227, .8)',
-        overflow: 'hidden',
-        alignItems: 'center',
-    };
 
     const extraLine= showMultiImageController && width<350;
     const plot= primePlot(pv);
     const image= isImage(plot);
-    const canConvertHF= canConvertHipsAndFits(pv);
-    const hips= isHiPS(plot);
+    const mi= pv?.plotViewCtx.menuItemKeys;
     const showOptions= showSelectionTools|| showCatSelect|| showCatUnSelect ||
-        showFilter || showClearFilter || !isEmpty(extensionAry) || hips || canConvertHF;
+        showFilter || showClearFilter || !isEmpty(extensionAry) || isHiPS(plot) || canConvertBetweenHipsAndFits(pv);
 
     const makeButtons= () => (
-        <Fragment>
-            {showOptions &&
-            <div style={{padding: '0 0 2px 2px', fontStyle: 'italic', fontWeight: 'bold'}}>Options:</div> }
-
+        <Stack {...{direction:'row', flexWrap:'wrap'}}>
 
             {showSelectionTools && image &&
-            <ToolbarButton icon={CROP} tip='Crop the image to the selected area'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => crop(pv)}/>}
+            <CropButton tip='Crop the image to the selected area' visible={mi.crop} onClick={() => crop(pv)}/>}
 
 
             {showCatSelect &&
-            <ToolbarButton icon={SELECTED} tip='Mark data in area as selected'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => selectDrawingLayer(pv)}/>}
+            <CheckedButton tip='Mark data in area as selected' visible={mi.selectTableRows}
+                           onClick={() => selectDrawingLayer(pv)}/>}
 
             {showCatUnSelect &&
-            <ToolbarButton icon={UNSELECTED} tip='Mark all data unselected'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => unselectDrawingLayer(pv)}/>}
+            <CheckedClearButton tip='Mark all data unselected' visible={mi.unselectTableRows}
+                           onClick={() => unselectDrawingLayer(pv)}/>}
 
             {showFilter &&
-            <ToolbarButton icon={FILTER} tip='Filter in the selected area'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => filterDrawingLayer(pv)}/>}
+            <FilterAddButton tip='Filter in the selected area' visible={mi.filterTableRows}
+                             onClick={() => filterDrawingLayer(pv)}/>}
 
             {showClearFilter &&
-            <ToolbarButton icon={CLEAR_FILTER} tip='Clear all the Filters'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => clearFilterDrawingLayer(pv)}/>}
+            <FiltersOffButton tip='Clear all the Filters' visible={mi.clearTableFilters}
+                              onClick={() => clearFilterDrawingLayer(pv)}/>}
 
             {showSelectionTools &&
             <ToolbarButton icon={SELECTED_ZOOM} tip='Zoom to fit selected area'
-                           imageStyle={image24x24}
-                           horizontal={true}
+                           imageStyle={image24x24} visible={mi.zoomToSelection}
                            onClick={() => zoomIntoSelection(pv)}/>}
 
             { showSelectionTools &&
-            <ToolbarButton icon={SELECTED_RECENTER} tip='Recenter image to selected area'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => recenterToSelection(pv)}/>}
+            <CenterOnSelection tip='Recenter image to selected area'
+                           visible={mi.recenterToSelection} onClick={() => recenterToSelection(pv)}/>}
 
             {showSelectionTools && image &&
-            <ToolbarButton icon={STATISTICS} tip='Show statistics for the selected area'
-                           imageStyle={image24x24}
-                           horizontal={true} onClick={() => stats(pv)}/>}
+            <StatsButton tip='Show statistics for the selected area' visible={mi.imageStatistics}
+                           onClick={() => stats(pv)}/>}
 
-
+            {isSpacialActionsDropVisible(searchActions,pv) && <ActionsDropDownButton {...{searchActions,pv, style:{marginTop:3}}}/> }
             {makeExtensionButtons(extensionAry,pv)}
-        </Fragment>
+        </Stack>
         );
 
 
-    const makeHipsControls= () => (
-        <Fragment>
-            {canConvertHF && <HipsFitsConvertButton pv={pv}/>}
-            {hips && <HiPSCoordSelect plotId={plot?.plotId} imageCoordSys={plot?.imageCoordSys}/>}
-            {hips && makeHiPSImageTable(pv)}
-        </Fragment>
-    );
+
+   const makeTbSX= (theme) => ({
+       backgroundColor: ctxToolbarBG(theme,94),
+       width: 1,
+       position: 'relative',
+       whiteSpace: 'nowrap',
+       overflow: 'hidden',
+       verticalAlign: 'top',
+       flexWrap: 'wrap',
+       alignItems: 'center',
+       pr: pv?.plotViewCtx?.userCanDeletePlots ? 1.5 : .25,
+   } );
+
 
     if (extraLine && showMultiImageController && showOptions) {
         return (
-            <div style={{display:'flex', flexDirection:'column'}}>
-                <div style={rS}>
+            <Stack direction='column'>
+                <Stack {...{direction:'row', sx: makeTbSX }}>
                     <MultiImageControllerView plotView={pv} />
-                </div>
-                <div style={rS}>
+                </Stack>
+                <Stack {...{direction:'row', sx: makeTbSX }}>
+                    <HipsControls pv={pv}/>
                     {makeButtons()}
-                    {makeHipsControls()}
-                </div>
-            </div>
+                </Stack>
+                {pv.pv}
+            </Stack>
         );
     }
     else {
         return (
-            <div style={rS}>
-                {showMultiImageController && <MultiImageControllerView plotView={pv} />}
-                {showMultiImageController && showOptions && <ToolbarHorizontalSeparator/>}
-                {makeButtons()}
-                {makeHipsControls()}
-            </div>
+            <Stack {...{direction:'row', justifyContent:'space-between',  sx: makeTbSX }}>
+                <Stack {...{direction:'row', alignItems: 'center',flexWrap: 'wrap',}}>
+                    {showMultiImageController && <MultiImageControllerView plotView={pv} />}
+                    {showMultiImageController && showOptions && <Divider orientation='vertical' sx={{m:.5}}  />}
+                    <HipsControls pv={pv}/>
+                    {makeButtons()}
+                </Stack>
+                {pv.plotViewCtx.embedMainToolbar && makeToolbar?.()}
+            </Stack>
         );
     }
 },
@@ -317,39 +357,24 @@ export const VisCtxToolbarView= memo((props) => {
 );
 
 VisCtxToolbarView.propTypes= {
-    plotView : PropTypes.object.isRequired,
-    extensionAry : PropTypes.arrayOf(PropTypes.object),
-    showSelectionTools : PropTypes.bool,
-    showCatSelect : PropTypes.bool,
-    showCatUnSelect : PropTypes.bool,
-    showFilter : PropTypes.bool,
-    showClearFilter : PropTypes.bool,
-    width : PropTypes.number,
-    showMultiImageController : PropTypes.bool
+    plotView : object.isRequired,
+    extensionAry : arrayOf(object),
+    showSelectionTools : bool,
+    showCatSelect : bool,
+    showCatUnSelect : bool,
+    showFilter : bool,
+    showClearFilter : bool,
+    searchActions: arrayOf(object),
+    width : number,
+    showMultiImageController : bool,
+    makeToolbar: func
 };
 
 
-
-
-
-const leftImageStyle= {
-    cursor:'pointer',
-    paddingLeft: 3
-};
-
-
-
-
-const mulImStyle= {
-    display:'inline-flex',
-    height: 28,
-    position: 'relative',
-    verticalAlign: 'top',
-    whiteSpace: 'nowrap',
-    flexDirection:'row',
-    flexWrap:'nowrap',
-    alignItems: 'center',
-};
+export const ctxToolbarBG= (theme, opacity=90) =>
+    BrowserInfo.supportsCssColorMix() ?
+        `color-mix(in srgb, ${theme.vars.palette.neutral.softBg} ${opacity}%, transparent)` :
+        theme.vars.palette.neutral.softBg;
 
 
 export function MultiImageControllerView({plotView:pv}) {
@@ -361,12 +386,11 @@ export function MultiImageControllerView({plotView:pv}) {
     let cIdx;
     let length;
     let wlStr= '';
-    //let vradStr= '';
     let startStr;
     const  cube= isImageCube(plot) || !image;
     const multiHdu= isMultiHDUFits(pv);
     let hduDesc= '';
-    let tooltip= '';
+    let tooltip;
 
     if (image) {
         tooltip= '';
@@ -374,18 +398,24 @@ export function MultiImageControllerView({plotView:pv}) {
         if (cIdx<0) cIdx= 0;
         length= plots.length;
         if (multiHdu) {
+            const {HDU_TITLE_DESC, HDU_TITLE_HEADER}= PlotAttribute;
+            const {attributes:att, plotDesc:desc=''}= plot;
             const hduNum= getHDU(plot);
             startStr= 'Image: ';
-            const desc= plot.plotDesc ?? '';
-            startStr= `HDU (#${hduNum}): `;
-            hduDesc= `${desc || getHeader(plot,HdrConst.EXTNAME,'')}`;
-            tooltip+= `HDU: ${hduNum} ${hduDesc?', '+hduDesc:''}`;
+            startStr= att[HDU_TITLE_DESC] ? att[HDU_TITLE_DESC] + ': ': `HDU (#${hduNum}): `;
+
+            const hduTitleHeader= att[HDU_TITLE_HEADER] ;
+            const reqHeaderTitle= hduTitleHeader ? `${getHeader(plot,hduTitleHeader)}` : '';
+            const reqHduInfo= (att[HDU_TITLE_DESC] && reqHeaderTitle) ? `${att[HDU_TITLE_DESC]}: ${reqHeaderTitle}, ` : '';
+            const nameOrType= getExtName(plot) || getExtType(plot);
+            hduDesc= `${desc || reqHeaderTitle || nameOrType}`;
+            tooltip+= `${reqHduInfo}HDU: ${hduNum} ${nameOrType?', '+hduDesc:''}`;
         }
         if (plot.cubeIdx>-1) {
-            tooltip+= `${multiHdu ? ', ':''} Cube: ${plot.cubeIdx+1}/${getCubePlaneCnt(pv,plot)}`;
+            tooltip+= `${multiHdu ? ', ':''} Cube: ${plot.cubeIdx+1}/${getCubePlaneCnt(plot)}`;
 
             if (hasPlaneOnlyWLInfo(plot)) {
-                const wl= doFormat(getPtWavelength(plot,null, plot.cubeIdx),4);
+                const wl= doFormat(getPtWavelength(plot,undefined, plot.cubeIdx),4);
                 const unitStr= getFormattedWaveLengthUnits(plot);
                 wlStr= `${wl} ${unitStr}`;
             }
@@ -400,29 +430,33 @@ export function MultiImageControllerView({plotView:pv}) {
     if (cIdx<0) cIdx= 0;
 
     return (
-        <div style={mulImStyle} title={tooltip}>
-            {startStr && <div style={{
-                width: '13em', overflow: 'hidden',
-                textOverflow: 'ellipsis', padding: '0 0 0 5px', textAlign: 'end'} }>
-                <span style={{fontStyle: 'italic', fontWeight: 'bold'}}> {startStr} </span>
-                <span> {hduDesc} </span>
-            </div>}
+        <Tooltip title={tooltip} placement='top-end'>
+            <Stack {...{direction:'row', flexWrap:'wrap', alignItems:'center',  position:'relative' }}>
+                {startStr && <Typography {...{
+                    component:'div',
+                    level:'body-sm', width: '13em', overflow: 'hidden',
+                    textOverflow: 'ellipsis', pl:1, textAlign: 'end'} }>
+                    <div/>
+                    <span style={{fontStyle: 'italic', fontWeight: 'bold'}}> {startStr} </span>
+                    <Typography level='body-sm' color='warning'> {hduDesc} </Typography>
+                </Typography>}
 
-            {multiHdu && <FrameNavigator {...{pv, currPlotIdx:cIdx, minForInput:4, displayType:'hdu',tooltip}} />}
-            {cube && multiHdu && <ToolbarHorizontalSeparator style={{height: 20}}/>}
-            {cube &&
-            <div style={{
-                fontStyle: 'italic', fontWeight: 'bold',
-                overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 0 0 5px'}
-            }> {'Plane: '} </div> }
-            {wlStr && <div style={{paddingLeft: 6}}>{wlStr}</div>}
-            {cube && <FrameNavigator {...{pv, currPlotIdx:cIdx, minForInput:6, displayType:image?'cube':'hipsCube',tooltip}} /> }
-        </div>
+                {multiHdu && <FrameNavigator {...{pv, currPlotIdx:cIdx, minForInput:4, displayType:'hdu',tooltip}} />}
+                <Stack {...{direction:'row', alignItems:'center'}}>
+                    {cube && multiHdu && <Divider orientation='vertical' sx={{mx:.5}}  />}
+                    {cube &&
+                        <Typography {...{level:'body-sm', fontWeight:'bold', fontStyle: 'italic',
+                            overflow: 'hidden', textOverflow: 'ellipsis', pl: 1}}>Plane: </Typography>}
+                    {wlStr && <Typography {...{level:'body-sm', color:'warning', pl:.5}}>{wlStr}</Typography>}
+                    {cube && <FrameNavigator {...{pv, currPlotIdx:cIdx, minForInput:6, displayType:image?'cube':'hipsCube'}} /> }
+                </Stack>
+            </Stack>
+        </Tooltip>
     );
 }
 
 MultiImageControllerView.propTypes= {
-    plotView : PropTypes.object.isRequired,
+    plotView : object.isRequired,
 };
 
 const doFormat= (v,precision) => precision>0 ? sprintf(`%.${precision}f`,v) : Math.trunc(v)+'';
@@ -444,28 +478,6 @@ function getHipsCubeDesc(plot) {
 }
 
 
-const typeConvert= {
-    hdu: {
-        getLen: getHDUCount,
-        getContextIdx: (pv,idx) => convertImageIdxToHDU(pv,idx).hduIdx,
-        getPlotIdx: (pv,idx) => convertHDUIdxToImageIdx(pv,idx, 'follow'),
-    },
-    cube: {
-        getLen: getCubePlaneCnt,
-        getContextIdx: (pv,idx) => convertImageIdxToHDU(pv,idx).cubeIdx,
-        getPlotIdx: (pv,idx) => convertHDUIdxToImageIdx(pv, getHDUIndex(pv, primePlot(pv)), idx)
-    },
-    images: {
-        getLen: (pv) => pv.plots.length,
-        getContextIdx: (pv,idx) => idx,
-        getPlotIdx: (pv,idx) => idx
-    },
-    hipsCube: {
-        getLen: (pv) => primePlot(pv).cubeDepth,
-        getContextIdx: (pv,idx) => idx,
-        getPlotIdx: (pv,idx) => idx
-    }
-};
 
 function getEmLength(len) {
    const size= Math.trunc(Math.log10(len)) + 1;
@@ -473,7 +485,31 @@ function getEmLength(len) {
 }
 
 
-function FrameNavigator({pv, currPlotIdx, minForInput, displayType, tooltip}) {
+function FrameNavigator({pv, currPlotIdx, minForInput, displayType}) {
+
+    const typeConvert= {
+        hdu: {
+            getLen: getHDUCount,
+            getContextIdx: (pv,idx) => convertImageIdxToHDU(pv,idx).hduIdx,
+            getPlotIdx: (pv,idx) => convertHDUIdxToImageIdx(pv,idx, 'follow'),
+        },
+        cube: {
+            getLen: getCubePlaneCnt,
+            getContextIdx: (pv,idx) => convertImageIdxToHDU(pv,idx).cubeIdx,
+            getPlotIdx: (pv,idx) => convertHDUIdxToImageIdx(pv, getHDUIndex(pv, primePlot(pv)), idx)
+        },
+        images: {
+            getLen: (pv) => pv.plots.length,
+            getContextIdx: (pv,idx) => idx,
+            getPlotIdx: (pv,idx) => idx
+        },
+        hipsCube: {
+            getLen: (pv) => primePlot(pv).cubeDepth,
+            getContextIdx: (pv,idx) => idx,
+            getPlotIdx: (pv,idx) => idx
+        }
+    };
+
 
     const plot= primePlot(pv);
     const {plotId}= pv;
@@ -504,28 +540,31 @@ function FrameNavigator({pv, currPlotIdx, minForInput, displayType, tooltip}) {
     const showNavControl= minForInput<=len;
     const currStr= `${currIdx+1}`;
 
-    return (
-        <div title= {tooltip}
-             style={{ display:'inline-flex', flexDirection:'row', flexWrap:'nowrap', alignItems: 'center', }}>
-            <img title= {tooltip} style={leftImageStyle} src={PAGE_LEFT}
-                                      onClick={() => changeFrameIdx({value:prevIdx+1}) }/>
-            <img title= {tooltip} style={{verticalAlign:'bottom', cursor:'pointer', paddingRight:4}} src={PAGE_RIGHT}
-                                       onClick={() => changeFrameIdx({value:nextIdx+1})} />
 
-            {showNavControl ? <StateInputField defaultValue={currStr} valueChange={changeFrameIdx} labelWidth={0} label={''}
-                                tooltip={`Enter frame number to jump to, right arrow goes forward, left arrow goes back\n${tooltip}`}
-                                showWarning={false} style={{width:getEmLength(len), textAlign:'right'}}
-                                validator={validator} onKeyDown={handleKeyDown} />
-                                : currStr}
-            {` / ${len}`}
-        </div>
+    return (
+        <Stack direction='row' alignItems='center' flexWrap='nowrap'>
+            <BeforeButton title={'Next frame'} onClick={() => changeFrameIdx({value:prevIdx+1})}/>
+            <NextButton title={'Previous frame'} onClick={() => changeFrameIdx({value:nextIdx+1})}/>
+            {showNavControl ?
+                <StateInputField defaultValue={currStr} valueChange={changeFrameIdx}
+                                 sx={{'& .MuiInput-root':{'minHeight':'3px', 'borderRadius':4, width:'5em'}}}
+                                 tooltip={'Enter frame number to jump to, right arrow goes forward, left arrow goes back'}
+                                 style={{width:getEmLength(len), textAlign:'right'}}
+                                 type='number'
+                                 validator={validator} onKeyDown={handleKeyDown} />
+                :
+                <Typography level='body-sm'>{currStr}</Typography>
+            }
+            <Typography level='body-sm'> {` / ${len}`} </Typography>
+        </Stack>
     );
 }
 
 FrameNavigator.propTypes= {
-    pv: PropTypes.object,
-    currPlotIdx: PropTypes.number,
-    minForInput: PropTypes.number,
-    displayType: PropTypes.oneOf(['hdu', 'cube', 'images', 'hipsCube']),
-    tooltip: PropTypes.string,
+    pv: object,
+    currPlotIdx: number,
+    minForInput: number,
+    makeToolbar: func,
+    displayType: oneOf(['hdu', 'cube', 'images', 'hipsCube']),
+    tooltip: string,
 };

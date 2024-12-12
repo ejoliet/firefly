@@ -1,140 +1,68 @@
-/*
- L. Zhang Initial version 3/16/16
- DM-4494:FITS Visualizer porting: Show FITS Header
- */
+import {Stack, Typography} from '@mui/joy';
 import React from 'react';
-import {get} from 'lodash';
 import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
-import {PopupPanel} from '../../ui/PopupPanel.jsx';
+import {LayoutType, PopupPanel} from '../../ui/PopupPanel.jsx';
 import {TablePanel} from '../../tables/ui/TablePanel.jsx';
 import {dispatchShowDialog, dispatchHideDialog} from '../../core/ComponentCntlr.js';
 import CompleteButton from '../../ui/CompleteButton.jsx';
 import HelpIcon from '../../ui/HelpIcon.jsx';
-import {closeButtonStyle, helpIdStyle} from './FitsHeaderView.jsx';
 import {getTblById} from '../../tables/TableUtil.js';
 import {primePlot} from '../PlotViewUtil.js';
 
-const popupIdRoot = 'hipsProperty';
 
-//define the table style only in the table div
-const tableStyle = {boxSizing: 'border-box', paddingLeft:5,paddingRight:5, width: '100%', height: 'calc(100% - 50px)', overflow: 'hidden', flexGrow: 1, display: 'flex', resize:'none'};
+export const HIPS_PROPERTY_POPUP_ID = 'hipsPropertyID';
 
 
-const popupPanelNoPropsResizableStyle = {
-    width: 400,
-    minWidth: 300,
-    height: 300,
-    minHeight: 200,
-    paddingTop: 30,
-    resize: 'both',
-    overflow: 'hidden',
-    position: 'relative',
-    textAlign: 'center'
-};
-
-const popupPanelResizableStyle = {
-    width: 450,
-    minWidth: 450,
-    height: 380,
-    minHeight: 300,
-    marginTop: 30,
-    resize: 'both',
-    overflow: 'hidden',
-    position: 'relative'
-};
-
-export function HiPSPropertyView(pv,element) {
-    const plot = primePlot(pv);
-
-    if (plot) {
-        showHiPSPropsPopup(plot,element);
-    }
+export function showHiPSPropertyView(pv, element, initLeft, initTop, onMove) {
+    if (primePlot(pv)) showHiPSPropsPopup(primePlot(pv),element, initLeft,initTop, onMove);
 }
 
-function showHiPSPropsPopup(plot, element) {
+function showHiPSPropsPopup(plot, element, initLeft,initTop, onMove) {
     const tableId = plot.title.replace(/\s/g, '').replace(/[^a-zA-Z0-9]/g, '_') + '_HiPS';
-    const popupId = popupIdRoot + '_' + tableId;
-    const popTitle = 'HiPS Properties : ' + plot.title;
+    const layoutPosition= isNaN(initLeft)||isNaN(initTop)?LayoutType.TOP_CENTER:LayoutType.USER_POSITION;
 
-    var popup = (
-        <PopupPanel title={popTitle}>
-            {popupForm(plot, tableId, popupId)}
+    const popup = (
+        <PopupPanel {...{ title:'HiPS Properties : ' + plot.title, initLeft, initTop, onMove, layoutPosition}} >
+            {popupForm(plot, tableId, HIPS_PROPERTY_POPUP_ID)}
         </PopupPanel>
     );
+    DialogRootContainer.defineDialog(HIPS_PROPERTY_POPUP_ID, popup,element);
+    dispatchShowDialog(HIPS_PROPERTY_POPUP_ID);
+}
 
-    DialogRootContainer.defineDialog(popupId, popup,element);
-    dispatchShowDialog(popupId);
+function makeHiPSPropModel(hipsProps,hipsUrlRoot, tableId) {
+    const columns = [{name: 'Property', width: 20, type: 'char'}, {name: 'Value', width: 60, type: 'char'}];
+    const data = [['hips_service_url',hipsUrlRoot], ...Object.entries(hipsProps)];
+    return {totalRows: data.length, tbl_id: tableId, tableData:{columns, data}, highlightedRow: 0 };
 }
 
 function popupForm(plot, tableId, popupId) {
-    let   tableModel = getTblById(tableId);
-    const hipsProps = get(plot, 'hipsProperties');
-
-    if (!tableModel && hipsProps) {
-        const columns = [{name: 'Property', width: 20, type: 'char'},
-                         {name: 'Value', width: 30, type: 'char'}];
-        const data = Object.keys(hipsProps).reduce((prev, propKey) => {
-            prev.push([propKey, hipsProps[propKey]]);
-            return prev;
-        }, []);
-
-        tableModel = {totalRows: data.length,
-                      tbl_id: tableId,
-                      tableData:{columns, data},
-                      highlightedRow: 0
-                      };
-    }
-
-    return tableModel ? (
-                    <div style={popupPanelResizableStyle}>
-                        {renderTable(tableModel)}
-                        {renderCloseAndHelpButtons(popupId)}
-                    </div>) :
-                    (<div style={popupPanelNoPropsResizableStyle}>
-                        HiPS properties not found
-                     </div>);
-}
-
-function renderCloseAndHelpButtons(popupId){
-    return(
-    <div>
-        <div style={closeButtonStyle}>
-            <CompleteButton
-                text='close'
-                onClick={()=>dispatchHideDialog( popupId)}
-                dialogId={popupId}
-            />
-        </div>
-        <div style={helpIdStyle}>
-            <HelpIcon helpId={'tables'}/>
-        </div>
-    </div>
-);
-}
-
-
-/**
- * display the data into a tabular format
- * @param tableModel
- * @returns {XML}
- */
-function renderTable(tableModel) {
-
-    const myTableStyle= tableStyle;
-    const tbl_ui_id = tableModel.tbl_id + '-ui';
+    if (!plot?.hipsProperties) return <NotFound/>;
+    const tableModel= getTblById(tableId) || makeHiPSPropModel(plot.hipsProperties, plot.hipsUrlRoot,tableId);
     return (
-        <div style={ myTableStyle}>
-           <TablePanel
-               key={tableModel.tbl_id}
-               tbl_ui_id = {tbl_ui_id}
-               tableModel={tableModel}
-               height='calc(100% - 42px)'
-               showToolbar={false}
-               selectable={false}
-               showOptionButton={false}
-           />
-
-        </div>
-    );
-
+        <Stack {...{sx:{minWidth: 450, minHeight: 400, height: 400, mt:1/2,
+            resize: 'both', overflow: 'hidden', position: 'relative'}}}>
+            {renderTable(tableModel)}
+            <Stack {...{direction:'row', justifyContent:'space-between', my:1, alignItems:'center'}}>
+                <CompleteButton text='Close' onClick={()=>dispatchHideDialog( popupId)} dialogId={popupId} />
+                <HelpIcon helpId={'tables'}/>
+            </Stack>
+        </Stack> ) ;
 }
+
+const NotFound= () => (
+    <Typography {...{color:'warning', width: 400, minWidth: 300, height: 300, minHeight: 200, pt: 4,
+        resize: 'both', overflow: 'hidden', position: 'relative', textAlign: 'center' }}>
+        HiPS properties not found
+    </Typography>
+);
+
+const renderTable= (tableModel) => (
+    <Stack {...{direction:'row', px:1/2, width:1, overflow: 'hidden', flexGrow: 1,resize:'none'}}>
+        <TablePanel
+            key={tableModel.tbl_id} tbl_ui_id = {tableModel.tbl_id + '-ui'} tableModel={tableModel}
+            height='calc(100% - 42px)'
+            showToolbar={false} selectable={false} showOptionButton={false} allowUnits={false}
+            showFilters={true} showTypes={false} />
+    </Stack>
+);

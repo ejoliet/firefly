@@ -2,47 +2,136 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {useCallback, useEffect} from 'react';
-import PropTypes from 'prop-types';
-import {Table,Column} from 'fixed-data-table-2';
+import React, {useCallback, useEffect, useRef} from 'react';
+import {Box, Typography} from '@mui/joy';
+import {arrayOf, array, bool, func, instanceOf, number, object, objectOf, shape, string} from 'prop-types';
+import {Column, Table} from 'fixed-data-table-2';
 import {wrapResizer} from '../../ui/SizeMeConfig.js';
-import {get, isEmpty} from 'lodash';
+import {get, set, isEmpty, isUndefined, omitBy, pick} from 'lodash';
 
-import {tableTextView, getTableUiById, getProprietaryInfo, getTblById, hasRowAccess, calcColumnWidths, uniqueTblUiId, hasNoData} from '../TableUtil.js';
+import {
+    getCellValue, getColMaxVal, getColMaxValues, getColumns, getProprietaryInfo, getTableState, getTableUiById,
+    getTblById, hasRowAccess, hasSubHighlightRows, isClientTable, isSubHighlightRow, tableTextView, TBL_STATE,
+    uniqueTblUiId
+} from '../TableUtil.js';
 import {SelectInfo} from '../SelectInfo.js';
 import {FilterInfo} from '../FilterInfo.js';
 import {SortInfo} from '../SortInfo.js';
-import {
-    TextCell,
-    HeaderCell,
-    SelectableHeader,
-    SelectableCell,
-    LinkCell,
-    makeDefaultRenderer,
-    CellWrapper
-} from './TableRenderer.js';
+import {CellWrapper, getPxWidth, HeaderCell, headerStyle, makeDefaultRenderer, SelectableCell, SelectableHeader} from './TableRenderer.js';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {dispatchTableUiUpdate, TBL_UI_UPDATE} from '../TablesCntlr.js';
 import {Logger} from '../../util/Logger.js';
 
-import './TablePanel.css';
+import 'fixed-data-table-2/dist/fixed-data-table.css';
+import {updateSet} from 'firefly/util/WebUtil.js';
+import {TableMask} from 'firefly/ui/panel/MaskPanel.jsx';
+import {TableErrorMsg} from 'firefly/tables/ui/TablePanel.jsx';
 
 const logger = Logger('Tables').tag('BasicTable');
 const noDataMsg = 'No Data Found';
 const noDataFromFilter = 'No data match these criteria';
 
-const BY_SCROLL = 'byScroll';
+export const BY_SCROLL = 'byScroll';
 
 
-const BasicTableViewInternal = React.memo((props) => {
+// Override default fixed-data-table-2 css with joy-ui colors and styles
+const tableStyleOverrides = {
+    '.public_fixedDataTableCell_main, .public_fixedDataTableCell_cellContent': {
+        padding: '0 2px',
+    },
+    '.fixedDataTableRowLayout_rowWrapper': {
+        fontSize: '12px',
+    },
+    '.fixedDataTableCellLayout_main': {
+        borderStyle: 'solid',
+        borderWidth: '0 1px 1px 0',
+    },
+    '.public_fixedDataTable_main': {
+        borderColor: 'neutral.outlinedBorder',
+    },
+    '.fixedDataTableRowLayout_main div, .fixedDataTableCellLayout_main [role=columnheader]': {
+        backgroundColor: 'background.surface',
+    },
+    '.fixedDataTableRowLayout_main.highlighted div': {
+        backgroundColor: 'warning.softHoverBg',
+    },
+    '.fixedDataTableRowLayout_main.related div': {
+        backgroundColor: 'warning.softBg',
+    },
+    '.fixedDataTableRowLayout_main.no-access div': {
+        backgroundColor: 'danger.softBg',
+    },
+    '.fixedDataTableRowLayout_main.no-access-highlighted div': {
+        backgroundColor: 'danger.softHoverBg',
+    },
+    '.public_fixedDataTableCell_main, .public_fixedDataTableRow_main, .public_fixedDataTable_scrollbarSpacer, .public_fixedDataTableRow_highlighted .public_fixedDataTableCell_main, .public_fixedDataTable_header .public_fixedDataTableCell_main': {
+        backgroundImage: 'none',
+        backgroundColor: 'unset',
+        fontWeight: 'unset',
+        borderColor: 'neutral.outlinedBorder',
+    },
+    '.public_fixedDataTableRow_fixedColumnsDivider': {
+        borderColor: 'neutral.outlinedBorder',
+    },
+    '.fixedDataTableCellLayout_columnResizerContainer, .public_fixedDataTable_scrollbarSpacer': {
+        backgroundColor: 'unset !important',
+    },
+    '.public_Scrollbar_main.public_Scrollbar_mainActive, .public_Scrollbar_main': {
+        backgroundColor: 'var(--scrollbar-color-track)',
+        borderColor: 'neutral.outlinedBorder',
+    },
+    '.public_Scrollbar_mainOpaque, .public_Scrollbar_mainOpaque.public_Scrollbar_mainActive, .public_Scrollbar_mainOpaque:hover': {
+        backgroundColor: 'var(--scrollbar-color-track)',
+    },
+    '.public_Scrollbar_face:after': {
+        backgroundColor: 'var(--scrollbar-color-thumb)',
+    },
+    '.public_Scrollbar_main:hover .public_Scrollbar_face:after, .public_Scrollbar_mainActive .public_Scrollbar_face:after, .public_Scrollbar_faceActive:after': {
+        backgroundColor: 'var(--scrollbar-color-thumb-active)',
+    },
+    '.public_fixedDataTableRow_columnsShadow': {
+        backgroundImage: 'none',
+        backgroundColor: 'unset',
+    },
+};
 
+
+export const NoDataTableView = ({sx, children}) => (
+    <Box sx={{position: 'absolute', top: '50%', left: '50%', zIndex: 1, fontSize: 'lg', color: 'text.tertiary', ...sx}}>
+        {children}
+    </Box>
+);
+
+const BasicTableViewInternal = React.memo(({ selectable:selectableIn= false, showTypes:showTypesIn= false,
+                                               showMask= false, rowHeight:rowHeightIn= 20, currentPage:currentPageIn= -1, ...rest }) => {
+    const props= { selectable:selectableIn, showTypes:showTypesIn, showMask, rowHeight:rowHeightIn,
+        currentPage:currentPageIn, ...rest} ;
     const {width, height} = props.size;
-    const {columns, data, hlRowIdx, showUnits, showTypes, showFilters, filterInfo, renderers,
-            bgColor, selectable, selectInfoCls, sortInfo, callbacks, textView, rowHeight,
-            error, tbl_ui_id=uniqueTblUiId(), currentPage, startIdx=0, highlightedRowHandler, cellRenderers} = props;
+    const {columns, data, hlRowIdx, renderers, selectInfoCls, callbacks, rowHeight, rowHeightGetter, showHeader=true,
+            error, tbl_ui_id=uniqueTblUiId(), currentPage, startIdx=0, highlightedRowHandler, cellRenderers, onRowDoubleClick} = props;
 
     const uiStates = getTableUiById(tbl_ui_id) || {};
-    const {tbl_id, columnWidths, scrollLeft=0, scrollTop=0, triggeredBy} = uiStates;
+    const {tbl_id, columnWidths, scrollLeft=0, scrollTop=0, triggeredBy, showTypes, showFilters, showUnits, filterInfo,
+            selectable, sortInfo, textView} = uiStates;
+    const tableRef = useRef();
+
+    useEffect( () => {
+        if (!isEmpty(columns)) {
+            const changes = omitBy(pick(props, 'showTypes', 'showFilters', 'showUnits', 'filterInfo','selectable', 'sortInfo', 'textView'), isUndefined);
+
+            const showUnits = !!columns.find?.((col) => col?.units);
+            if (isUndefined(changes.showUnits)) changes.showUnits = showUnits;
+            if (isUndefined(changes.options?.showUnits)) set(changes,'options.showUnits', showUnits);
+
+            const showFilters = !(!tbl_id || isClientTable(tbl_id));    // false if no tbl_id or is a client table
+            if (isUndefined(changes.showFilters)) changes.showFilters = showFilters;
+            if (isUndefined(changes.options?.showFilters)) set(changes,'options.showFilters', showFilters);
+
+            if (!isEmpty(changes)) {
+                dispatchTableUiUpdate({tbl_ui_id, ...changes});
+            }
+        }
+    }, [columns]);
 
     const onScrollEnd    = useCallback( doScrollEnd.bind({tbl_ui_id}), [tbl_ui_id]);
     const onColumnResize = useCallback( doColumnResize.bind({columnWidths, tbl_ui_id}), [columnWidths]);
@@ -53,53 +142,61 @@ const BasicTableViewInternal = React.memo((props) => {
     const onFilter       = useCallback( doFilter.bind({callbacks, filterInfo}), [callbacks, filterInfo]);
     const onFilterSelected = useCallback( doFilterSelected.bind({callbacks, selectInfoCls}), [callbacks, selectInfoCls]);
 
-    const headerHeight = 22 + (showUnits && 8) + (showTypes && 8) + (showFilters && 22);
-    let totalColWidths = 0;
-    if (!isEmpty(columns) && !isEmpty(columnWidths)) {
-        totalColWidths = columns.reduce((pv, c, idx) => {
-            const delta =  get(c, ['visibility'], 'show') === 'show' ?  columnWidths[idx] : 0;
-            return pv + delta;
-        }, 0);
-    }
+    const headerHeight = showHeader ? 19 + (showUnits && 15) + (showTypes && 14) + (showFilters && 25) : 0;
+    const maxScrollWidth = tableRef.current?.getApi().getCellGroupWidth() || -1;
 
-    const adjScrollTop = correctScrollTopIfNeeded(totalColWidths, scrollTop, width, height-headerHeight, rowHeight, hlRowIdx, triggeredBy);
-    const adjScrollLeft = correctScrollLeftIfNeeded(totalColWidths, scrollLeft, width, triggeredBy);
+    const adjScrollTop = correctScrollTopIfNeeded(maxScrollWidth, scrollTop, width, height-headerHeight, rowHeight, hlRowIdx, triggeredBy);
+    const adjScrollLeft = correctScrollLeftIfNeeded(maxScrollWidth, scrollLeft, width, triggeredBy);
+
+    const isSingleColumnTable = (columns) => getColumns({tableData: {columns}}).length === 1;
 
     useEffect( () => {
         const changes = {};
-        if (!isEmpty(columns) && !columnWidths) changes.columnWidths = columnWidthsInPixel(columns, data);
+        if (!isEmpty(columns)){
+            const calcWidth = width-15-( selectable ? 25 : 0);
+            if (isSingleColumnTable(columns) && (!columnWidths || columnWidths[0]!==calcWidth)) {
+                // set 1st (only visible) column's width to table's width minus scrollbar's width (15px)
+                changes.columnWidths = [calcWidth, ...Array(columns.length - 1).fill(0)];
+            } else if(columnWidths?.length !== columns.length) {
+                changes.columnWidths = columnWidthsInPixel(columns, data);
+            } else if (columnWidths.some?.((w) => w < 0)) {       // at least one column needs width calc
+                changes.columnWidths = columnWidths.map((w, idx) => w >0 ? w : colWidthInPixel( getColMaxVal(columns[idx], idx,data), columns[idx]));
+            }
+        }
         if (adjScrollTop !== scrollTop)     changes.scrollTop = adjScrollTop;
-        if (adjScrollLeft !== scrollLeft)   changes.scrollLeft = adjScrollLeft;
 
         if (!isEmpty(changes)) {
             dispatchTableUiUpdate({tbl_ui_id, ...changes});
         }
-    });
+    }, [columns, columnWidths, width, adjScrollLeft, adjScrollTop]);
 
-    const makeColumnsProps = {columns, data, selectable, selectInfoCls, renderers, bgColor,
-        columnWidths, filterInfo, sortInfo, showUnits, showTypes, showFilters,
+    const makeColumnsProps = {columns, data, selectable, selectInfoCls, renderers,
+        columnWidths, filterInfo, sortInfo, showHeader, showUnits, showTypes, showFilters,
         onSort, onFilter, onRowSelect, onSelectAll, onFilterSelected, startIdx, cellRenderers, tbl_id};
 
     const rowClassNameGetter = highlightedRowHandler || defHighlightedRowHandler(tbl_id, hlRowIdx, startIdx);
 
 
-    const tstate = getTableState(props, uiStates);
+    const tstate = getTableState(tbl_id, {error});      // tableModel is used when tbl_id is not defined.
     logger.debug(`render.. state:[${tstate}] -- ${tbl_id}`);
-
-    if (tstate === 'ERROR')   return  <div style={{padding: 10}}>{error}</div>;
-    if (tstate === 'LOADING') return <div style={{top: 0}} className='loading-mask'/>;
+    if (tstate === TBL_STATE.ERROR)   return  <TableErrorMsg error={error}/>;
+    if (tstate === TBL_STATE.LOADING || isEmpty(columnWidths)) return <TableMask width={1}/>;
 
     const content = () => {
         if (textView) {
             return <TextView { ...{columns, data, showUnits, width, height} }/>;
         } else {
             return (
-                <Table rowHeight={rowHeight}
+                <Table ref={tableRef}
+                       rowHeight={rowHeight}
+                       rowHeightGetter={rowHeightGetter && data?.length && columnWidths?.length
+                           ? (rowIdx)=>rowHeightGetter(data[rowIdx], columnWidths) : undefined}
                        headerHeight={headerHeight}
                        rowsCount={data.length}
                        isColumnResizing={false}
                        onColumnResizeEndCallback={onColumnResize}
                        onRowClick={(e, index) => callbacks.onRowHighlight && callbacks.onRowHighlight(index)}
+                       onRowDoubleClick={onRowDoubleClick}
                        rowClassNameGetter={rowClassNameGetter}
                        onScrollEnd={onScrollEnd}
                        scrollTop={adjScrollTop}
@@ -113,66 +210,72 @@ const BasicTableViewInternal = React.memo((props) => {
         }
     };
 
-    const status = () => {
-        switch (tstate) {
-            case 'NO_DATA_FOUND':   return <div className='TablePanel_NoData'> {filterInfo ? noDataFromFilter : noDataMsg} </div>;
-            case 'META_ONLY':       return <div className='TablePanel_NoData'> Loading... </div>;
-        }
-        return null;
+    const Status = () => {
+        const msg = getTblById(tbl_id)?.status?.message;
+        const status = tstate === TBL_STATE.NO_DATA ? msg || noDataMsg :
+                       tstate === TBL_STATE.NO_MATCH ? msg || noDataFromFilter :
+                       tstate === TBL_STATE.LOADING ? 'Loading...' : '';
+
+        if (status) return <NoDataTableView> {status} </NoDataTableView>;
+        else return null;
     };
 
     return (
-        <div tabIndex='-1' onKeyDown={onKeyDown} className='TablePanel__frame'>
+        <Box tabIndex='-1' onKeyDown={onKeyDown} sx={{
+            lineHeight:1, flexGrow:1, minHeight:0, minWidth:0,
+            color: 'text.secondary', //otherwise parent's font color bleeds (which is not same in dark mode)
+            '&': tableStyleOverrides
+        }}>
             {content()}
-            {status()}
-        </div>
+            <Status/>
+        </Box>
     );
 });
 
 
 BasicTableViewInternal.propTypes = {
-    tbl_ui_id: PropTypes.string,
-    columns: PropTypes.arrayOf(PropTypes.object),
-    data: PropTypes.arrayOf(PropTypes.array),
-    hlRowIdx: PropTypes.number,
-    selectInfoCls: PropTypes.instanceOf(SelectInfo),
-    filterInfo: PropTypes.string,
-    sortInfo: PropTypes.string,
-    selectable: PropTypes.bool,
-    showUnits: PropTypes.bool,
-    showTypes: PropTypes.bool,
-    showFilters: PropTypes.bool,
-    textView: PropTypes.bool,
-    rowHeight: PropTypes.number,
-    showMask: PropTypes.bool,
-    currentPage: PropTypes.number,
-    startIdx: PropTypes.number,
-    bgColor: PropTypes.string,
-    error:  PropTypes.string,
-    size: PropTypes.object.isRequired,
-    highlightedRowHandler: PropTypes.func,
-    renderers: PropTypes.objectOf(
-        PropTypes.shape({
-            cellRenderer: PropTypes.func,
-            headRenderer: PropTypes.func
+    tbl_ui_id: string,
+    columns: arrayOf(object),
+    data: arrayOf(array),
+    hlRowIdx: number,
+    selectInfoCls: instanceOf(SelectInfo),
+    filterInfo: string,
+    sortInfo: string,
+    selectable: bool,
+    showUnits: bool,
+    showTypes: bool,
+    showFilters: bool,
+    showHeader: bool,
+    textView: bool,
+    rowHeight: number,
+    rowHeightGetter: func,  // params: rowData and columnWidths, returns height
+    showMask: bool,
+    currentPage: number,
+    startIdx: number,
+    error:  string,
+    size: object.isRequired,
+    highlightedRowHandler: func,
+    onRowDoubleClick: func,
+    renderers: objectOf(
+        shape({
+            cellRenderer: func,
+            headRenderer: func
         })
     ),
-    callbacks: PropTypes.shape({
-        onRowHighlight: PropTypes.func,
-        onRowSelect: PropTypes.func,
-        onSelectAll: PropTypes.func,
-        onSort: PropTypes.func,
-        onFilter: PropTypes.func,
-        onGotoPage: PropTypes.func
+    callbacks: shape({
+        onRowHighlight: func,
+        onRowSelect: func,
+        onSelectAll: func,
+        onSort: func,
+        onFilter: func,
+        onGotoPage: func
     })
 
 };
 
 BasicTableViewInternal.defaultProps = {
     selectable: false,
-    showUnits: false,
     showTypes: false,
-    showFilters: false,
     showMask: false,
     rowHeight: 20,
     currentPage: -1
@@ -188,19 +291,6 @@ export const BasicTableViewWithConnector = React.memo((props) => {
 
 /*---------------------------------------------------------------------------*/
 
-function getTableState(props, uiStates) {
-    const {columns, error, data, size, showMask} = props;
-    const {tbl_id, columnWidths} = uiStates;
-
-    if (error) return 'ERROR';
-    if (showMask || isEmpty(columns) || size.width === 0 || isEmpty(columnWidths)) {
-        return 'LOADING';
-    }
-    if (hasNoData(tbl_id)) return 'NO_DATA_FOUND';
-    if (isEmpty(data)) return 'META_ONLY';
-    return 'OK';
-}
-
 function doScrollEnd(scrollLeft, scrollTop) {
     const {tbl_ui_id} = this;
     const {scrollLeft:cScrollLeft, scrollTop:cScrollTop} =  getTableUiById(tbl_ui_id);
@@ -210,11 +300,10 @@ function doScrollEnd(scrollLeft, scrollTop) {
 }
 
 function doColumnResize(newColumnWidth, columnKey) {
-    const {columnWidths={}, tbl_ui_id} = this;
-    dispatchTableUiUpdate({
-        tbl_ui_id,
-        columnWidths: Object.assign({}, columnWidths, {[columnKey]: newColumnWidth})
-    });
+    const {columnWidths=[], tbl_ui_id} = this;
+    if(columnKey >= 0 && columnKey < columnWidths.length) {
+        dispatchTableUiUpdate({ tbl_ui_id, columnWidths: updateSet(columnWidths, columnKey, newColumnWidth)});
+    }
 }
 
 function doKeyDown(e) {
@@ -252,7 +341,7 @@ function doFilter({fieldKey, valid, value}) {
             callbacks.onFilter(filterInfoCls.serialize());
         }
     }
-};
+}
 
 function doSort(cname) {
     const {callbacks, sortInfo} = this;
@@ -260,7 +349,7 @@ function doSort(cname) {
         const sortInfoCls = SortInfo.parse(sortInfo);
         callbacks.onSort(sortInfoCls.toggle(cname));
     }
-};
+}
 
 function doSelectAll(checked) {
     const {callbacks} = this;
@@ -273,22 +362,22 @@ function doRowSelect(checked, rowIndex) {
 }
 
 
-const TextView = ({columns, data, showUnits, width, height}) => {
+const TextView = ({columns, data, width, height}) => {
     const text = tableTextView(columns, data);
     return (
-        <div style={{height, width,overflow: 'hidden'}}>
-            <div style={{height: '100%',overflow: 'auto'}}>
+        <Box sx={{height, width,overflow: 'hidden'}}>
+            <Typography level='body-sm' sx={{height: 1,overflow: 'auto'}}>
                 <pre>{text}</pre>
-            </div>
-        </div>
+            </Typography>
+        </Box>
     );
 };
 
-function correctScrollTopIfNeeded(totalColWidths, scrollTop, width, height, rowHeight, hlRowIdx, triggeredBy) {
+function correctScrollTopIfNeeded(maxScrollWidth, scrollTop, width, height, rowHeight, hlRowIdx, triggeredBy) {
     const rowHpos = hlRowIdx * rowHeight;
     if (triggeredBy !== BY_SCROLL) {
         // delta is a workaround for the horizontal scrollbar hiding part of the last row when visible
-        const delta = totalColWidths > width ? (.5*rowHeight) : 0;
+        const delta = maxScrollWidth > width ? (.5*rowHeight) : 0;
 
         if (rowHpos < scrollTop) {
             return rowHpos - (height * .3);
@@ -299,42 +388,52 @@ function correctScrollTopIfNeeded(totalColWidths, scrollTop, width, height, rowH
     return scrollTop;
 }
 
-function correctScrollLeftIfNeeded(totalColWidths, scrollLeft, width, triggeredBy) {
+function correctScrollLeftIfNeeded(maxScrollWidth, scrollLeft, width, triggeredBy) {
 
-    if (scrollLeft < 0) {
+    if (scrollLeft < 0 || maxScrollWidth < 0) {
         return undefined;
     } else if (scrollLeft > 0 && triggeredBy === TBL_UI_UPDATE) {
-        if (totalColWidths < width) {
-            // if the total widths of the columns is less than the view's width, don't apply scrollLeft
-            return undefined;
-        }
+        if (maxScrollWidth < width) return undefined;       // if the total widths of the columns is less than the view's width, don't apply scrollLeft
+        if (scrollLeft > maxScrollWidth) return maxScrollWidth;               // cannot scroll beyond width
     }
     return scrollLeft;
 }
 
-function columnWidthsInPixel(columns, data) {
-    return calcColumnWidths(columns, data, {maxColWidth: 100, maxAryWidth: 30})      // set max width for array columns
-            .map( (w) =>  (w + 2) * 7);
+function columnWidthsInPixel(columns, data, minWidth) {
+
+    const maxVals = getColMaxValues(columns, data, {maxColWidth: 100, maxAryWidth: 30});
+    return maxVals.map((text, idx) => colWidthInPixel(text, columns[idx]), minWidth);
 }
+
+function colWidthInPixel(text, col, minWidth=45, paddings=8) {
+    const header = col.label || col.name;
+    const style = header === text ? headerStyle : {fontSize:12};
+    text = text.replace(/[^a-zA-Z0-9]/g, 'O');    // some non-alphanum values can be very narrow.  use 'O' in place of them.
+    const pxNum =  getPxWidth({text, ...style}) + paddings;
+    return pxNum < minWidth ? minWidth : pxNum;
+}
+
 
 function defHighlightedRowHandler(tbl_id, hlRowIdx, startIdx) {
 
     const tableModel = getTblById(tbl_id);
     const hasProprietaryInfo = !isEmpty(getProprietaryInfo(tableModel));
+    const hasRelated= hasSubHighlightRows(tableModel);
 
     return (rowIndex) => {
         const absRowIndex = startIdx + rowIndex;
         if (hasProprietaryInfo && !hasRowAccess(tableModel, absRowIndex)) {
-            return hlRowIdx === rowIndex ? 'TablePanel__no-access--highlighted' : 'TablePanel__no-access';
+            return hlRowIdx === rowIndex ? 'no-access-highlighted' : 'no-access';
         }
-        if (hlRowIdx === rowIndex) return 'tablePanel__Row_highlighted';
+        if (hlRowIdx === rowIndex) return 'highlighted';
+        if (hasRelated && isSubHighlightRow(tableModel,rowIndex,hlRowIdx)) return 'related';
     };
 }
 
 function makeColumns (props) {
-    const {columns} = props;
+    const {columns, columnWidths} = props;
 
-    if (isEmpty(columns)) return false;
+    if (isEmpty(columns) || columns.length !== columnWidths?.length) return false;
 
     var colsEl = columns.map((col, idx) => makeColumnTag(props, col, idx));
     const selBoxCol = makeSelColTag(props);
@@ -343,17 +442,17 @@ function makeColumns (props) {
 
 
 function makeColumnTag(props, col, idx) {
-    const {data, columnWidths, showUnits, showTypes, showFilters, filterInfo, sortInfo, onSort, onFilter, tbl_id, renderers, bgColor='white', startIdx, cellRenderers} = props;
+    const {data, columnWidths, showHeader, showUnits, showTypes, showFilters, filterInfo, sortInfo, onSort, onFilter,
+        tbl_id, renderers, startIdx, cellRenderers} = props;
 
     if (col.visibility && col.visibility !== 'show') return false;
-    const HeadRenderer = get(renderers, [col.name, 'headRenderer'], HeaderCell);
+    const HeadRenderer = get(renderers, [col.name, 'headRenderer'], showHeader ? HeaderCell : ({})=>null);
     const CellRenderer = get(renderers, [col.name, 'cellRenderer'], cellRenderers?.[idx] || makeDefaultRenderer(col,tbl_id, startIdx));
     const fixed = col.fixed || false;
-    const style = col.fixed && {backgroundColor: bgColor};
     const {resizable=true} = col;
 
     const cell = ({height, width, columnKey, rowIndex}) =>
-                    <CellWrapper {...{height, width, columnKey, rowIndex, style, data, col, colIdx:idx, tbl_id, startIdx, CellRenderer}} />;
+                    <CellWrapper {...{height, width, columnKey, rowIndex, data, col, colIdx:idx, tbl_id, startIdx, CellRenderer}} />;
     return (
         <Column
             key={col.name}
@@ -370,7 +469,7 @@ function makeColumnTag(props, col, idx) {
     );
 }
 
-function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected, bgColor='white', selectInfoCls, onRowSelect}) {
+function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected, selectInfoCls, onRowSelect}) {
 
     if (!selectable) return false;
 
@@ -380,7 +479,7 @@ function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilte
             key='selectable-checkbox'
             columnKey='selectable-checkbox'
             header={<SelectableHeader {...{checked, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected}} />}
-            cell={<SelectableCell style={{backgroundColor: bgColor}} selectInfoCls={selectInfoCls} onRowSelect={onRowSelect} />}
+            cell={<SelectableCell selectInfoCls={selectInfoCls} onRowSelect={onRowSelect} />}
             fixed={true}
             width={25}
             allowCellsRecycling={true}

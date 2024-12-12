@@ -3,250 +3,71 @@
  */
 package edu.caltech.ipac.firefly.server.query;
 
-import edu.caltech.ipac.firefly.data.ServerRequest;
-import edu.caltech.ipac.firefly.server.ServerContext;
+import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
-import edu.caltech.ipac.firefly.server.network.HttpServices;
-import edu.caltech.ipac.firefly.server.util.Logger;
-import edu.caltech.ipac.firefly.util.Ref;
+import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.table.DataGroup;
-import edu.caltech.ipac.table.LinkInfo;
-import edu.caltech.ipac.table.io.VoTableReader;
-import edu.caltech.ipac.util.AppProperties;
-import edu.caltech.ipac.util.FileUtil;
-import edu.caltech.ipac.util.StringUtils;
-import org.apache.commons.httpclient.HttpMethod;
 
-import java.io.*;
+import java.util.Arrays;
+import java.util.List;
 
+import static edu.caltech.ipac.firefly.server.query.AsyncTapQuery.*;
+import static edu.caltech.ipac.firefly.server.query.DaliUtil.*;
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 
 @SearchProcessorImpl(id = AsyncTapQuery.ID, params = {
-        @ParamDoc(name = "serviceUrl", desc = "base TAP url endpoint excluding '/async'"),
-        @ParamDoc(name = "QUERY", desc = "query string"),
-        @ParamDoc(name = "LANG", desc = "defaults to ADQL"),
-        @ParamDoc(name = "MAXREC", desc = "maximum number of records to be returned")
+        @ParamDoc(name = SVC_URL, desc = "base TAP url endpoint excluding '/async'"),
+        @ParamDoc(name = QUERY, desc = "query string"),
+        @ParamDoc(name = UPLOAD_TNAME, desc = "adql upload select table"),
+        @ParamDoc(name = LANG, desc = "defaults to ADQL"),
+        @ParamDoc(name = MAXREC, desc = MAXREC_DESC),
+        @ParamDoc(name = UPLOAD, desc = UPLOAD_DESC),
+        @ParamDoc(name = UPLOAD_COLUMNS, desc = UPLOAD_COLUMNS_DESC),
 })
-public class AsyncTapQuery extends AsyncSearchProcessor {
+public class AsyncTapQuery extends UwsJobProcessor {
     public static final String ID = "AsyncTapQuery";
+    public static final String LANG = "LANG";
+    public static final String QUERY = "QUERY";
+    public static final String SVC_URL = "serviceUrl";
+    public static final String UPLOAD_TNAME = "adqlUploadSelectTable";
 
-    private static int MAXREC_HARD = AppProperties.getIntProperty("tap.maxrec.hardlimit", 10000000);
+    // links taken from src/firefly/js/ui/tap/TapKnownServices.js#makeServices
+    private static final List<String> SVC_RUNID_NOT_SUPPORTED = Arrays.asList(
+            "https://irsa.ipac.caltech.edu/TAP"                // Return exception, BAD_REQUEST: RUNID not implemented
+//            "https://exoplanetarchive.ipac.caltech.edu/TAP/",   // Bad implementation. it replaces it with its own identifier, e.g. 109294
+//            "https://koa.ipac.caltech.edu/TAP/",                // Bad implementation. it replaces it with its own identifier, e.g. 109294
+//            "https://heasarc.gsfc.nasa.gov/xamin/vo/tap",       // Accepted the parameter, but did not return its value
+//            "https://vao.stsci.edu/CAOMTAP/TapService.aspx",    // Accepted the parameter, but did not return its value
+//            "https://gea.esac.esa.int/tap-server/tap",          // Accepted the parameter, but did not return its value
+//            "https://dc.g-vo.org/tap",                          // Accepted the parameter, but did not return its value
+//            "https://archives.esac.esa.int/hsa/whsa-tap-server/tap"     // Accepted the parameter, but did not return its value
+    );
 
-    public AsyncJob submitRequest(ServerRequest request) throws DataAccessException {
-        String serviceUrl = request.getParam("serviceUrl");
-        String queryStr = createQueryString(request);
-        String lang = request.getParam("LANG");
-        String maxrecStr = request.getParam("MAXREC");
-        int maxrec = -1; // maxrec is not set
-        if (!StringUtils.isEmpty(maxrecStr)) {
-            maxrec = Integer.parseInt(maxrecStr);
-            if (maxrec < 0 || maxrec > MAXREC_HARD) {
-                maxrec = -1;
-                throw new IllegalArgumentException("MAXREC value "+Integer.toString(maxrec)+
-                        " is not in (0,"+MAXREC_HARD+") range.");
-            }
-        }
+    public HttpServiceInput createInput(TableServerRequest request) throws DataAccessException {
+        var serviceUrl = request.getParam(SVC_URL);
+        var uploadTable= request.getParam(UPLOAD_TNAME);
+        boolean runIdSupported = !SVC_RUNID_NOT_SUPPORTED.contains(serviceUrl);
 
         HttpServiceInput inputs = HttpServiceInput.createWithCredential(serviceUrl + "/async");
-        if (!StringUtils.isEmpty(queryStr)) inputs.setParam("QUERY", queryStr);
-        if (StringUtils.isEmpty(lang)) { lang = "ADQL"; }
-        if (maxrec > -1) { inputs.setParam("MAXREC", Integer.toString(maxrec)); }
-        inputs.setParam("LANG", lang); // in tap 1.0, lang param is required
-        inputs.setParam("request", "doQuery"); // in tap 1.0, request param is required
+        DaliUtil.handleMaxrec(inputs, request);
+        DaliUtil.handleUpload(inputs, request, uploadTable);
 
-        AsyncTapJob asyncTap = new AsyncTapJob();
-        HttpServices.postData(inputs, (method -> {
-            String location = HttpServices.getResHeader(method, "Location", null);
-            if (location != null) {
-                asyncTap.setBaseJobUrl(location);
-            } else if (!HttpServices.isOk(method)){
-                asyncTap.setErrorMsg(getErrResp(method, inputs.getRequestUrl()));
-            } else {
-                asyncTap.setErrorMsg("Failed to submit async job to " + serviceUrl);
-            }
-        }));
+        applyIfNotEmpty(request.getParam(QUERY), (v) -> inputs.setParam(QUERY, v));
+        // use table's title as RUNID.  RUNID is limited to 64 chars.  If more than 64, truncate then add '...' to indicate it was truncated.
+        applyIfNotEmpty(request.getMeta("title"), (v) -> {
+            String runId = v.length() > 64 ? v.substring(0, 61) + "..." : v;
+            // only send RUNID if it's supported.
+            if (runIdSupported)     inputs.setParam(RUNID, runId);
+            getJob().getJobInfo().setLocalRunId(runId);        // save the value locally for display
+        });
+        inputs.setParam(LANG, request.getParam(LANG, "ADQL"));
+        inputs.setParam(REQUEST, "doQuery");
 
-        if (asyncTap.getPhase() == AsyncJob.Phase.PENDING) {
-            HttpServices.postData(HttpServiceInput.createWithCredential(asyncTap.baseJobUrl + "/phase").setParam("PHASE", "RUN"));
-        }
-        return asyncTap;
+        return inputs;
     }
 
-
-    /**
-     * override this function to convert a request into an ADQL QUERY string
-     * @param request server request
-     * @return an ADQL QUERY string
-     */
-    private String createQueryString(ServerRequest request) {
-        return request.getParam("QUERY");
-    }
-
-
-    private static String getErrResp(HttpMethod method, String errorUrl) {
-
-        String contentType = HttpServices.getResHeader(method, "Content-Type", "");
-        boolean isText = contentType.startsWith("text/plain");
-        String errMsg;
-        try {
-            if (isText) {
-                // error is text doc
-                errMsg = HttpServices.getResponseBodyAsString(method);
-            } else {
-                // error is VOTable doc
-                InputStream is = HttpServices.getResponseBodyAsStream(method);
-                try {
-                    String voError = VoTableReader.getError(is, errorUrl);
-                    if (voError == null) {
-                        voError = "Non-compliant error doc " + errorUrl;
-                    }
-                    errMsg = voError;
-                } finally {
-                    FileUtil.silentClose(is);
-                }
-            }
-        } catch (DataAccessException e) {
-            errMsg = e.getMessage();
-        } catch (Exception e) {
-            errMsg = "Unknown error retrieving error document from "+errorUrl;
-        }
-        return errMsg;
-    }
-
-    public class AsyncTapJob implements AsyncJob  {
-        private Logger.LoggerImpl logger = Logger.getLogger();
-        private String baseJobUrl;
-        private String errorMsg;
-
-        void setBaseJobUrl(String baseJobUrl) {
-            this.baseJobUrl = baseJobUrl;
-        }
-
-        void setErrorMsg(String errorMsg) {
-            this.errorMsg = errorMsg;
-        }
-
-        public DataGroup getDataGroup() throws DataAccessException {
-            try {
-                //download file first: failing to parse gaia results with topcat SAX parser from url
-                String filename = getFilename(baseJobUrl);
-                File outFile = File.createTempFile(filename, ".vot", ServerContext.getTempWorkDir());
-                HttpServiceInput input = HttpServiceInput.createWithCredential(baseJobUrl + "/results/result")
-                                                         .setFollowRedirect(false);
-                HttpServices.getData(input, (method -> {
-                    try {
-                        if(HttpServices.isOk(method)) {
-                            HttpServices.defaultHandler(outFile).handleResponse(method);
-                        } else if (HttpServices.isRedirected(method)) {
-                            String location = HttpServices.getResHeader(method, "Location", null);
-                            if (location != null) {
-                                HttpServices.getData(HttpServiceInput.createWithCredential(location), outFile);
-                            } else {
-                                throw new RuntimeException("Request redirected without a location header");
-                            }
-                        } else {
-                            throw new RuntimeException("Request failed with status:" + method.getStatusText());
-                        }
-                    } catch (Exception e) {
-                        throw new RuntimeException(e.getMessage());
-                    }
-                }));
-
-                DataGroup[] results = VoTableReader.voToDataGroups(outFile.getAbsolutePath());
-                if (results.length > 0) {
-                    DataGroup dg = results[0];
-                    LinkInfo jobLink = new LinkInfo();
-                    jobLink.setID("IVOA_UWS_JOB");
-                    jobLink.setTitle("Universal Worker Service Job");
-                    jobLink.setHref(baseJobUrl);
-                    // update table links
-                    dg.getLinkInfos().add(0, jobLink);
-                }  else {
-                    return null;
-                }
-                return results[0];
-            } catch (Exception e) {
-                throw new DataAccessException("Failure when retrieving results from "+baseJobUrl+"/results/result\n"+
-                        e.getMessage());
-            }
-        }
-
-        public boolean cancel() {
-            return !HttpServices.postData(
-                        HttpServiceInput.createWithCredential(baseJobUrl + "/phase").setParam("PHASE", Phase.ABORTED.name()),
-                        new ByteArrayOutputStream()
-            ).isError();
-        }
-
-        public Phase getPhase() throws DataAccessException {
-            if (errorMsg != null) return Phase.ERROR;
-
-            ByteArrayOutputStream phase = new ByteArrayOutputStream();
-            HttpServices.Status status = HttpServices.getData(HttpServiceInput.createWithCredential(baseJobUrl + "/phase"), phase);
-            if (status.isError()) {
-                throw new DataAccessException("Error getting phase from "+baseJobUrl+" "+status.getErrMsg());
-            }
-            try {
-                return Phase.valueOf(phase.toString().trim());
-            } catch (Exception e) {
-                logger.error("Unknown phase \""+phase.toString()+"\" from service "+baseJobUrl);
-                return Phase.UNKNOWN;
-            }
-        }
-
-        public String getErrorMsg()  {
-            if (errorMsg != null) return errorMsg;
-
-            String errorUrl = baseJobUrl + "/error";
-
-            Ref<String> err = new Ref<>();
-            HttpServiceInput input = HttpServiceInput.createWithCredential(errorUrl)
-                .setFollowRedirect(false);
-            HttpServices.Status status = HttpServices.getData(input, (method -> {
-                try {
-                    if (HttpServices.isOk(method)) {
-                        err.setSource(getErrResp(method, errorUrl));
-                    } else if (HttpServices.isRedirected(method)) {
-                        String location = HttpServices.getResHeader(method, "Location", null);
-                        if (location != null) {
-                            HttpServices.Status redirectStatus = HttpServices.getData(HttpServiceInput.createWithCredential(location),
-                                (redirectMethod -> err.setSource(getErrResp(redirectMethod, errorUrl))));
-                            if (redirectStatus.isError()) {
-                                err.setSource("Error retrieving redirected error document from "+location+": "+redirectStatus.getErrMsg());
-                            }
-                        } else {
-                            throw new RuntimeException("Error document request redirected without a location header");
-                        }
-                    } else {
-                        err.setSource("Error retrieving error document from "+errorUrl+": "+method.getStatusText());
-                    }
-                } catch (Exception e) {
-                    throw new RuntimeException(e.getMessage());
-                }
-            }));
-            return err.getSource();
-        }
-
-        public long getTimeout() {
-            ByteArrayOutputStream duration = new ByteArrayOutputStream();
-            HttpServices.postData(HttpServiceInput.createWithCredential(baseJobUrl + "/executionduration"), duration);
-            return Long.valueOf(duration.toString());
-        }
-
-        public void setTimeout(long duration) {
-            HttpServices.postData(
-                    HttpServiceInput.createWithCredential(baseJobUrl + "/executionduration")
-                            .setParam("EXECUTIONDURATION",
-                    String.valueOf(duration)), new ByteArrayOutputStream()
-            );
-        }
-
-        protected String getBaseJobUrl() {
-            return baseJobUrl;
-        }
-
-        private String getFilename(String urlStr) {
-            return urlStr.replace("(http:|https:)", "").replace("/", "");
-        }
-
+    @Override
+    public DataGroup getResult(TableServerRequest request) throws DataAccessException {
+        return getTableResult(getJobUrl() + "/results/result", QueryUtil.getTempDir(request));
     }
 }

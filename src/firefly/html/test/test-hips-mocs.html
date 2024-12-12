@@ -196,12 +196,12 @@
                 {
                     plotId: 'aHipsID1-1',
                     title     : 'HiPS 1',
-                    hipsRootUrl: 'http://alasky.u-strasbg.fr/AllWISE/RGB-W4-W2-W1',
+                    hipsRootUrl: 'https://alasky.u-strasbg.fr/AllWISE/RGB-W4-W2-W1',
                 }
             );
 
             const req = firefly.util.table.makeFileRequest('a moc',
-                'http://web.ipac.caltech.edu/staff/roby/demo/moc/galex.fits',
+                'https://web.ipac.caltech.edu/staff/roby/demo/moc/galex.fits',
                 null,
                 {
                     META_INFO: {
@@ -217,7 +217,7 @@
     </script>
 </template>
 
-<template title="Load a MOC" style='height: 400px' class="tpl lg " >
+<template title="Load a MOC as Fill" style='height: 400px' class="tpl lg " >
     <div id="expected" >
         <div class="source-code indent-3">
             - load a HiPS
@@ -248,6 +248,63 @@
                     }
                 } );
             firefly.action.dispatchTableFetch(req);
+        }
+    </script>
+</template>
+
+<template title="Demo a Setting custom MOC list" style='height: 400px' class="tpl lg " >
+    <div id="expected" >
+        <div class="source-code indent-3">
+            - a small MOC list in options
+            - firefly.options.hips.adhocMocSource
+            - load a HiPS
+            - users can load a MOC from 'HiPS / MOC' dropdown
+        </div>
+    </div>
+    <div id="actual" class="box x3"></div>
+    <script>
+        window.firefly= {
+            options: {
+                hips: {
+                    adhocMocSource: {
+                        sources: [
+                            'ivo://CDS/P/SPITZER/IRAC1',
+                            'ivo://CDS/P/ZTF/DR7/g',
+                            'ivo://xcatdb/P/XMM/PN/eb4',
+                        ],
+                        label: 'Demo Featured'
+                    }
+                },
+            } };
+        function onFireflyLoaded(firefly) {
+            firefly.showHiPS('actual',
+                {plotId: 'hipstest',
+                    title: "SDSS HiPS",
+                    WorldPt:'10.68479292;41.269065;EQ_J2000',
+                    hipsRootUrl: 'ivo://CDS/P/SDSS9/color',
+                    SizeInDeg: 180}
+            );
+        }
+    </script>
+</template>
+
+<template title="Demo show a aitoff hips at about 210 degrees" style='height: 400px' class="tpl lg " >
+    <div id="expected" >
+        <div class="source-code indent-3">
+            - hips showing in aitoff mode at 210 degress
+        </div>
+    </div>
+    <div id="actual" class="box x3"></div>
+    <script>
+        function onFireflyLoaded(firefly) {
+            firefly.showHiPS('actual',
+                {plotId: 'hipstest',
+                    title: "SDSS HiPS",
+                    WorldPt:'10.68479292;41.269065;EQ_J2000',
+                    hipsRootUrl: 'ivo://CDS/P/SDSS9/color',
+                    hipsUseAitoffProjection: true,
+                    SizeInDeg: 210}
+            );
         }
     </script>
 </template>

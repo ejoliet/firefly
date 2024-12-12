@@ -1,6 +1,7 @@
+import {getAppOptions} from '../../api/ApiUtil.js';
 import DrawObj from './DrawObj';
 import {makeWorldPt} from '../Point.js';
-import {isEmpty, has, set, get, isUndefined} from 'lodash';
+import {isEmpty, has, set, isUndefined} from 'lodash';
 import {makeRegionPolygon} from '../region/Region.js';
 import {drawRegions} from '../region/RegionDrawer.js';
 import {getMocOrderIndex, getMocSidePointsNuniq, getCornerForPix, getMocNuniq,
@@ -10,13 +11,17 @@ import DrawOp from './DrawOp.js';
 import CsysConverter from '../CsysConverter.js';
 import {Style, TextLocation,DEFAULT_FONT_SIZE} from './DrawingDef.js';
 import {rateOpacity} from '../../util/Color.js';
-import VisUtil from '../VisUtil.js';
+import {distanceToPolygon} from '../VisUtil.js';
+import {isHiPSAitoff} from 'firefly/visualize/WebPlot.js';
+import {getFoV} from 'firefly/visualize/PlotViewUtil.js';
 
 const MOC_OBJ= 'MOCObj';
 const DEFAULT_STYLE= Style.STANDARD;
 const DEF_WIDTH = 1;
 const MAX_MAPORDER = 25;
 const PTILE_OPACITY_RATIO = 0.5;
+// const OUTLINE_OPACITY_RATIO = 0.8;
+const OUTLINE_OPACITY_RATIO = 1;
 
 /**
  * Draw one or more polygons defined in Multi-Order Coverage Map, MOC.
@@ -27,20 +32,19 @@ const PTILE_OPACITY_RATIO = 0.5;
  *
  * @param {Array} cellNums MOC cell number list
  * @param {Object} drawingDef
+ * @param mocCsys
  * @return {object}
  */
-function make(cellNums, drawingDef) {
+function make(cellNums, drawingDef, mocCsys) {
     if (!cellNums || !cellNums.length) return null;
 
     const {style=DEFAULT_STYLE, color} = drawingDef || {};
     const obj = DrawObj.makeDrawObj();
     obj.type = MOC_OBJ;
 
-    const mocGroup = MocGroup.make(cellNums);
+    const mocGroup = MocGroup.make(cellNums, undefined, mocCsys);
     mocGroup.makeGroups();
-    Object.assign(obj, {regionOptions: {message: 'polygon2'}, mocGroup, style, color});
-
-    return obj;
+    return {...obj, regionOptions: {message: 'polygon2'}, mocGroup, style, color};
 }
 
 
@@ -61,42 +65,33 @@ const draw=  {
 	},
 
 	getCenterPt(drawObj) {
-		var {drawObjAry}= drawObj;
-		var xSum = 0;
-		var ySum = 0;
-		var xTot = 0;
-		var yTot = 0;
+		const {drawObjAry}= drawObj;
+        if (!drawObjAry) return makeWorldPt(xSum, ySum);
+		let xSum = 0;
+		let ySum = 0;
+		let xTot = 0;
+		let yTot = 0;
 
-		if (drawObjAry) {
-			drawObjAry.forEach( (obj) => {
-				if (obj && obj.pts) {
-					obj.pts.forEach((wp) => {
-						xSum += wp.x;
-						ySum += wp.y;
-						xTot++;
-						yTot++;
-					});
-				}
-			});
-			return makeWorldPt(xSum / xTot, ySum / yTot);
-		} else {
-			return makeWorldPt(xSum, ySum);
-		}
+        drawObjAry.forEach( (obj) => {
+            obj?.pts?.forEach((wp) => {
+                xSum += wp.x;
+                ySum += wp.y;
+                xTot++;
+                yTot++;
+            });
+        });
+        return makeWorldPt(xSum / xTot, ySum / yTot);
 	},
 
 	getScreenDist(drawObj,plot, pt) {
 		let minDist = Number.MAX_VALUE;
-
 		const {drawObjAry} = drawObj || {};
-
-		if (drawObjAry) {
-			drawObjAry.forEach( (dObj) => {
-				const d = VisUtil.distanceToPolygon(dObj.pts, plot, pt);
-				if (d < minDist) {
-					minDist = d;
-				}
-			});
-		}
+        drawObjAry?.forEach( (dObj) => {
+            const d = distanceToPolygon(dObj.pts, plot, pt);
+            if (d < minDist) {
+                minDist = d;
+            }
+        });
 		return minDist;
 	},
 
@@ -109,13 +104,8 @@ const draw=  {
 		return toRegion(drawObj.drawObjAry, plot, makeDrawParams(drawObj,def),drawObj.renderOptions);
 	},
 
-	translateTo(drawObj,plot, apt) {
-        return;   //todo
-	},
-
-	rotateAround(drawObj, plot, angle, worldPt) {
-        return; // todo
-	}
+	translateTo(drawObj,plot, apt) { }, //todo - maybe unnecessary
+	rotateAround(drawObj, plot, angle, worldPt) { }//todo - maybe unnecessary
 };
 
 export default {make,draw, MOC_OBJ, PTILE_OPACITY_RATIO};
@@ -140,17 +130,7 @@ function makeDrawParams(drawObj,def) {
     const rotationAngle = drawObj.rotationAngle||undefined;
     const color = drawObj.color || def.color || 'green';
 
-    return {
-        color,
-        lineWidth,
-        textLoc,
-        style,
-        fontName,
-        fontSize,
-        fontWeight,
-        fontStyle,
-        rotationAngle
-    };
+    return { color, lineWidth, textLoc, style, fontName, fontSize, fontWeight, fontStyle, rotationAngle };
 }
 
 
@@ -159,17 +139,19 @@ const PROD_VISIBLE_TOTAL = 200000*2200;
  * class MocGroup convert moc nuniq values into a set of norder and npix and store all nuniq per norder
  */
 export class MocGroup {
-    constructor(cellList, mGroup = null, plot = {}) {
+    constructor(cellList, mGroup = null, plot = {}, mocCsys) {
         if (mGroup) {
             this.cells = mGroup.cells;
             this.groupInLevels = mGroup.groupInLevels;
             this.minOrder = mGroup.minOrder;
             this.maxOrder = mGroup.maxOrder;
+            this.mocCsys = mGroup.mocCsys;
         } else {
             this.cells = cellList;
             this.groupInLevels = {};
             this.minOrder = 100;
             this.maxOrder = 0;
+            this.mocCsys= mocCsys;
         }
         this.healpixCache = getHealpixCornerTool();
 
@@ -177,12 +159,12 @@ export class MocGroup {
         this.initCollection(plot);
     }
 
-    static make(cellList, mGroup = null, plot) {
-        if (cellList) {
-            return new MocGroup(cellList, null, plot);
-        } else {
-            return (mGroup ? new MocGroup(null, mGroup, plot) : null);
-        }
+    static make(cellList, plot, mocCsys) {
+        return new MocGroup(cellList, null, plot, mocCsys);
+    }
+
+    static copy(mGroup, plot) {
+        return mGroup && new MocGroup(undefined, mGroup, plot);
     }
 
     initCollection(plot) {
@@ -223,12 +205,6 @@ export class MocGroup {
         return this.groupInLevels;
     }
 
-    // total number of tiles represented by MoCGroup object
-    countMocTiles() {
-        return this.cells.length;
-    }
-
-
     // get all tiles at some order including the created tile containing children or not
     getTilesAtOrder(order) {
         return this.includeOrder(order) ? this.groupInLevels[order] : null;
@@ -239,10 +215,11 @@ export class MocGroup {
     }
 
     getMaxDisplayOrder() {
+        const MAX_DEPTH = getAppOptions()?.hips?.mocMaxDepth ?? 5;
         const {norder} = getHiPSNorderlevel(this.plot);
 
         this.hipsOrder = norder;
-        this.displayOrder = Math.max(this.minOrder, this.hipsOrder) + 6;
+        this.displayOrder = Math.max(this.minOrder, this.hipsOrder) + MAX_DEPTH;
     }
 
     getVisibleTileMap() {          // init the visibleMap by finding visible tiles with the order less than displayOrder
@@ -254,8 +231,9 @@ export class MocGroup {
                 if ((d > 1) && Object.keys(this.visibleMap[d - 1]).length > 5000) {
                     return true;
                 }
+                if (d>3 && getFoV(this.plot) > 200) return true;
 
-                set(this.visibleMap, [d], getVisibleTilesAtOrderPerNpix(this.plot, d));
+                set(this.visibleMap, [d], getVisibleTilesAtOrderPerNpix(this.plot, d, this.mocCsys));
                 this.highestOrderInMap = d;
                 return false;
             });
@@ -322,7 +300,7 @@ export class MocGroup {
     };
 
     addingCandidates(ipix, nOrder, wpCorners, nuniq, isParentTile = false){
-        getCornerForPix(nOrder, ipix, this.plot.dataCoordSys, this.healpixCache, wpCorners);
+        getCornerForPix(nOrder, ipix, this.mocCsys, this.healpixCache, wpCorners);
         this.addToResult(nOrder, ipix, nuniq, isParentTile);
         return true;
     }
@@ -332,7 +310,7 @@ export class MocGroup {
         const cc = CsysConverter.make(this.plot);
         tiles.find((oneTile) => {
             const {npix, nuniq} = oneTile;
-            const {wpCorners} = getCornerForPix(0, npix, this.plot.dataCoordSys, this.healpixCache);
+            const {wpCorners} = getCornerForPix(0, npix, this.mocCsys, this.healpixCache);
 
             if (isTileVisibleByPosition(wpCorners, cc)) {
                 this.addToResult(0, npix,nuniq);
@@ -347,7 +325,7 @@ export class MocGroup {
         tiles = isUndefined(tiles) ? this.getTilesAtOrder(fromOrder) : tiles;
         if (!tiles || tiles.length === 0) return;
 
-        const vSet = get(this.visibleMap, [fromOrder], {});
+        const vSet = this.visibleMap?.[fromOrder] ?? {};
 
         tiles.find((oneTile) => {
             const {npix, nuniq} = oneTile;
@@ -370,8 +348,8 @@ export class MocGroup {
         const pVisibleSet = this.visibleMap[toOrder];
         if (Object.keys(pVisibleSet).length === 0) return;             // no visible tiles at parent order
 
-        const includedNpixs = get(this.incNpixs, [toOrder], []);
-        const notIncludedNpixs = get(this.notIncNpixs, [toOrder], []);
+        const includedNpixs = this.incNpixs?.[toOrder] ?? [];
+        const notIncludedNpixs = this.notIncNpixs?.[toOrder] ?? [];
         const pNum = (fromOrder - toOrder);   // divide by 4 ** (from-to)
 
 
@@ -399,6 +377,11 @@ export class MocGroup {
         set(this.notIncNpixs, [toOrder], notIncludedNpixs);
     }
 
+    canGetVisTiles(order, plot) {
+        if (getFoV(plot) < 200) return true;
+        return order<=3;
+    }
+
     expandVisibleMap(toOrder) {
         if (has(this.visibleMap, toOrder)) {
             return true;
@@ -417,8 +400,9 @@ export class MocGroup {
             if (((sNpix * nTiles <= PROD_VISIBLE_TOTAL)&&(sNpix <= 200000)) || (sNpix < nTiles && sNpix < 10000)) {
                 let nextSet;
 
-                if (get(this.visibleMap, [(pOrder - 1)]) && this.visibleNpixAt(pOrder - 1).length < 5000) {
-                    nextSet = getVisibleTilesAtOrderPerNpix(this.plot, pOrder);        // for not too big list
+                if ( (this.canGetVisTiles(pOrder, this.plot)) &&
+                    (this.visibleMap?.[(pOrder - 1)] && this.visibleNpixAt(pOrder - 1).length < 5000)) {
+                    nextSet = getVisibleTilesAtOrderPerNpix(this.plot, pOrder, this.mocCsys);        // for not too big list
                 } else {                                                       // extended from list of lower order
                     const npixAry = new Array(incNum).fill(0).map((i, idx) => idx);
                     nextSet = Object.keys(this.visibleMap[pOrder - 1]).reduce((prev, oneNpix) => {
@@ -440,21 +424,6 @@ export class MocGroup {
             }
         }
         return false;
-    }
-    // for print and stats purpose
-    visibleCount() {
-        const tileCount = Object.keys(this.vTiles).reduce((prev, order) => {
-            set(prev, [order], (this.noTilesAtOrder(order) ? 0 : this.vTiles[order].length));
-
-            return prev;
-        }, {});
-
-        const vCount = Object.keys(this.visibleMap).reduce((prev, order) => {
-            set(prev, [order], (has(this.visibleMap, [order])&&this.visibleMap[order] ? this.visibleNpixAt(order).length : 0));
-            return prev;
-        }, {});
-
-        return {tileCount, vCount};
     }
 
     getHighestOrderFromMap(byOrder) {
@@ -545,29 +514,25 @@ export class MocGroup {
 
 
 function drawMoc(mocObj, ctx, cc, drawParams, vpPtM,onlyAddToPath) {
-    const {drawObjAry} = mocObj;
-
-    drawObjAry && drawObjAry.forEach((dObj) => {
+    mocObj?.drawObjAry?.forEach((dObj) => {
         DrawOp.draw(dObj, ctx, cc, drawParams, vpPtM, onlyAddToPath);
     });
 }
 
 
 // create one drawObj for one tile
-export function createOneDrawObjInMoc(nuniq, norder, npix, displayOrder, hipsOrder, coordsys, regionOptions, isAllSky, isParentTile) {
-    const polyPts = getMocSidePointsNuniq(norder, npix, hipsOrder+6, coordsys, isAllSky);
+function createOneDrawObjInMoc(nuniq, norder, npix, displayOrder, hipsOrder, mocCoordsys, regionOptions, isAllSky, isParentTile) {
+    const polyPts = getMocSidePointsNuniq(norder, npix, hipsOrder+6, mocCoordsys, isAllSky);
     if (!polyPts)  return null;
 
     const polyRegion = makeRegionPolygon(polyPts, regionOptions);
     const drawObj = drawRegions([polyRegion])[0];
     const mocInfo = {norder, displayOrder, hipsOrder, npix, nuniq, isParentTile};
-    Object.assign(drawObj, {color: undefined, mocInfo});
-
-    return drawObj;
+    return {...drawObj, color: undefined, mocInfo};
 }
 
 // create all drawObjs
-export function createDrawObjsInMoc(mocObj, plot, startIdx, endIdx, storedSidePoints) {
+export function createDrawObjsInMoc(mocObj, plot, mocCsys, startIdx, endIdx, storedSidePoints) {
     initSidePoints(storedSidePoints);
     const {displayOrder, regionOptions={}, allCells, hipsOrder, mocGroup, style=Style.STANDARD, color} = mocObj;
 
@@ -580,14 +545,14 @@ export function createDrawObjsInMoc(mocObj, plot, startIdx, endIdx, storedSidePo
 
     const drawObjs = allCells.slice(startIdx, endIdx+1).reduce((prev, oneCell) => {
         const {norder, npix, nuniq, isParentTile} = oneCell;
-        const drawObj = createOneDrawObjInMoc(nuniq, norder, npix, displayOrder, hipsOrder, plot.dataCoordSys,
+        const drawObj = createOneDrawObjInMoc(nuniq, norder, npix, displayOrder, hipsOrder,  mocCsys,
                                               regionOptions, mocGroup.isAllSky, isParentTile);
 
         if (drawObj) {
-            //  drawObj.text = ''+ nuniq;
             drawObj.style = style;
             if (isParentTile) {       // this fill color is specifically for the round-up tile
-                drawObj.fillColor = rateOpacity(color, PTILE_OPACITY_RATIO);
+                const opacity= drawObj.style===Style.FILL ? PTILE_OPACITY_RATIO : OUTLINE_OPACITY_RATIO;
+                drawObj.fillColor = rateOpacity(color, opacity);
             }
             prev.push(drawObj);
         }
@@ -599,10 +564,10 @@ export function createDrawObjsInMoc(mocObj, plot, startIdx, endIdx, storedSidePo
 
 
 
-function getVisibleTilesAtOrderPerNpix(plot, order) {
+function getVisibleTilesAtOrderPerNpix(plot, order, mocCsys) {
     const {centerWp, fov} = getPointMaxSide(plot, plot.viewDim);
 
-    return getAllVisibleHiPSCells(order, centerWp, fov, plot.dataCoordSys)
+    return getAllVisibleHiPSCells(order, centerWp, fov, mocCsys, isHiPSAitoff(plot))
             .reduce((npix_set, oneTile) => {
                 set(npix_set, [oneTile.ipix], oneTile.wpCorners);
                 return npix_set;
@@ -633,6 +598,4 @@ const outputTime = (msg, t0) => {
     console.log(msg + ' took ' + (t1-t0) + ' msec');
 };
 
-const lowerNpix = (npix, level) => {
-    return Math.trunc(npix/NSIDE4[level]);
-};
+const lowerNpix = (npix, level) => Math.trunc(npix/NSIDE4[level]);

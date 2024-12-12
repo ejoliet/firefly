@@ -2,6 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {Box, Stack} from '@mui/joy';
 import React, {memo, useState} from 'react';
 import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
 import {PopupPanel} from '../../ui/PopupPanel.jsx';
@@ -13,8 +14,8 @@ import FieldGroupUtils from '../../fieldGroup/FieldGroupUtils.js';
 import {FieldGroup} from '../../ui/FieldGroup.jsx';
 import {ColorBandPanel} from './ColorBandPanel.jsx';
 import {ColorRGBHuePreservingPanel} from './ColorRGBHuePreservingPanel.jsx';
-import ImagePlotCntlr, {dispatchStretchChange, visRoot} from '../ImagePlotCntlr.js';
-import {primePlot, getActivePlotView} from '../PlotViewUtil.js';
+import {dispatchStretchChange, visRoot} from '../ImagePlotCntlr.js';
+import {primePlot, getActivePlotView, isThreeColor} from '../PlotViewUtil.js';
 import { RangeValues, ZSCALE, STRETCH_ASINH}from '../RangeValues.js';
 import HelpIcon from '../../ui/HelpIcon.jsx';
 import {showInfoPopup} from '../../ui/PopupUtil.jsx';
@@ -62,12 +63,12 @@ function getStoreUpdate(oldS) {
 }
 
 export const ColorDialog= memo(() => {
-    const [{plot,fields,rFields,gFields,bFields,rgbFields}]= useStoreConnector(getStoreUpdate);
+    const {plot,fields,rFields,gFields,bFields,rgbFields} = useStoreConnector(getStoreUpdate);
     const [huePreserving, setHuePreserving]= useState(plot?.plotState.getRangeValues().rgbPreserveHue);
     if (!plot) return false;
 
     if (isImage(plot)) {
-        return plot.plotState.isThreeColor() ?
+        return isThreeColor(plot) ?
             renderThreeColorView(plot,rFields,gFields,bFields,rgbFields,huePreserving,setHuePreserving) :
             renderStandardView(plot,fields);
     }
@@ -90,41 +91,36 @@ function renderThreeColorView(plot, rFields, gFields, bFields, rgbFields, isHueP
                 {label: 'Hue preserving stretch', value: 'huePreserving'}
 
             ]}
-            wrapperStyle={{padding: 5}}
             value={isHuePreservingSelected ? 'huePreserving' : 'perBand'}
             onChange={(ev) => setHuePreserving(ev.target.value==='huePreserving')}
         />;
 
     return (
-        <div>
+        <Box sx={{m:1}}>
             {threeColorStretchMode}
             {Boolean(isHuePreservingSelected) && renderHuePreservingThreeColorView(plot, rgbFields)}
             {!isHuePreservingSelected && renderStandardThreeColorView(plot, rFields, gFields, bFields)}
-        </div>
+        </Box>
     );
 }
 
 function renderHuePreservingThreeColorView(plot,rgbFields) {
     const groupKey = RGB_HUEPRESERVE_PANEL;
     return (
-        <div style={{paddingTop:4}}>
+        <Box sx={{m:1}}>
             <FieldGroup groupKey={groupKey} keepState={false} reducerFunc={rgbHuePreserveReducer} >
                 <ColorRGBHuePreservingPanel {...{plot, rgbFields, groupKey}}/>
-                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                <Stack {...{direction: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
                     <CompleteButton
-                        closeOnValid={false}
-                        style={{padding: '2px 0 7px 10px'}}
-                        onSuccess={(request)=>replot3ColorHuePreserving(request)}
-                        onFail={invalidMessage}
-                        text='Refresh'
-                        dialogId='ColorStretchDialog'
+                        closeOnValid={false} sx={{pt:.25, pb:1, pl:1}} text='Refresh' dialogId='ColorStretchDialog'
+                        onFail={invalidMessage} onSuccess={(request)=>replot3ColorHuePreserving(request)}
                     />
-                    <div style={{ textAlign:'right', padding: '2px 10px'}}>
+                    <Box sx={{ textAlign:'right', py:.25, px:1}}>
                         <HelpIcon helpId='visualization.stretches'/>
-                    </div>
-                </div>
+                    </Box>
+                </Stack>
             </FieldGroup>
-        </div>
+        </Box>
 
     );
 }
@@ -133,7 +129,7 @@ function renderStandardThreeColorView(plot,rFields,gFields,bFields) {
     const {plotState}= plot;
     const usedBands = plotState? plotState.usedBands:null;
     return (
-        <div style={{paddingTop:4}}>
+        <Box sx={{pt:.5}}>
             <FieldGroup groupKey={'colorDialogTabs'} keepState={false}>
                 <FieldGroupTabs initialState= {{ value:'red' }} fieldKey='colorTabs'>
                     {plotState.isBandUsed(Band.RED) &&
@@ -163,18 +159,17 @@ function renderStandardThreeColorView(plot,rFields,gFields,bFields) {
                     </Tab>
                     }
                 </FieldGroupTabs>
-                <CompleteButton
-                    groupKey={['colorDialogTabs',RED_PANEL,GREEN_PANEL,BLUE_PANEL]}
-                    closeOnValid={false}
-                    style={{padding: '2px 0 7px 10px'}}
-                    onSuccess={replot(usedBands)}
-                    onFail={invalidMessage}
-                    text='Refresh'
-                    dialogId='ColorStretchDialog'
-                    includeUnmounted={true}
-                />
+                <Stack direction='row' justifyContent='space-between' alignItems='center'>
+                    <CompleteButton
+                        text='Refresh' dialogId='ColorStretchDialog' includeUnmounted={true}
+                        groupKey={['colorDialogTabs',RED_PANEL,GREEN_PANEL,BLUE_PANEL]}
+                        closeOnValid={false} sx={{pt:.25, pb:1, pl:1}}
+                        onSuccess={replot(usedBands)} onFail={invalidMessage}
+                    />
+                    <HelpIcon helpId='visualization.modifyColorStretch3C'/>
+                </Stack>
             </FieldGroup>
-        </div>
+        </Box>
 
     );
 
@@ -185,20 +180,17 @@ function renderStandardView(plot,fields) {
 
 
     return (
-        <div>
-            <FieldGroup groupKey={NO_BAND_PANEL} keepState={true}  reducerFunc={colorPanelReducer} >
-                <ColorBandPanel groupKey={NO_BAND_PANEL} band={Band.NO_BAND} fields={fields} plot={plot}/>
+        <FieldGroup groupKey={NO_BAND_PANEL} keepState={true}  reducerFunc={colorPanelReducer} >
+            <ColorBandPanel groupKey={NO_BAND_PANEL} band={Band.NO_BAND} fields={fields} plot={plot}/>
+            <Stack direction='row' justifyContent='space-between' alignItems='center'>
                 <CompleteButton
-                    closeOnValid={false}
-                    style={{padding: '2px 0 7px 10px'}}
-                    onSuccess={replot()}
-                    onFail={invalidMessage}
-                    text='Refresh'
-                    dialogId='ColorStretchDialog'
-
+                    text='Refresh' dialogId='ColorStretchDialog'
+                    closeOnValid={false} sx={{pt:.25, pb:1, pl:1}}
+                    onSuccess={replot()} onFail={invalidMessage}
                 />
-            </FieldGroup>
-        </div>
+                <HelpIcon helpId='visualization.modifyColorStretchSingleBand'/>
+            </Stack>
+        </FieldGroup>
        );
 }
 
@@ -206,7 +198,7 @@ function replot(usedBands=null) {
 
     return (request)=> {
 
-        const defReq= request.redPanel || request.greenPanel || request.bluePanel
+        const defReq= request.redPanel || request.greenPanel || request.bluePanel;
         if (request.colorDialogTabs) {
 
             replot3Color(

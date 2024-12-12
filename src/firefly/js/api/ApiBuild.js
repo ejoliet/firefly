@@ -13,6 +13,7 @@ import * as ChartsCntlr from '../charts/ChartsCntlr.js';
 import * as TablesCntlr from '../tables/TablesCntlr.js';
 import * as ReadoutCntlr from '../visualize/MouseReadoutCntlr.js';
 import * as ImPlotCntlr from '../visualize/ImagePlotCntlr.js';
+import * as HpxIndexCntlr from '../tables/HpxIndexCntlr.js';
 import * as MultiViewCntlr from '../visualize/MultiViewCntlr.js';
 import * as AppDataCntlr from '../core/AppDataCntlr.js';
 import * as DrawLayerCntlr from '../visualize/DrawLayerCntlr.js';
@@ -26,6 +27,7 @@ import {FieldGroup} from '../ui/FieldGroup.jsx';
 // Parts of the lowlevel api
 import * as ApiUtil from './ApiUtil.js';
 import  * as ApiUtilChart from './ApiUtilChart.jsx';
+import moreChartApi from './ApiUtilChart.jsx';
 import  * as ApiUtilImage from './ApiUtilImage.jsx';
 import  * as ApiUtilTable from './ApiUtilTable.jsx';
 
@@ -49,12 +51,10 @@ import {PlotlyWrapper} from '../charts/ui/PlotlyWrapper.jsx';
 import {buildHighLevelApi} from './ApiHighlevelBuild.js';
 import {buildViewerApi} from './ApiViewer.js';
 
-// CSS
-import './ApiStyle.css';
 import {startTTFeatureWatchers} from '../templates/common/ttFeatureWatchers.js';
-import {getActiveRowCenterDef} from '../visualize/saga/ActiveRowCenterWatcher.js';
-import {urlLinkWatcherDef} from '../visualize/saga/UrlLinkWatcher.js';
-import {mocWatcherDef} from '../visualize/saga/MOCWatcher.js';
+import {getActiveRowToImageDef} from '../visualize/saga/ActiveRowToImageWatcher.js';
+import {getUrlLinkWatcherDef} from '../visualize/saga/UrlLinkWatcher.js';
+import {getMocWatcherDef} from '../visualize/saga/MOCWatcher.js';
 
 
 /**
@@ -108,7 +108,7 @@ import {mocWatcherDef} from '../visualize/saga/MOCWatcher.js';
  * Start in api mode. Will create the api and call window.onFireflyLoaded(firefly)
  * @ignore
  */
-export function initApi() {
+export function initApi(props) {
     const lowlevelApi= buildLowlevelAPI();
     const viewInterface= buildViewerApi();
 
@@ -125,12 +125,13 @@ export function initApi() {
 
     if (!window.firefly) window.firefly= {getJsonFromTask};
     window.firefly.ignoreHistory = true;
+    window.firefly.originalAppProps= props;
     Object.assign(window.firefly, lowlevelApi, highLevelApi, viewInterface, React);
     const firefly= window.firefly;
     dispatchOnAppReady(() => {
         window.onFireflyLoaded && window.onFireflyLoaded(firefly);
     });
-    startTTFeatureWatchers([urlLinkWatcherDef.id, getActiveRowCenterDef().id, mocWatcherDef.id]);
+    startTTFeatureWatchers([getUrlLinkWatcherDef().id, getActiveRowToImageDef().id, getMocWatcherDef().id]);
     initExpandedView();
 }
 
@@ -174,6 +175,7 @@ export function buildLowlevelAPI() {
         findActionType(ReadoutCntlr, ReadoutCntlr.READOUT_PREFIX),
         findActionType(MultiViewCntlr, MultiViewCntlr.IMAGE_MULTI_VIEW_PREFIX),
         findActionType(ImPlotCntlr.default, ImPlotCntlr.PLOTS_PREFIX),
+        findActionType(HpxIndexCntlr, HpxIndexCntlr.SPACIAL_HPX_INDX_PREFIX),
         findActionType(AppDataCntlr, AppDataCntlr.APP_DATA_PATH),
         findActionType(DrawLayerCntlr.default, DrawLayerCntlr.DRAWLAYER_PREFIX)
     );
@@ -187,6 +189,7 @@ export function buildLowlevelAPI() {
         findDispatch(ReadoutCntlr),
         findDispatch(MultiViewCntlr),
         findDispatch(ImPlotCntlr),
+        findDispatch(HpxIndexCntlr),
         findDispatch(AppDataCntlr),
         findDispatch(DrawLayerCntlr),
         {dispatchAddCell, dispatchRemoveCell, dispatchEnableSpecialViewer},
@@ -212,7 +215,7 @@ export function buildLowlevelAPI() {
         WorkspacePickerPopup: fieldGroupWrap(WorkspacePickerPopup)
     };
 
-    const util= Object.assign({}, ApiUtil, {image:ApiUtilImage}, {chart:ApiUtilChart}, {table:ApiUtilTable}, {data:{}} );
+    const util= Object.assign({}, ApiUtil, {image:ApiUtilImage}, {chart:{...ApiUtilChart, ...moreChartApi}}, {table:ApiUtilTable}, {data:{}} );
 
     return { action, ui, util };
 }
@@ -261,8 +264,9 @@ function initExpandedView(div){
         expandedDivEl.id= EXPANDED_DIV;
     }
     
-    ApiUtil.renderDOM(expandedDivEl, ApiExpandedView);
+    ApiUtil.renderDOM(expandedDivEl, ApiExpandedView, undefined, false);
 }
+
 
 function fieldGroupWrap(Component, groupKey='firefly-api-fieldgroup') {
 

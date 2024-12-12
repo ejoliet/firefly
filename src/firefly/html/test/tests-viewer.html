@@ -117,7 +117,7 @@
 
         function loadHiPS(sTarget,r,c,w,h) {
             const request= { plotId: 'aHipsID', WorldPt    : sTarget, title     : 'A HiPS',
-                hipsRootUrl: 'http://alasky.u-strasbg.fr/DSS/DSSColor'
+                hipsRootUrl: 'https://alasky.u-strasbg.fr/DSS/DSSColor'
             };
             firefly.getViewer().addCell(r,c,w,h, 'images', 'Hips');
             firefly.getViewer().showHiPS(request, 'Hips');
@@ -392,7 +392,7 @@
 
         function loadMOC(mocFile) {
             const req = firefly.util.table.makeFileRequest(mocFile,
-                'http://web.ipac.caltech.edu/staff/roby/demo/moc/'+mocFile,
+                'https://web.ipac.caltech.edu/staff/roby/demo/moc/'+mocFile,
                 null,
                 {    META_INFO: {PREFERRED_HIPS : 'https://irsa.ipac.caltech.edu/data/hips/CDS/2MASS/Color'} } );
             firefly.getViewer().fetchTable(req);
@@ -425,7 +425,7 @@
 
         function loadTriView() {
             const req = firefly.util.table.makeFileRequest('Test',
-                'http://web.ipac.caltech.edu.s3-us-west-2.amazonaws.com/staff/roby/demo/fp_2mass.fp_psc29179.tbl',
+                'https://web.ipac.caltech.edu/staff/roby/demo/fp_2mass.fp_psc29179.tbl',
                 null,
                 {} );
             firefly.getViewer().showTable(req);
@@ -465,17 +465,17 @@
             const reqUtil= firefly.util.table;
             const reqAry= [
                 reqUtil.makeFileRequest('2mass file',
-                    'http://web.ipac.caltech.edu.s3-us-west-2.amazonaws.com/staff/roby/demo/fp_2mass.fp_psc29179.tbl',
+                    'https://web.ipac.caltech.edu/staff/roby/demo/fp_2mass.fp_psc29179.tbl',
                     null,
                     {} ),
 
                 reqUtil.makeFileRequest('wise file',
-                    'http://web.ipac.caltech.edu.s3-us-west-2.amazonaws.com/staff/roby/demo/WiseDemoTable.tbl',
+                    'https://web.ipac.caltech.edu/staff/roby/demo/WiseDemoTable.tbl',
                     null,
                     {} ),
 
                 reqUtil.makeFileRequest('orbital path',
-                    'http://web.ipac.caltech.edu.s3-us-west-2.amazonaws.com/staff/roby/demo/wise-orbit-allsky.tbl',
+                    'https://web.ipac.caltech.edu/staff/roby/demo/wise-orbit-allsky.tbl',
                     null,
                     {
                         META_INFO: {
@@ -499,7 +499,7 @@
                         SearchMethod: "Cone",
                         radius: "0.00278",
                         providerName: "NED",
-                        accessUrl: "http://ned.ipac.caltech.edu/cgi-bin/NEDobjsearch?search_type=Near+Position+Search&of=xml_main&"
+                        accessUrl: "https://ned.ipac.caltech.edu/cgi-bin/NEDobjsearch?search_type=Near+Position+Search&of=xml_main&"
                     },
                     { sortInfo: "ASC,Object Name",
                         META_INFO: {"col.Type.FmtDisp": "abc-%s"}
@@ -519,7 +519,7 @@
     </script>
 </template>
 
-<template title="External viewer to load image with title" class="tpl sm">
+<template title="TriView: External viewer to load image with title" class="tpl sm">
     <div id="expected" >
         <div>Click to load table
             <ul class='expected-list'>
@@ -540,15 +540,40 @@
         function onFireflyLoaded(firefly) { }
 
         function loadImageIntoTriView() {
-            const req= {
-                url: 'https://irsa.ipac.caltech.edu/cgi-bin/Subimage/nph-subimage?origfile=/irsadata/AKARI//images/N60/l000.85_b+65.00_ecl_6deg_N60_sigma.fits&ra=317.778840&dec=56.472080&xsize=2.000000',
-                Title: 'Image Title Here'
-            };
             firefly.getViewer().showImage({
                 Title: 'Image Title Here',
-                url: 'https://irsa.ipac.caltech.edu/cgi-bin/Subimage/nph-subimage?origfile=/irsadata/AKARI//images/N60/l000.85_b+65.00_ecl_6deg_N60_sigma.fits&ra=317.778840&dec=56.472080&xsize=2.000000'
+                url: 'https://irsa.ipac.caltech.edu/ibe//data/akari/akari_images/images/N60/l000.85_b+65.00_ecl_6deg_N60_fixstripe.fits'
 
             });
+        }
+    </script>
+</template>
+
+<template title="TriView: URL API External viewer to load image with title" class="tpl sm">
+    <div id="expected" >
+        <div>Click to load table
+            <ul class='expected-list'>
+                <li>load one image to Tri-view</li>
+            </ul>
+        </div>
+        <div style='padding-top: 10px;'><img style="width: 230px;" src="./images/triview-loaded-image.png"></div>
+    </div>
+    <div id="actual" style="width: 600px; display: flex; flex-direction: column">
+        <ul style='margin: 0 0 0 5px;'>
+            <li><a href="javascript:loadImageIntoTriViewUsingAPI()">Load 1 image to Tri-View</a></li>
+        </ul>
+
+    </div>
+    <script>
+        resizeIframeToHeight('280px');
+
+        function onFireflyLoaded(firefly) {
+            firefly.setViewerConfig(firefly.ViewerType.TriView, 'firefly.html');
+        }
+
+        function loadImageIntoTriViewUsingAPI() {
+            firefly.getViewer().urlApiLaunch(
+                   'api=image&url=https://irsa.ipac.caltech.edu/ibe//data/akari/akari_images/images/N60/l000.85_b%2b65.00_ecl_6deg_N60_fixstripe.fits' )
         }
     </script>
 </template>

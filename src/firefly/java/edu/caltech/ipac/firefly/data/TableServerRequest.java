@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import static edu.caltech.ipac.firefly.data.ServerParams.JOB_ID;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 public class TableServerRequest extends ServerRequest implements Serializable, Cloneable {
@@ -122,7 +123,7 @@ public class TableServerRequest extends ServerRequest implements Serializable, C
 
     public String getInclColumns() { return getParam(INCL_COLUMNS); }
     public void setInclColumns(String ...cols) {
-        if (cols == null) {
+        if (cols == null || cols.length == 0) {
             removeParam(INCL_COLUMNS);
         } else {
             setParam(INCL_COLUMNS, StringUtils.toString(cols, ","));
@@ -339,6 +340,7 @@ public class TableServerRequest extends ServerRequest implements Serializable, C
             tsr.pageSize = pageSize;
             tsr.startIdx = startIdx;
             tsr.filters = filters == null ? null : new ArrayList<>(filters);
+            tsr.sqlFilter = sqlFilter;
             tsr.metaInfo = metaInfo == null ? null : new HashMap<>(metaInfo);
             tsr.metaOptions = metaOptions == null ? null : new HashMap<>(metaOptions);
             tsr.selectInfo = selectInfo == null ? null : (SelectionInfo) selectInfo.clone();
@@ -348,6 +350,9 @@ public class TableServerRequest extends ServerRequest implements Serializable, C
         return tsr;
     }
 
+    public void setJobId(String jobId) { setMeta(JOB_ID, jobId); }
+
+    public String getJobId() { return getMeta(JOB_ID); }
 
 //====================================================================
 //

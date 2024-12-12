@@ -1,13 +1,16 @@
+import {Button, Chip, Stack, Typography} from '@mui/joy';
 import React, {useState, useEffect} from 'react';
 import {cloneDeep, get, isEmpty,} from 'lodash';
 
-import {calcColumnWidths, getCellValue, getColumn, getColumns, getColumnValues, getTblById, watchTableChanges} from '../../tables/TableUtil.js';
+import {getCellValue, getColumn, getColumns, getColumnValues, getTblById, watchTableChanges} from '../../tables/TableUtil.js';
 import {SelectInfo} from '../../tables/SelectInfo.js';
 import {dispatchTableFilter, dispatchTableAddLocal, TABLE_LOADED, TABLE_REPLACE, TABLE_SELECT} from '../../tables/TablesCntlr.js';
 import {ColumnConstraintsPanel, getTableConstraints} from './ColumnConstraintsPanel.jsx';
+import {ADQL_LINE_LENGTH, maybeQuote} from './TapUtil.js';
 
 const COLS_TO_DISPLAY_FIRST = ['column_name','unit','ucd','description','datatype','arraysize','utype','xtype','principal'];
 
+const SELECT_ALL_COLUMNS_WHEN_NO_PRINCIPAL=false; //todo- determine what to if not of the principal columns are set
 
 export function TableColumnsConstraints({columnsModel}) {
 
@@ -19,7 +22,7 @@ export function TableColumnsConstraints({columnsModel}) {
     if (isEmpty(tableModel)) {
         return <div/>;
     } else {
-        return <ColumnConstraintsPanel style={{height: '100%'}} {...{tableModel}} />;
+        return <ColumnConstraintsPanel {...{tableModel}} />;
     }
 }
 
@@ -41,31 +44,33 @@ export function TableColumnsConstraintsToolbar({columnsModel}) {
 
     const resetButton = () => {
         return (
-            <button style={{padding: '0 5px 0 5px', margin: '0 2px 0 5px'}}
+            <Chip
                     title='Reset Column Selections & Constraints to the default columns and no constraints'
                     onClick={ () => {
                         const tblModel = reorganizeTableModel(columnsModel, COLS_TO_DISPLAY_FIRST, true);
                         dispatchTableAddLocal(tblModel, {}, false);
                     }}>Reset Column Selections & Constraints
-            </button>
+            </Chip>
         );
     };
 
 
     return (
-        <div style={{display:'inline-flex', padding:'0 0 2px', height: 20, alignSelf: 'center'}}>
+        <Stack direction='row' alignItems='center' spacing={1}>
             {!error && filterCount > 0 &&
-            <button style={{padding: '0 5px 0 5px', margin: '0 2px 0 5px'}}
+            <Button variant='soft' color='neutral'
                     title='Remove column table filters to make all columns visible'
                     onClick={() => dispatchTableFilter({tbl_id: tableModel.tbl_id, filters: ''})}>
-                Remove <span style={{color: 'blue'}}>{filterCount} filter{filterCount>1?'s':''}</span>
-            </button>}
+                Remove
+                <Typography color='warning' pl={.25}>{filterCount} filter{filterCount>1?'s':''}</Typography>
+            </Button>}
             {selectedCount > 0 &&
-            <span style={{color: 'blue', alignSelf: 'center', padding: '0 5px 0 5px'}} title='Number of columns to be selected'>
-                {selectedCount} of {totalColumns} columns selected
-            </span>}
+                <Typography title='Number of columns to be selected' color='warning'  level='body-xs'>
+                    {selectedCount} of {totalColumns} columns selected
+                </Typography>
+            }
             {!error && resetButton()}
-        </div>
+        </Stack>
     );
 }
 
@@ -124,8 +129,7 @@ function tableEffect(columnsModel, setTableModel, tbl_id, setFilterCount, setSel
  * @returns {boolean}
  */
 function isPrincipalSet(tableModel) {
-    // 3 or more principle columns (coordinates and value) might be useful
-    return getColumnValues(tableModel, 'principal').filter((v)=>v>0).length >= 3;
+    return getColumnValues(tableModel, 'principal').filter((v)=>v>0).length >= 1;
 }
 
 /**
@@ -164,53 +168,79 @@ function reorganizeTableModel(tableModel, columnNames, reset) {
 
     // add constraints column
     const constraintsColIdx = 1;
-    const constraintsCol = {name: 'constraints', idx: constraintsColIdx, type: 'char', width: 10};
+    const constraintsCol = {name: 'constraints', idx: constraintsColIdx, type: 'char', width: 10, fixed: true};
     columns.splice(constraintsColIdx, 0, cloneDeep(constraintsCol));
     data.map((e) => {
         e.splice(constraintsColIdx, 0, '');
     });
 
-    // set selections
-    const selectInfoCls = SelectInfo.newInstance({rowCount: data.length});
-    if (selectInfoCls.getSelectedCount() === 0) {
-        let defaultSelected = [];
-        // default selected are the principal rows
-        if (isPrincipalSet(tableModel)) {
-            defaultSelected = getColumnValues(tableModel, 'principal').reduce((sels, v, i) => {
+    // default selected are either all or the principal rows
+    const usingPrincipal= isPrincipalSet(tableModel);
+    const selectInfoCls = SelectInfo.newInstance({selectAll:!usingPrincipal, rowCount: data.length});
+    if (usingPrincipal) {
+        getColumnValues(tableModel, 'principal')
+            .reduce((sels, v, i) => {
                 if (parseInt(v) === 1) sels.push(i);
                 return sels;
-            }, []);
-        }
-        defaultSelected.forEach((idx)=>selectInfoCls.setRowSelect(idx, true));
+            }, [])
+            .forEach((idx)=>selectInfoCls.setRowSelect(idx, true));
     }
 
-    modifiedTableModel = {tbl_id, totalRows: data.length, tableData: {columns, data},
-        selectInfo: selectInfoCls.data, request: {tbl_id}};
+    columns.forEach((c) => {
+        if (c.name==='column_name') {
+            c.fixed=true;
+            c.label='Name';
+            c.prefWidth= 11;
+        }
+    });
+    const selectInfo= (usingPrincipal||SELECT_ALL_COLUMNS_WHEN_NO_PRINCIPAL) ?
+        selectInfoCls.data :
+        SelectInfo.newInstance({rowCount: data.length}).data;
 
+    modifiedTableModel = {tbl_id, totalRows: data.length, tableData: {columns, data}, selectInfo, request: {tbl_id}};
     return modifiedTableModel;
+}
+
+export function makeColsLines(selcolsArrayIn, firstLineOffset=false) {
+    const firstOff= firstLineOffset ? '       ' : '';
+    const selcolsArray= selcolsArrayIn.map( (c) => maybeQuote(c));
+    const colSingleLine= selcolsArray?.join(',') ?? '';
+    if (colSingleLine.length < ADQL_LINE_LENGTH) return `${firstOff}${colSingleLine}`;
+
+    let multiLineCols = '';
+    let line = `${firstOff}${selcolsArray[0]}`;
+    const colsCopy = selcolsArray.slice(1);
+    colsCopy.forEach((value) => {
+        if (value) line+=',';
+        if ((line + value).length > ADQL_LINE_LENGTH){
+            multiLineCols+= line + '\n';
+            line = '       ';
+        }
+        line += value;
+    });
+    multiLineCols += line;
+    return multiLineCols;
 }
 
 /**
  * Get constraints as ADQL
  * @param {object} columnsModel
- * @returns {AdqlFragment}
+ * @param {string} tableName
+ * @returns {Object}
  */
-export function tableColumnsConstraints(columnsModel) {
-    const tbl_id = get(columnsModel, 'tbl_id');
+export function tableColumnsConstraints(columnsModel,tableName) {
+    const tbl_id = columnsModel?.tbl_id;
     if (!tbl_id) {
         return {valid: false, message: 'Unable to retrieve table column constraints'};
     }
 
-    const tableconstraints = getTableConstraints(tbl_id);
-    if (!tableconstraints) {
-        return {valid: false, message: 'Unable to retrive table column constraints and selected columns'};
+    const tableConstraints = getTableConstraints(tbl_id);
+    if (!tableConstraints) {
+        return {valid: false, message: 'Unable to retrieve table column constraints and selected columns'};
     }
-    const {whereFragment, selcolsFragment, errors} = tableconstraints;
-    if (errors) {
-        return {valid: false, message: errors};
-    }
-    const colsToSelect = selcolsFragment.lastIndexOf(',') > 0 ?
-        selcolsFragment.substring(0, selcolsFragment.lastIndexOf(',')) : selcolsFragment;
+    const {whereFragment, selcolsArray, errors} = tableConstraints;
+    if (errors) return {valid: false, message: errors};
 
-    return {valid: true, where: whereFragment, selcols: (colsToSelect.length > 0) ? colsToSelect : '', selcolsArray: tableconstraints.selcolsArray};
+    const selcols= tableName ? makeColsLines(selcolsArray.map( (c) => `${tableName}.${c}`)) : makeColsLines(selcolsArray);
+    return {valid: true, where: whereFragment, selcols, selcolsArray};
 }

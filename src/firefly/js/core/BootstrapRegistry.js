@@ -8,10 +8,11 @@ import {applyMiddleware, combineReducers, createStore} from 'redux';
 import createSagaMiddleware from 'redux-saga';
 import thunkMiddleware from 'redux-thunk';
 import {createLogger} from 'redux-logger';
+import HpxIndexCntlr from '../tables/HpxIndexCntlr.js';
 
 import * as LayoutCntlr from './LayoutCntlr.js';
 import ExternalAccessCntlr from './ExternalAccessCntlr.js';
-import * as TableStatsCntlr from '../charts/TableStatsCntlr.js';
+import TableStatsCntlr from '../charts/TableStatsCntlr.js';
 import ComponentCntlr, {DIALOG_OR_COMPONENT_KEY} from './ComponentCntlr.js';
 import AppDataCntlr from './AppDataCntlr.js';
 import BackgroundCntlr from './background/BackgroundCntlr.js';
@@ -19,6 +20,7 @@ import ImagePlotCntlr from '../visualize/ImagePlotCntlr.js';
 import FieldGroupCntlr, {MOUNT_COMPONENT} from '../fieldGroup/FieldGroupCntlr.js';
 import MouseReadoutCntlr from '../visualize/MouseReadoutCntlr.js';
 import TablesCntlr from '../tables/TablesCntlr.js';
+import HpxIndexCntrl from '../tables/HpxIndexCntlr.js';
 import DrawLayerCntlr from '../visualize/DrawLayerCntlr.js';
 import ChartsCntlrDef from '../charts/ChartsCntlr.js';
 import MultiViewCntlr from '../visualize/MultiViewCntlr.js';
@@ -29,12 +31,16 @@ import DrawLayerFactory from '../visualize/draw/DrawLayerFactory.js';
 import FixedMarker from '../drawingLayers/FixedMarker.js';
 import SelectArea from '../drawingLayers/SelectArea.js';
 import DistanceTool from '../drawingLayers/DistanceTool.js';
+import ExtractLineTool from '../drawingLayers/ExtractLineTool.js';
 import PointSelection from '../drawingLayers/PointSelection.js';
+import ExtractPoints from '../drawingLayers/ExtractPointsTool.js';
+import SearchSelectTool from '../drawingLayers/SearchSelectTool.js';
 import StatsPoint from '../drawingLayers/StatsPoint.js';
 import NorthUpCompass from '../drawingLayers/NorthUpCompass.js';
 import ImageRoot from '../drawingLayers/ImageRoot.js';
 import SearchTarget from '../drawingLayers/SearchTarget.js';
 import Catalog from '../drawingLayers/Catalog.js';
+import HpxCatalog from '../drawingLayers/hpx/HpxCatalog.js';
 import Artifact from '../drawingLayers/Artifact.js';
 import WebGrid from '../drawingLayers/WebGrid.js';
 import RegionPlot from '../drawingLayers/RegionPlot.js';
@@ -47,7 +53,6 @@ import ImageLineBasedFootprint from '../drawingLayers/ImageLineBasedFootprint.js
 
 //--- import Sagas
 import {dispatchAddSaga, masterSaga} from './MasterSaga.js';
-import {imagePlotter} from '../visualize/saga/ImagePlotter.js';
 import {watchReadout} from '../visualize/saga/MouseReadoutWatch.js';
 import {addExtensionWatcher} from './messaging/ExternalAccessWatcher.js';
 
@@ -61,6 +66,7 @@ const USE_LOGGING_MIDDLEWARE= false; // logging middleware is useful for debuggi
  *
  * @prop {VisRoot} allPlots - image plotting store  (Controller: ImagePlotCntlr.js)
  * @prop {TableSpace} table_space - table data store (Controller: TablesCntlr.js)
+ * @prop {HealpixTableIndex} HpxIndexCntlr- table data store (Controller: TablesCntlr.js)
  * @prop {Object} charts - information about 2D plots (Controller: ChartsCntlr.js)
  * @prop {FieldGroupStore} fieldGroup - field group data for form and dialog input (Controller: FieldGroupCntlr.js)
  * @prop {Object} readout - mouse readout information (Controller: ReadoutCntlr.js)
@@ -93,7 +99,7 @@ const USE_LOGGING_MIDDLEWARE= false; // logging middleware is useful for debuggi
 
 
 /**
- * Get the bootstrap registry, one the first call the bootstrap registry will initalize
+ * Get the bootstrap registry, one the first call the bootstrap registry will initialize
  * @return {BootstrapRegistry}
  */
 export const getBootstrapRegistry= once(() => {
@@ -102,13 +108,14 @@ export const getBootstrapRegistry= once(() => {
     const reducers = {
         [LayoutCntlr.LAYOUT_PATH]: LayoutCntlr.reducer,
         [ExternalAccessCntlr.EXTERNAL_ACCESS_KEY]: ExternalAccessCntlr.reducer,
-        [TableStatsCntlr.TBLSTATS_DATA_KEY]: TableStatsCntlr.reducer,
         [DIALOG_OR_COMPONENT_KEY]: ComponentCntlr.reducer
     };
 
-    const drawLayerFactory= DrawLayerFactory.makeFactory(FixedMarker, SelectArea,DistanceTool,
-        PointSelection, StatsPoint, NorthUpCompass, ImageRoot, SearchTarget, Catalog, Artifact, WebGrid,
-        RegionPlot, MarkerTool, FootprintTool, HiPSGrid, HiPSMOC, ImageOutline, ImageLineBasedFootprint);
+    const drawLayerFactory= DrawLayerFactory.makeFactory(
+        FixedMarker, SelectArea,DistanceTool, ExtractLineTool, ExtractPoints,
+        PointSelection, StatsPoint, NorthUpCompass, ImageRoot, SearchTarget, Catalog, HpxCatalog, Artifact, WebGrid,
+        RegionPlot, MarkerTool, FootprintTool, SearchSelectTool,
+        HiPSGrid, HiPSMOC, ImageOutline, ImageLineBasedFootprint);
 
 
     /**
@@ -123,7 +130,6 @@ export const getBootstrapRegistry= once(() => {
     /** start the core Saga */
     const startCoreSagas= () => {
         sagaMiddleware.run(masterSaga);
-        dispatchAddSaga( imagePlotter);
         dispatchAddSaga( watchReadout);
         addExtensionWatcher();
     };
@@ -141,13 +147,14 @@ export const getBootstrapRegistry= once(() => {
     registerCntlr(MouseReadoutCntlr);
     registerCntlr(ExternalAccessCntlr);
     registerCntlr(TablesCntlr);
+    registerCntlr(HpxIndexCntlr);
     registerCntlr(DrawLayerCntlr.getDrawLayerCntlrDef(drawLayerFactory));
     registerCntlr(ChartsCntlrDef);
     registerCntlr(MultiViewCntlr);
     registerCntlr(WorkspaceCntlr);
     registerCntlr(DataProductsCntlr);
+    registerCntlr(TableStatsCntlr);
 
-    actionCreators.set(TableStatsCntlr.LOAD_TBL_STATS, TableStatsCntlr.loadTblStats);
     actionCreators.set('exampleDialog', (rawAction) => {
         showExampleDialog();
         return rawAction;

@@ -9,6 +9,9 @@ import edu.caltech.ipac.util.StringUtils;
 import java.io.Serializable;
 import java.util.*;
 
+import static edu.caltech.ipac.table.TableUtil.fixDuplicates;
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
+
 /**
  * Object representing tabular data.  For historic reason, DataObject represent a row and DataType represent a column.
  */
@@ -28,6 +31,7 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
     private List<ResourceInfo> resources = new ArrayList<>();  // for <RESOURCE> in VOTABLE
     private transient DataType[] cachedColumnsAry = null;
     private transient int highlightedRow = -1;
+    private int initCapacity = 1000;
 
     public DataGroup() {}
 
@@ -37,8 +41,11 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
 
     public DataGroup(String title, List<DataType> dataDefs) {
         this.title = title;
+        fixDuplicates(dataDefs);
         dataDefs.forEach(this::addDataDefinition);
     }
+
+    public void setInitCapacity(int initCap) { this.initCapacity = initCap; }
 
     public String getTitle() {
         return title;
@@ -120,6 +127,7 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
 
     public void clearData() {
         data.clear();
+        size = 0;
     }
 
     /**
@@ -131,6 +139,21 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
             if (data.size() == 0) size = 0;                    // reset size if there's no data
             for (DataType dt : getDataDefinitions()) {
                 addData(dt.getKeyName(), s.getDataElement(dt.getKeyName()));
+            }
+            size++;
+        }
+    }
+
+    /**
+     * Add a full row of data based on the columns index.
+     * @param row   the array of data based on the columns index.
+     */
+    public void add(Object[] row) {
+        if (row != null) {
+            if (data.size() == 0) size = 0;                    // reset size if there's no data
+            DataType[] cols = getDataDefinitions();
+            for (int i = 0; i < cols.length; i++) {
+                addData(cols[i].getKeyName(), row[i]);
             }
             size++;
         }
@@ -184,21 +207,40 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
         return columns.keySet().toArray(new String[columns.size()]);
     }
 
+    /**
+     * @return  a shallow clone of this DataGroup
+     * @throws CloneNotSupportedException
+     */
     @Override
     public Object clone() throws CloneNotSupportedException {
         DataGroup copy = new DataGroup(title, getDataDefinitions());
-        copy.meta = meta.clone();
+        copy.addMetaFrom(this);
+        copy.data = data;
         return copy;
     }
 
+    /**
+     * @return a clone of this DataGroup without the DATA.
+     */
     public DataGroup cloneWithoutData() {
         ArrayList<DataType> copyCols = new ArrayList<>(columns.size());
         for (DataType dt: getDataDefinitions()) {
             copyCols.add(dt.newCopyOf());
         }
         DataGroup copy = new DataGroup(title, copyCols);
-        copy.meta = meta.clone();
+        copy.addMetaFrom(this);
         return copy;
+    }
+
+    public void addMetaFrom(DataGroup dg) {
+        if (dg == null) return;
+        applyIfNotEmpty(dg.getTitle(), v -> setTitle(v));
+        dg.getTableMeta().getKeywords().forEach(kw -> getTableMeta().addKeyword(kw.getKey(), kw.getValue()));
+        dg.getTableMeta().getAttributeList().forEach(at -> addAttribute(at.getKey(), at.getValue()));
+        dg.getGroupInfos().forEach(g -> getGroupInfos().add(g));
+        dg.getLinkInfos().forEach(l -> getLinkInfos().add(l));
+        dg.getParamInfos().forEach(p -> getParamInfos().add(p));
+        dg.getResourceInfos().forEach(r -> getResourceInfos().add(r));
     }
 
     public int size() {
@@ -316,7 +358,7 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
     }
     public void setGroupInfos(List<GroupInfo> groupInfos) {
         groups.clear();
-        groups.addAll(groupInfos);
+        if (groupInfos != null) groups.addAll(groupInfos);
     }
 
     /**
@@ -352,7 +394,7 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
     public List<ResourceInfo> getResourceInfos() { return resources; }
     public void setResourceInfos(List<ResourceInfo> resourceInfos) {
         this.resources.clear();
-        this.resources.addAll(resourceInfos);
+        if (resourceInfos != null) this.resources.addAll(resourceInfos);
     }
 
     /**
@@ -480,21 +522,25 @@ public class DataGroup implements Serializable, Cloneable, Iterable<DataObject> 
             DataType dt = getDataDefintion(cname);
             if (dt != null) {
                 if (dt.getArraySize() != null) {
-                    dataList =  new PrimitiveList.Objects();
+                    dataList =  new PrimitiveList.Objects(initCapacity);
                 } else {
                     Class clz = dt.getDataType();
                     if (clz == Double.class) {
-                        dataList = new PrimitiveList.Doubles();
+                        dataList = new PrimitiveList.Doubles(initCapacity);
                     } else if (clz == Float.class) {
-                        dataList = new PrimitiveList.Floats();
+                        dataList = new PrimitiveList.Floats(initCapacity);
                     } else if (clz == Long.class) {
-                        dataList = new PrimitiveList.Longs();
+                        dataList = new PrimitiveList.Longs(initCapacity);
                     } else if (clz == Integer.class) {
-                        dataList = new PrimitiveList.Integers();
+                        dataList = new PrimitiveList.Integers(initCapacity);
+                    } else if (clz == Short.class) {
+                        dataList = new PrimitiveList.Shorts(initCapacity);
+                    } else if (clz == Byte.class) {
+                        dataList = new PrimitiveList.Bytes(initCapacity);
                     } else if (clz == Boolean.class) {
-                        dataList = new PrimitiveList.Booleans();
+                        dataList = new PrimitiveList.Booleans(initCapacity);
                     } else {
-                        dataList = new PrimitiveList.Objects();
+                        dataList = new PrimitiveList.Objects(initCapacity);
                     }
                 }
                 data.put(cname, dataList);

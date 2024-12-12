@@ -2,7 +2,8 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {PureComponent, useEffect, useState} from 'react';
+import {ChipDelete, Link, Stack, Tooltip, Typography} from '@mui/joy';
+import React, {useContext, useEffect, useState} from 'react';
 
 import PropTypes from 'prop-types';
 import {uniqBy, get, countBy, remove, sortBy, isNil} from 'lodash';
@@ -10,16 +11,17 @@ import {uniqBy, get, countBy, remove, sortBy, isNil} from 'lodash';
 
 import {CheckboxGroupInputField} from './CheckboxGroupInputField.jsx';
 import {RadioGroupInputField} from './RadioGroupInputField.jsx';
-import {CollapsiblePanel} from '../ui/panel/CollapsiblePanel.jsx';
-import FieldGroupUtils, {getFieldVal} from '../fieldGroup/FieldGroupUtils.js';
+import {CollapsibleGroup, CollapsibleItem} from '../ui/panel/CollapsiblePanel.jsx';
+import FieldGroupUtils, {getFieldVal, getGroupFields, setFieldValue} from '../fieldGroup/FieldGroupUtils.js';
 import {dispatchMultiValueChange} from '../fieldGroup/FieldGroupCntlr.js';
 import {dispatchComponentStateChange} from '../core/ComponentCntlr.js';
 import {updateSet} from '../util/WebUtil.js';
-import {useStoreConnector} from './SimpleComponent';
-import shallowequal from 'shallowequal';
+import {useFieldGroupValue, useFieldGroupWatch, useStoreConnector} from './SimpleComponent';
+import {FD_KEYS, FG_KEYS} from 'firefly/visualize/ui/UIConst';
+import {FieldGroupCtx} from 'firefly/ui/FieldGroup';
 
-import './ImageSelect.css';
-import infoIcon from 'html/images/info-icon.png';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import {CollapseAll, ExpandAll} from 'firefly/visualize/ui/Buttons.jsx';
 
 
 const IMG_PREFIX = 'IMAGES_';
@@ -41,15 +43,14 @@ const PROJ_PREFIX = 'PROJ_ALL_';
  *      - the state of these boxes are persistent and is not affected by filtering
  */
 
-export function ImageSelect({style, imageMasterData, groupKey, multiSelect=true, addChangeListener, scrollDivId}) {
-
-    const [toolbarClz='ImageSelect__toolbar', setToolbarClz] = useState();
+export function ImageSelect({imageMasterData, header, groupKey, multiSelect=true, addChangeListener, scrollDivId}) {
+    const [isToolbarSticky, setIsToolbarSticky] = useState(false);
 
     useEffect(() => {
         addChangeListener && addChangeListener('ImageSelect', fieldsReducer(imageMasterData, groupKey));
         if (scrollDivId) {
             document.getElementById(scrollDivId).onscroll = (e) => {
-                setToolbarClz('ImageSelect__toolbar' + (e.target.scrollTop > 230 ?  ' ImageSelect__toolbar--popup' : ''));
+                setIsToolbarSticky(e.target.scrollTop > 260);
             };
         }
     }, [addChangeListener, imageMasterData, groupKey, scrollDivId]);
@@ -58,22 +59,32 @@ export function ImageSelect({style, imageMasterData, groupKey, multiSelect=true,
         ['missionId', 'project', 'subProject'].forEach((k) => d[k] = d[k] || '');
     });
 
-    const [filteredImageData] = useStoreConnector.bind({comparator: shallowequal})(() => getFilteredImageData(imageMasterData, groupKey));
+    const filteredImageData = useStoreConnector(() => getFilteredImageData(imageMasterData, groupKey));
     const [, setLastMod] = useState(new Date().getTime());
-    const pStyle = scrollDivId ? {flexGrow: 1, display: 'flex'} : {flexGrow: 1, display: 'flex', height: 1};
+
+    const toolbarSx = isToolbarSticky
+        ? {
+            zIndex: 1,
+            backgroundColor: 'background.surface',
+            position: 'absolute',
+            top: 0,
+            left: 8,
+            right: 8,
+            borderBottom: 1,
+            borderColor: 'neutral.outlinedBorder',
+            pb: 1,
+        }
+        : {};
 
     return (
-        <div style={style} className='ImageSelect'>
-            <ToolBar className={toolbarClz} {...{filteredImageData, groupKey, onChange: () => setLastMod(new Date().getTime())}}/>
-            <div style={pStyle}>
-                <div className='ImageSelect__panels' style={{marginRight: 3, flexGrow: 0}}>
-                    <FilterPanel {...{imageMasterData, groupKey}}/>
-                </div>
-                <div className='ImageSelect__panels' style={{flexGrow: 1}}>
-                    <DataProductList {...{filteredImageData, groupKey, multiSelect}}/>
-                </div>
-            </div>
-        </div>
+        <Stack spacing={1}>
+            <ToolBar {...{filteredImageData, header, groupKey, onChange: () => setLastMod(new Date().getTime()),
+                sx: toolbarSx}}/>
+            <Stack spacing={1} direction='row'>
+                <FilterPanel {...{imageMasterData, groupKey}}/>
+                <DataProductList {...{filteredImageData, groupKey, multiSelect}}/>
+            </Stack>
+        </Stack>
     );
 }
 
@@ -159,7 +170,7 @@ function isAllSelected(filteredImageData, inFields, proj) {
 
 }
 
-function ToolBar({className, filteredImageData, groupKey, onChange}) {
+function ToolBar({sx, header, filteredImageData, groupKey, onChange}) {
     const projects= uniqBy(filteredImageData, 'project').map( (d) => d.project);
     const setDSListMode = (flg) => {
         projects.forEach((k) => dispatchComponentStateChange(k, {isOpen:flg}));
@@ -186,40 +197,42 @@ function ToolBar({className, filteredImageData, groupKey, onChange}) {
             .map((o) => o.label).join() )                 // takes the label of the selected field
         .join();
 
-    const [allFilter, allSelect] = useStoreConnector(calcFilter,calcSelect);
+    const allFilter = useStoreConnector(calcFilter);
+    const allSelect = useStoreConnector(calcSelect);
+    const clrFilter = allFilter && (
+        <Tooltip title='Clear Filters'>
+            <ChipDelete onClick={() => clearFields([FILTER_PREFIX])} sx={{'--Chip-deleteSize': '1.2em'}}/>
+        </Tooltip>
+    );
+    const clrSelect = allSelect && (
+        <Tooltip title='Clear Selections'>
+            <ChipDelete onClick={() => clearFields([IMG_PREFIX, PROJ_PREFIX])} sx={{'--Chip-deleteSize': '1.2em'}}/>
+        </Tooltip>
+    );
 
     return (
-        <div className={className}>
-            <div style={{display: 'inline-flex', flexGrow: 1}}>
-                <div style={{width: 155}}>
-                    <div className='ImageSelect__title'>Filter By:</div>
-                    <div className='ImageSelect__info'>{pretty(allFilter, 25)}</div>
-                </div>
-                <div>
-                    <div className='ImageSelect__title'>Selection:</div>
-                    <div className='ImageSelect__info'>{pretty(allSelect, 100)}</div>
-                </div>
-            </div>
-            <div className='ImageSelect__action'>
-                <div>
-                    &bull;<a style={{marginRight: 7}} className='ff-href' onClick={() => clearFields([FILTER_PREFIX])}>Clear Filters</a>
-                </div>
-                <div>
-                    &bull;<a style={{marginRight: 7}} className='ff-href' onClick={() => clearFields([IMG_PREFIX, PROJ_PREFIX])}>Clear Selections</a>
-                    &bull;<a style={{marginRight: 7}} className='ff-href' onClick={() => setDSListMode(true)}>Expand All</a>
-                    &bull;<a className='ff-href' onClick={() => setDSListMode(false)}>Collapse All</a>
-                </div>
-            </div>
-        </div>
+        <Stack direction='row' sx={sx}>
+            {header?.()}
+            <Stack direction='row' justifyContent='space-between' flex={1} alignItems='start' overflow='hidden' spacing={2}>
+                <Stack flexGrow={1} overflow='hidden'>
+                    <StatusLine label='Filter By:' msg={allFilter} endDecorator={clrFilter}/>
+                    <StatusLine label='Selection:' msg={allSelect} endDecorator={clrSelect}/>
+                </Stack>
+                <Stack direction='row' >
+                    <ExpandAll onClick={() => setDSListMode(true)} iconButtonSize='32px' tip='Expand All'/>
+                    <CollapseAll onClick={() => setDSListMode(false)} iconButtonSize='32px' tip='Collapse All'/>
+                </Stack>
+            </Stack>
+        </Stack>
     );
 }
 
 /*--------------------------- Filter Panel ---------------------------------------------*/
 function FilterPanel({imageMasterData}) {
     return(
-        <div className='FilterPanel'>
+        <Stack flexGrow={0}>
             <FilterPanelView {...{imageMasterData}}/>
-        </div>
+        </Stack>
     );
 }
 
@@ -270,17 +283,20 @@ function FilterPanelView({imageMasterData}) {
     const waveType=getBandList(imageMasterData);
 
     return (
-        <div className='FilterPanel__view'>
-            <CollapsiblePanel componentKey='missionFilter' header='MISSION:' isOpen={true}>
-                <FilterSelect {...{type:'mission', dataList: missions}}/>
-            </CollapsiblePanel>
-            <CollapsiblePanel componentKey='projectTypesFilter' header='PROJECT TYPE:' isOpen={true}>
-                <FilterSelect {...{type:'projectType', dataList: projectTypes}}/>
-            </CollapsiblePanel>
-            <CollapsiblePanel componentKey='waveTypesFilter' header='BAND:' isOpen={true}>
-                <FilterSelect {...{type:'waveType', dataList: waveType}}/>
-            </CollapsiblePanel>
-        </div>
+        <Stack>
+            <CollapsibleGroup>
+                <CollapsibleItem componentKey='missionFilter' header='MISSION:' isOpen={true} title='Please select some boxes'>
+                    <FilterSelect {...{type:'mission', dataList: missions}}/>
+                </CollapsibleItem>
+                <CollapsibleItem componentKey='projectTypesFilter' header='PROJECT TYPE:' isOpen={true} title='Please select some boxes'>
+                    <FilterSelect {...{type:'projectType', dataList: projectTypes}}/>
+                </CollapsibleItem>
+                <CollapsibleItem componentKey='waveTypesFilter' header='BAND:' isOpen={true} title='Please select some boxes'>
+                    <FilterSelect {...{type:'waveType', dataList: waveType}}/>
+                </CollapsibleItem>
+            </CollapsibleGroup>
+        </Stack>
+
     );
 }
 
@@ -292,6 +308,7 @@ function FilterPanelView({imageMasterData}) {
  */
 function FilterSelect ({type, dataList, maxShown=6}) {
     const [showExpanded, setShowExpanded] = useState(false);
+    const {groupKey} = useContext(FieldGroupCtx);
 
     const fieldKey= `Filter_${type}`;
     const options = toFilterOptions(dataList);
@@ -299,28 +316,26 @@ function FilterSelect ({type, dataList, maxShown=6}) {
     const dispOptions = showExpanded ? options : options.slice(0, maxShown);
     const hasLess = dispOptions.length > maxShown;
 
+    // get value from the filter field if it has been set before filter component is mounted, otherwise set '' for all options
+    const initialVal = getFieldVal(groupKey, fieldKey, '');
+
     return (
-        <div className='FilterPanel__item--std'>
+        <Stack>
             <CheckboxGroupInputField
                 key={fieldKey}
                 fieldKey={fieldKey}
                 initialState={{ options: dispOptions,
-                                value: '',   // workaround for _all_ for now
-                                tooltip: 'Please select some boxes',
+                                value: initialVal,
                                 label : '' }}
                 options={dispOptions}
                 alignment='vertical'
-                labelWidth={35}
-                wrapperStyle={{whiteSpace: 'nowrap'}}
             />
 
-            { hasMore && <a className='ff-href' style={{paddingLeft: 20, fontWeight: 'bold'}}
-                            onClick={() => setShowExpanded(true)}>more</a>
+            { hasMore && <Link onClick={() => setShowExpanded(true)}>more</Link>
             }
-            { hasLess && <a className='ff-href' style={{paddingLeft: 20, fontWeight: 'bold'}}
-                            onClick={() => setShowExpanded(false)}>less</a>
+            { hasLess && <Link onClick={() => setShowExpanded(false)}>less</Link>
             }
-        </div>
+        </Stack>
     );
 }
 
@@ -351,11 +366,48 @@ const toFilterSummary = (master, key, desc) => Object.entries(countBy(master, (d
 /*--------------------------- Data Product List ---------------------------------------*/
 
 function DataProductList({filteredImageData, groupKey, multiSelect}) {
+    // Create a field for storing default images in rgb field group
+    const [getDefaultImages, setDefaultImages] = useFieldGroupValue('defaultImages', FG_KEYS.rgb);
+
+    const updateDefaultImages = (color) => ([coloredImageVal]) => {
+        // if it's a colored (red, green, or blue) DataProductList and if image for that color is selected for the first time
+        if (groupKey===FG_KEYS[color] && (coloredImageVal && !getDefaultImages()?.[color])) {
+            const selectedColoredImage = filteredImageData.find((d) => d.imageId === coloredImageVal);
+
+            // if defaultColor field (default images for rgb) is defined and default image specified for that color is same as selected image
+            if (selectedColoredImage?.defaultColor && selectedColoredImage.defaultColor[color]===coloredImageVal) {
+                setDefaultImages(selectedColoredImage.defaultColor);
+
+                // also change image source of rest of colored images to archive
+                ['red', 'green', 'blue'].forEach((c)=> setFieldValue(FG_KEYS[c], FD_KEYS.source, 'archive'));
+
+                // also set filters on rest of colored images, if present on this one
+                const filterFieldKeys = Object.keys(getGroupFields(FG_KEYS[color])).filter((fld)=>fld.startsWith('Filter'));
+                filterFieldKeys.forEach((filterFieldKey)=>{
+                    const filterVal = getFieldVal(FG_KEYS[color], filterFieldKey, '');
+                    if(filterVal){
+                        ['red', 'green', 'blue'].forEach((c)=> setFieldValue(FG_KEYS[c], filterFieldKey, filterVal));
+                    }
+                });
+            }
+        }
+    };
+
+    // Update default images if image selection for any of 3 colors is changed
+    useFieldGroupWatch([IMG_PREFIX+FG_KEYS.red], updateDefaultImages('red'), [], FG_KEYS.red);
+    useFieldGroupWatch([IMG_PREFIX+FG_KEYS.green], updateDefaultImages('green'), [], FG_KEYS.green);
+    useFieldGroupWatch([IMG_PREFIX+FG_KEYS.blue], updateDefaultImages('blue'), [], FG_KEYS.blue);
+
+    let defaultImage = '';
+    if (groupKey===FG_KEYS.red) defaultImage = getDefaultImages()?.red;
+    else if (groupKey===FG_KEYS.green) defaultImage = getDefaultImages()?.green;
+    else if (groupKey===FG_KEYS.blue) defaultImage = getDefaultImages()?.blue;
+
     const projects= uniqBy(filteredImageData, 'project').map( (d) => d.project);
 
     let content;
     if (projects.length > 0) {
-        content = projects.map((p) => <DataProduct key={p} {...{groupKey, project:p, filteredImageData, multiSelect}}/>);
+        content = projects.map((p) => <DataProduct key={p} {...{groupKey, project:p, filteredImageData, multiSelect, defaultImage}}/>);
     } else {
         content = (
             <div style={{display:'flex', justifyContent:'center', marginTop: 40}}>
@@ -365,13 +417,15 @@ function DataProductList({filteredImageData, groupKey, multiSelect}) {
     }
 
     return (
-        <div className='DataProductList'>
-            <div className='DataProductList__view'>{content}</div>
-        </div>
+        <Stack flexGrow={1}>
+            <CollapsibleGroup disableDivider={true} sx={{'& button': {justifyContent: 'start'}}}>
+                {content}
+            </CollapsibleGroup>
+        </Stack>
     );
 }
 
-function DataProduct({groupKey, project, filteredImageData, multiSelect}) {
+function DataProduct({groupKey, project, filteredImageData, multiSelect, defaultImage}) {
 
     // filter projects ... projects is like dataproduct or dataset.. i.e SEIP
     const projectData= filteredImageData.filter((d) => d.project === project);
@@ -381,17 +435,19 @@ function DataProduct({groupKey, project, filteredImageData, multiSelect}) {
     const isOpen = hasImageSelection(groupKey, project);
 
     return (
-        <div className='DataProductList__item'>
-            <CollapsiblePanel componentKey={project} header={<Header {...{project, hrefInfo:helpUrl, multiSelect}}/>} isOpen={isOpen}>
-                <div className='DataProductList__item--details'>
+        <Stack>
+            <CollapsibleItem componentKey={project} isOpen={isOpen}
+                             slotProps={{content:{variant:'soft'}}}
+                             header={<Header {...{project, hrefInfo:helpUrl, multiSelect}}/>}>
+                <Stack>
                     {
                         subProjects.map((sp) =>
-                            <BandSelect key={'sub_' + sp} {...{groupKey, subProject:sp, projectData, labelMaxWidth, multiSelect}}/>
+                            <BandSelect key={'sub_' + sp} {...{groupKey, subProject:sp, projectData, labelMaxWidth, multiSelect, defaultImage}}/>
                         )
                     }
-                </div>
-            </CollapsiblePanel>
-        </div>
+                </Stack>
+            </CollapsibleItem>
+        </Stack>
     );
 
 }
@@ -400,40 +456,35 @@ function Header({project, hrefInfo='', multiSelect}) {
     const fieldKey= `${PROJ_PREFIX}${project}`;
 
     const InfoIcon = () => hrefInfo && (
-        <div>
-            <a onClick={(e) => e.stopPropagation()} target='_blank' href={hrefInfo}>
-                <img style={{width:'14px'}} src={infoIcon} alt='info'/></a>
-        </div>
+        <a onClick={(e) => e.stopPropagation()} target='_blank' href={hrefInfo}>
+            <InfoOutlinedIcon sx={{width:'1.2rem', verticalAlign:'middle'}}/>
+        </a>
     );
 
     if (multiSelect) {
         return (
-            <div className='DataProductList__item--header' >
+            <Stack spacing={1} direction='row' alignItems='center'>
                 <div onClick={(e) => e.stopPropagation()}>
                     <CheckboxGroupInputField
                         key={fieldKey}
                         fieldKey={fieldKey}
                         initialState={{
                             value: '',   // workaround for _all_ for now
-                            tooltip: 'Please select some boxes',
                             label : '' }}
                         options={[{label:project, value:'_all_'}]}
                         alignment='horizontal'
-                        labelWidth={35}
-                        wrapperStyle={{whiteSpace: 'normal' /*cursor:'pointer'*/}}
+                        sx={{fontWeight: 'normal'}}
                     />
                 </div>
-                <div style={{marginLeft: -5}}>
-                    <InfoIcon/>
-                </div>
-            </div>
+                <InfoIcon/>
+            </Stack>
         );
     } else {
         return (
-            <div style={{display: 'inline-flex', alignItems: 'center'}}>
-                <div style={{marginRight:5}}>{project}</div>
+            <Stack spacing={1} direction='row' alignItems='center'>
+                <Typography sx={{fontWeight:'normal'}} level='body-sm'>{project}</Typography>
                 <InfoIcon/>
-            </div>
+            </Stack>
         );
     }
 
@@ -445,69 +496,98 @@ const hasImageSelection = (groupKey, proj) => {
 };
 
 
-function BandSelect({groupKey, subProject, projectData, labelMaxWidth, multiSelect}) {
+function BandSelect({groupKey, subProject, projectData, labelMaxWidth, multiSelect, defaultImage}) {
     const fieldKey= IMG_PREFIX + get(projectData, [0, 'project']) + (subProject ? '||' + subProject : '');
     const options = toImageOptions(projectData.filter( (p) => p.subProject === subProject));
     const label = subProject && (
-                    <div style={{display: 'inline-flex'}}>
-                        <div style={{width: labelMaxWidth+1+'ch'}} title={subProject}
-                             className='DataProductList__item--bandLabel'>{subProject}</div>
+                    <Stack {...{direction: 'row', alignItems:'center'}}>
+                        <Typography title={subProject}
+                                    width={labelMaxWidth+1+'ch'}
+                                    textAlign='right'
+                                    noWrap={true}
+                                    overflow='hidden'
+                                    textOverflow='ellipsis'
+                                    maxWidth={100}
+                        >
+                            {subProject}
+                        </Typography>
                         <span>:</span>
-                    </div>);
+                    </Stack>);
     if (multiSelect) {
         return (
-            <div className='DataProductList__item--band'>
+            <Stack direction='row' alignItems='center'>
                 {label}
                 <CheckboxGroupInputField
+                    sx={{
+                        '& .ff-Checkbox-container':{flexWrap:'wrap'},
+                        '& .ff-Checkbox-item:first-of-type':{ml:2}
+                    }}
                     key={fieldKey}
                     fieldKey={fieldKey}
                     initialState={{
                         options,        // Note: values in initialState are saved into fieldgroup.  options are used in the reducer above to determine what 'all' means.
                         value: '',
-                        tooltip: 'Please select some boxes',
-                        label : '' }}
+                         }}
                     options={options}
-                    alignment='horizontal'
-                    labelWidth={35}
-                    wrapperStyle={{whiteSpace: 'normal'}}
+                    orientation='horizontal'
                 />
-            </div>
+            </Stack>
         );
     } else {
         return (             
-            <div className='DataProductList__item--band'>
+            <Stack direction='row'>
                 {label}
                 <RadioGroupInputField
+                    sx={{
+                        '& .ff-RadioGroup-container':{flexWrap:'wrap'},
+                        '& .ff-RadioGroup-item:first-of-type':{ml:1.5},
+                        '& .ff-Checkbox-item':{mt:1/4}
+                    }}
                     key={`${groupKey}_${fieldKey}`}
                     fieldKey={`${IMG_PREFIX}${groupKey}`}
                     isGrouped={true}
                     initialState={{
                             options,        // Note: values in initialState are saved into fieldgroup.  options are used in the reducer above to determine what 'all' means.
-                            value: '',
-                            tooltip: 'Please select some boxes',
-                            label : '' }}
+                            value: defaultImage,
+                            }}
                     options={options}
                     defaultValue=''
-                    alignment='horizontal'
-                    labelWidth={35}
-                    wrapperStyle={{whiteSpace: 'normal'}}
+                    orientation='horizontal'
                 />
-            </div>
+            </Stack>
         );
     }
 }
 
 const toImageOptions= (a) => a.map ( (d) => ({label: d.title, value: d.imageId}));
 
-function pretty(str, max) {
-    const words = str.split(',');
-    let pretty = '';
+function StatusLine ({label, msg, max=100000, endDecorator}) {
+    msg = msg || 'none';
+    const words = msg.split(',');
+    let pretty = ' ';
     for(var i=0; i< words.length; i++) {
         if (pretty.length + words[i].length > max) {
             pretty += ` (${words.length-i} more)`;
             break;
         }
-        pretty += words[i] + (i === words.length-1 ? '' : ',');
+        pretty += words[i] + (i === words.length-1 ? '' : ', ');
     }
-    return pretty;
+    return (
+        <Stack direction='row' overflow='hidden' spacing={1}>
+            <Typography {...{level:'body-xs', color:'neutral'}} whiteSpace='nowrap'>{label}</Typography>
+            <Stack direction='row' overflow='hidden' alignItems='start'>
+                <Typography {...{level:'body-xs', color:'warning', title:msg}}
+                            sx={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                            }}>
+                    {pretty}
+                </Typography>
+                {endDecorator}
+            </Stack>
+        </Stack>
+    );
 }
+
+

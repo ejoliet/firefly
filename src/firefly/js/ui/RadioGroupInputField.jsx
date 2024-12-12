@@ -1,6 +1,6 @@
 import React, {memo} from 'react';
-import {bool, array, string, number, object, any, shape} from 'prop-types';
-import {isEmpty, isUndefined, get}  from 'lodash';
+import PropTypes, {bool, string, shape, oneOfType, element, arrayOf, any} from 'prop-types';
+import {isEmpty, isUndefined}  from 'lodash';
 import {RadioGroupInputFieldView} from './RadioGroupInputFieldView.jsx';
 import {useFieldGroupConnector} from './FieldGroupConnector.jsx';
 
@@ -12,11 +12,9 @@ const assureValue= (props) => {
 };
 
 function handleOnChange(ev, params, fireValueChange) {
-    const val = get(ev, 'target.value', '');
-    const checked = get(ev, 'target.checked', false);
-    if (checked) {
-        fireValueChange({ value: val, valid: true});
-    }
+    const value = ev?.target?.value ?? '';
+    if (ev?.target?.checked) fireValueChange({ value, valid: true});
+
 }
 
 function checkForUndefined(v,props) {
@@ -31,27 +29,19 @@ function checkForUndefined(v,props) {
 
 export const RadioGroupInputField= memo( (props) => {
     const {viewProps, fireValueChange}=  useFieldGroupConnector({...props, confirmValue:checkForUndefined});
-    const value= assureValue(viewProps);
+    const value = assureValue(viewProps);
     if (isUndefined(value)) return <div/>;
     const newProps= {...viewProps,  value};
-    return <RadioGroupInputFieldView {...newProps}
-                                     onChange={(ev) => handleOnChange(ev,viewProps, fireValueChange)}/> ;
+    return (<RadioGroupInputFieldView {...newProps}
+                                     onChange={(ev) => handleOnChange(ev,viewProps, fireValueChange)}/>) ;
 });
 
 
 RadioGroupInputField.propTypes= {
-    inline : bool,
-    options: array,
+    options: arrayOf(shape( { value: string, label: any, tooltip: string} )).isRequired,
     defaultValue: string,
-    alignment:  string,
-    labelWidth : number,
-    labelStyle: object,
+    orientation: PropTypes.oneOf(['vertical', 'horizontal']),
+    tooltip : oneOfType([string,element]),
     isGrouped: bool,
-    forceReinit:  bool,
-    fieldKey:   string,
-    initialState: shape({
-        value: string,
-        tooltip: string,
-        label:  string,
-    }),
+    initialState: shape({ value: string, label: string}),
 };

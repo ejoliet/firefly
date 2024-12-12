@@ -80,6 +80,7 @@ function handleOtherAction(drawLayer,action,factory) {
 function updateFromLayer(drawLayer,action,factory) {
     let {plotIdAry}= action.payload;
     if (!plotIdAry) plotIdAry= [action.payload.plotId];
+    if (!plotIdAry?.length && drawLayer.hasPerPlotData) plotIdAry= drawLayer.visiblePlotIdAry;
     drawLayer= Object.assign({}, drawLayer, factory.getLayerChanges(drawLayer,action));
     if (drawLayer.hasPerPlotData) {
         plotIdAry.forEach( (id) => {
@@ -249,8 +250,8 @@ function getDrawData(factory, drawLayer, action, plotId= null) {
     let retval;
     if (plotId) {
         retval= {
-            data:             Object.assign({},drawData.data,newDD.data),
-            highlightData:   Object.assign({},drawData.highlightData,newDD.highlightData),
+            data:            {...drawData?.data,...newDD.data},
+            highlightData:   {...drawData?.highlightData,...newDD.highlightData},
             selectIdxs: newDD.selectIdxs
         };
     }
@@ -259,9 +260,9 @@ function getDrawData(factory, drawLayer, action, plotId= null) {
     }
 
     // check for differences
-    if (retval.data!==drawData.data ||
-        retval.highlightData!==drawData.highlightData ||
-        retval.selectIdxs!==drawData.selectIdxs) {
+    if (retval.data!==drawData?.data ||
+        retval.highlightData!==drawData?.highlightData ||
+        retval.selectIdxs!==drawData?.selectIdxs) {
         return retval;
     }
     else {

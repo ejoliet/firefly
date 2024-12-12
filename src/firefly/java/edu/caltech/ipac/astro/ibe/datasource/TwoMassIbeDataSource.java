@@ -4,14 +4,10 @@
 package edu.caltech.ipac.astro.ibe.datasource;
 
 import edu.caltech.ipac.astro.ibe.BaseIbeDataSource;
-import edu.caltech.ipac.astro.ibe.IBE;
 import edu.caltech.ipac.astro.ibe.IbeDataParam;
 import edu.caltech.ipac.astro.ibe.IbeQueryParam;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.StringUtils;
-import edu.caltech.ipac.visualize.plot.CoordinateSys;
-import edu.caltech.ipac.visualize.plot.Plot;
-import edu.caltech.ipac.visualize.plot.WorldPt;
 
 import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
@@ -165,33 +161,9 @@ public class TwoMassIbeDataSource extends BaseIbeDataSource {
     @Override
     public IbeQueryParam makeQueryParam(Map<String, String> queryInfo) {
 
-        // source search
-        IbeQueryParam queryParam = new IbeQueryParam();
+        // common position search params
+        IbeQueryParam queryParam = super.makeQueryParam(queryInfo);
 
-        // process POS - target search
-        String userTargetWorldPt = queryInfo.get("UserTargetWorldPt");
-        if (userTargetWorldPt != null) {
-            WorldPt pt = WorldPt.parse(userTargetWorldPt);
-            if (pt != null) {
-                pt = Plot.convert(pt, CoordinateSys.EQ_J2000);
-                queryParam.setPos(pt.getLon() + "," + pt.getLat());
-                if (!StringUtils.isEmpty(queryInfo.get("intersect"))) {
-                    queryParam.setIntersect(IbeQueryParam.Intersect.valueOf(queryInfo.get("intersect")));
-                }
-                String mcen = queryInfo.get("mcenter");
-                if (mcen != null && (mcen.equalsIgnoreCase(MCEN) || Boolean.parseBoolean(mcen))) {
-                    queryParam.setMcen(true);
-
-                } else {
-                    // workaround:
-                    if ( StringUtils.isEmpty(queryInfo.get("radius"))) {
-                        queryParam.setSize(queryInfo.get("size"));
-                    } else {
-                        queryParam.setSize(queryInfo.get("radius"));
-                    }
-                }
-            }
-        }
         // process constraints
         String constraints = processConstraints(queryInfo);
         if (!StringUtils.isEmpty(constraints)) {

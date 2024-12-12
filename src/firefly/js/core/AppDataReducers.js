@@ -2,9 +2,9 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {SHOW_DROPDOWN} from './LayoutCntlr.js';
+import {MENU_UPDATE, SHOW_DROPDOWN} from './LayoutCntlr.js';
 import * as AppDataCntlr from './AppDataCntlr.js';
-import {updateSet} from '../util/WebUtil.js';
+import {mergeObjectOnly, updateSet} from '../util/WebUtil.js';
 import BrowserCache from '../util/BrowserCache.js';
 import {smartMerge} from '../tables/TableUtil.js';
 
@@ -43,8 +43,7 @@ export function appDataReducer(state, action={}) {
             return updateSet(state, ['connections'], action.payload);
 
         case AppDataCntlr.APP_OPTIONS :
-            return updateSet(state, ['appOptions'], action.payload.appOptions);
-
+            return {...state, appOptions:mergeObjectOnly(state.appOptions, action.payload.appOptions)};
         default:
             return state;
     }
@@ -58,6 +57,9 @@ export function menuReducer(state={}, action={}) {
             const {visible, view=''} = action.payload;
             const selected = visible ? view : '';
             return updateSet(state, ['menu', 'selected'], selected);
+        case MENU_UPDATE:
+            const {menu} = action.payload;
+            return updateSet(state, ['menu'], menu);
         default:
             return state;
     }
@@ -75,7 +77,7 @@ export function alertsReducer(state={}, action={}) {
 
 
 
-/*---------------------------- REDUCING FUNTIONS -----------------------------*/
+/*---------------------------- REDUCING FUNCTIONS -----------------------------*/
 const updateActiveTarget= function(state,action) {
     const {worldPt,corners}= action.payload;
     return Object.assign({}, state, {activeTarget:{worldPt,corners}});

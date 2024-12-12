@@ -7,7 +7,7 @@ import {toBoolean} from '../util/WebUtil.js';
 import {ServerParams} from '../data/ServerParams.js';
 import {logger} from '../util/Logger.js';
 import {fetchUrl} from '../util/fetch';
-import {getCmdSrvURL} from '../util/WebUtil';
+import {getCmdSrvSyncURL} from '../util/WebUtil';
 import jsonBigInt from 'json-bigint';
 
 
@@ -15,21 +15,20 @@ const JSONbigint = jsonBigInt({ useNativeBigInt: true });
 
 /**
  *
- * @param {string} baseUrl
- * @param {string} cmd
- * @param paramList
+ * @param {string} url
+ * @param params
  * @param {boolean} doPost
  * @param {boolean} useBigInt       // use BigInt supported json parser
  * @return {Promise} a promise with the results
  */
-function jsonRequest(baseUrl, cmd, paramList, doPost, useBigInt) {
-    const options = {method: doPost ? 'POST' : 'GET'};
-    options.params = addParam(paramList, ServerParams.COMMAND, cmd);
+export function jsonFetch(url, params, doPost, useBigInt) {
+
+    const options = {method: doPost ? 'POST' : 'GET', params};
 
     return new Promise(function (resolve, reject) {
-        fetchUrl(baseUrl, options, false).then((response) => {
+        fetchUrl(url, options, false).then((response) => {
             if (!response.ok) {
-                reject(new Error(`Error from Server for command ${cmd}: code: ${response.status}, text: ${response.statusText}`));
+                reject(new Error(`Error fetching ${url}: code: ${response.status}, text: ${response.statusText}`));
                 return;
             }
 
@@ -38,7 +37,7 @@ function jsonRequest(baseUrl, cmd, paramList, doPost, useBigInt) {
                     if (toBoolean(result[0].success)) {
                         resolve(result[0].data ? result[0].data : result[0]);
                     } else if (has(result, '0.error')) {
-                        reject(new Error(result[0].error));
+                        reject(new Error(result[0].error, { cause: result[0].cause1}));
                     } else {
                         reject(new Error(`Unrecognized result: ${result}`));
                     }
@@ -62,6 +61,9 @@ function jsonRequest(baseUrl, cmd, paramList, doPost, useBigInt) {
                     reject(err);
                 });
             }
+        }).catch( (e) => {
+            const eStr= `fetch: ${url}:  ${e} (no status returned, most likely a bad url or a bad redirected url)`;
+            reject(new Error(eStr));
         });
     });
 }
@@ -69,13 +71,15 @@ function jsonRequest(baseUrl, cmd, paramList, doPost, useBigInt) {
 /**
  * 
  * @param {string} cmd
- * @param paramList
+ * @param [paramList]
  * @param {boolean} doPost
  * @param {boolean} useBigInt  // support BigInt in JSON.  default to false
  * @return {Promise} a promise with the results
  */
 export function doJsonRequest(cmd, paramList, doPost=true, useBigInt=false) {
-    return jsonRequest(getCmdSrvURL(), cmd, paramList, doPost, useBigInt);
+    const url = `${getCmdSrvSyncURL()}?${ServerParams.COMMAND}=${cmd}`;         // ensure url contains cmd value
+    if (doPost) paramList = addParam(paramList, ServerParams.COMMAND, cmd);     // ensure cmd is also in the paramList
+    return jsonFetch(url, paramList, doPost, useBigInt);
 }
 
 /**

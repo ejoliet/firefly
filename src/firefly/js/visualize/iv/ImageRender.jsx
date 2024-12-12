@@ -10,8 +10,7 @@ import {createHiPSDrawer} from './HiPSTileDrawer.js';
 import {isImage} from '../WebPlot.js';
 import {CANVAS_IMAGE_ID_START} from '../PlotViewUtil.js';
 import {primePlot} from '../PlotViewUtil';
-import {getGpuJs, getGpuJsImmediate} from '../rawData/GpuJsConfig.js';
-import {getRootURL} from '../../util/WebUtil.js';
+import {getGpuJsImmediate} from '../rawData/GpuJsConfig.js';
 
 const BG_IMAGE= 'image-working-background-24x24.png';
 const BACKGROUND_STYLE = `url(+ ${BG_IMAGE} ) top left repeat`;
@@ -52,9 +51,9 @@ export class ImageRender extends Component {
         super(props);
 
         this.drawInit= (canvas) => {
-            const {plot, opacity,plotView, tileAttributes, shouldProcess=false, processor}= this.props;
+            const {plot, opacity,plotView}= this.props;
             this.tileDrawer= initTileDrawer(canvas, plot);
-            this.tileDrawer(plot, opacity,plotView, {tileAttributes, shouldProcess, processor} );
+            this.tileDrawer(plot, opacity,plotView, this.props.colorMode);
         };
     }
 
@@ -65,9 +64,10 @@ export class ImageRender extends Component {
         const {width:targetWidth, height:targetHeight}= props.plotView.viewDim;
         const {plotView:nPv}= np;
 
+        if (props.colorMode!==np.colorMode) return true;
         if (pv.scrollX===nPv.scrollX && pv.scrollY===nPv.scrollY &&
             targetWidth===np.plotView.viewDim.width && targetHeight===np.plotView.viewDim.height &&
-            props.tileAttributes===np.tileAttributes &&
+            pv.overlayPlotViews===nPv.overlayPlotViews &&
             props.plot===np.plot && props.opacity===np.opacity ) {
             return false;
         }
@@ -82,25 +82,17 @@ export class ImageRender extends Component {
 
 
     render() {
-        const {plot, idx, opacity,plotView:pv, tileAttributes, shouldProcess, processor}= this.props;
+        const {plot, idx, opacity,plotView:pv}= this.props;
         const {width, height}= pv.viewDim;
-        const {tileData} = plot;
+        const style = {...containerStyle, width, height};
+        this.tileDrawer?.(plot, opacity,pv,this.props.colorMode);
 
-        const scale = plot.zoomFactor/ plot.plotState.getZoomLevel();
-        const style = Object.assign({}, containerStyle, {width, height});
-        if (tileData && scale < .5 && tileData.images?.length > 5) { // only does check for image plots
-            return false;
-        }
-        else {
-            if (this.tileDrawer) this.tileDrawer(plot, opacity,pv, {tileAttributes, shouldProcess, processor} );
-
-            return (
-                <div className='tile-drawer' style={style}>
-                    <SimpleCanvas drawIt={this.drawInit} width={width} height={height} plotType={plot.plotType}
-                                  id={`${CANVAS_IMAGE_ID_START}${idx}-${pv.plotId}`}/>
-                </div>
-            );
-        }
+        return (
+            <div className='tile-drawer' style={style}>
+                <SimpleCanvas drawIt={this.drawInit} width={width} height={height} plotType={plot.plotType}
+                              id={`${CANVAS_IMAGE_ID_START}${idx}-${pv.plotId}`}/>
+            </div>
+        );
     }
 }
 
@@ -109,8 +101,8 @@ ImageRender.propTypes= {
     plot : PropTypes.object.isRequired,
     opacity : PropTypes.number.isRequired,
     plotView : PropTypes.object.isRequired,
-    tileAttributes : PropTypes.object,
     shouldProcess : PropTypes.func,
     idx : PropTypes.number,
     processor : PropTypes.func,
+    colorMode: PropTypes.string
 };

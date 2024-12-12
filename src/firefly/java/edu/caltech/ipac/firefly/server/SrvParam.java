@@ -6,22 +6,21 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.firefly.server;
-/**
- * User: roby
- * Date: 12/19/12
- * Time: 11:46 AM
- */
 
-
+import edu.caltech.ipac.firefly.data.DownloadRequest;
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
+import edu.caltech.ipac.firefly.messaging.JsonHelper;
 import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.firefly.server.visualize.VisJsonSerializer;
 import edu.caltech.ipac.firefly.visualize.PlotState;
 import edu.caltech.ipac.firefly.visualize.WebPlotRequest;
+import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.table.TableUtil;
-import edu.caltech.ipac.util.StringUtils;
+import edu.caltech.ipac.table.TableUtil.Format;
 import edu.caltech.ipac.visualize.plot.ImagePt;
+import edu.caltech.ipac.visualize.plot.WorldPt;
+import org.json.simple.JSONArray;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -30,24 +29,34 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static edu.caltech.ipac.firefly.data.TableServerRequest.FF_SESSION_ID;
+
 /**
  * @author Trey Roby
  */
+
 public class SrvParam {
 
     private final Map<String, String[]> paramMap;
 
     public SrvParam(Map<String, String[]> paramMap) { this.paramMap=new HashMap<>(paramMap); }
 
+    public Map<String, String> flatten() {
+        HashMap<String, String> p = new HashMap<>();
+        paramMap.forEach((k, v) -> p.put(k, String.join(",", v)));
+        return p;
+    }
 
     public Map<String, String[]> getParamMap() {
         return paramMap;
     }
 
+    public int size() { return paramMap.size(); }
+
     /**
-     * Return any parameters that are not in ignore list. If the parameter has more then one entry, only return the first
+     * Return any parameters that are not in ignore list. If the parameter has more than one entry, only return the first
      * @param ignoreList an array list of parameters to ignore
-     * @return a map of the parameters that we not ignored
+     * @return a map of the parameters that are not ignored
      */
     public Map<String, String> getParamMapUsingExcludeList(List<String> ignoreList) {
         Map<String,String> retMap= new HashMap<>();
@@ -119,18 +128,18 @@ public class SrvParam {
     }
 
     public PlotState[] getStateAry() {
-        List<PlotState> stateList= new ArrayList<PlotState>();
+        List<PlotState> stateList= new ArrayList<>();
         PlotState state= getState(0,true);
         stateList.add(state);
         for(int i=1;(state!=null); i++) {
             state= getState(i,false);
             if (state!=null) stateList.add(state);
         }
-        return stateList.toArray(new PlotState[stateList.size()]);
+        return stateList.toArray(new PlotState[0]);
     }
 
     public List<WebPlotRequest> getRequestList() {
-        List<WebPlotRequest> reqList= new ArrayList<WebPlotRequest>();
+        List<WebPlotRequest> reqList= new ArrayList<>();
         WebPlotRequest wpr= getRequiredWebPlotRequest(ServerParams.REQUEST+"0");
         reqList.add(wpr);
         for(int i=1;(wpr!=null); i++) {
@@ -148,16 +157,8 @@ public class SrvParam {
      */
     public String getID() { return getRequired(ServerParams.ID); }
 
-    /**
-     * Look for the ServerParams.ID keys and a list of values
-     * Throw an exception if at least one is not found
-     * @return in ID values
-     */
-    public List<String> getIDList() { return getRequiredList(ServerParams.ID); }
-
-
     public String getRequired(String key) {
-        String ary[]= paramMap.get(key);
+        String[] ary = paramMap.get(key);
         if (ary != null && ary.length>0) {
             return ary[0];
         }
@@ -167,7 +168,7 @@ public class SrvParam {
     }
 
     public List<String> getRequiredList(String key) {
-        String ary[]= paramMap.get(key);
+        String[] ary = paramMap.get(key);
         if (ary != null && ary.length>0) {
             return Arrays.asList(ary);
         }
@@ -177,7 +178,7 @@ public class SrvParam {
     }
 
     public List<String> getOptionalList(String key) {
-        String ary[]= paramMap.get(key);
+        String[] ary = paramMap.get(key);
         if (ary != null && ary.length>0) {
             return Arrays.asList(ary);
         }
@@ -187,7 +188,7 @@ public class SrvParam {
     }
 
     public String getOptional(String key) {
-        String ary[]= paramMap.get(key);
+        String[] ary = paramMap.get(key);
         if (ary != null && ary.length>0) {
             return ary[0];
         }
@@ -196,8 +197,13 @@ public class SrvParam {
         }
     }
 
+    public String getOptional(String key, String defValue) {
+        String v= getOptional(key);
+        return (v==null) ? defValue : v;
+    }
+
     public float getOptionalFloat(String key, float defValue) {
-        String ary[]= paramMap.get(key);
+        String[] ary = paramMap.get(key);
         if (ary != null && ary.length>0) {
             try {
                 return Float.parseFloat(ary[0]);
@@ -211,7 +217,7 @@ public class SrvParam {
     }
 
     public int getOptionalInt(String key, int defValue) {
-        String ary[]= paramMap.get(key);
+        String[] ary = paramMap.get(key);
         if (ary != null && ary.length>0) {
             try {
                 return Integer.parseInt(ary[0]);
@@ -264,13 +270,89 @@ public class SrvParam {
         }
     }
 
+    public ImagePt[] getRequiredImagePtAry(String key) {
+        String v= getRequired(key);
+        try {
+            ImagePt[] ptAry= getImagePtAryFromJson(v);
+            if (ptAry==null) {
+                throw new IllegalArgumentException(
+                        "parameter could not be parsed as ImagePt: parameter: "+ key + ", value: "+v);
+            }
+            return ptAry;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "parameter could not be parsed as ImagePt: parameter: "+ key + ", value: "+v, e);
+        }
+    }
+
+    public static ImagePt[] getImagePtAryFromJson(String json) {
+        if (json==null) return null;
+        JsonHelper helper= JsonHelper.parse(json);
+        JSONArray list= helper.getValue(new JSONArray());
+        if (list==null || list.isEmpty()) return null;
+        ImagePt[] ptAry= new ImagePt[list.size()];
+        for(int i=0;(i<ptAry.length);i++) {
+            ptAry[i]= ImagePt.parse((String)list.get(i));
+            if (ptAry[i]==null) return null;
+        }
+        return ptAry;
+    }
+
+    public static WorldPt[] getWorldPtAryFromJson(String json) {
+        if (json==null) return null;
+        JsonHelper helper= JsonHelper.parse(json);
+        JSONArray list= helper.getValue(new JSONArray());
+        if (list==null || list.isEmpty()) return null;
+        WorldPt[] ptAry= new WorldPt[list.size()];
+        for(int i=0;(i<ptAry.length);i++) {
+            ptAry[i]= WorldPt.parse((String)list.get(i));
+            if (ptAry[i]==null) return null;
+        }
+        return ptAry;
+    }
+
+    public static double[] getDoubleAryFromJson(String json) {
+        if (json==null) return null;
+        JsonHelper helper= JsonHelper.parse(json);
+        JSONArray list= helper.getValue(new JSONArray());
+        if (list==null || list.isEmpty()) return null;
+        double[] dAry= new double[list.size()];
+        for(int i=0;(i<dAry.length);i++) {
+            try{
+                Object v= list.get(i);
+                switch (v) {
+                    case Double aDouble -> dAry[i] = aDouble;
+                    case Long l -> dAry[i] = l;
+                    case Integer integer -> dAry[i] = integer;
+                    case null, default -> dAry[i] = Double.NaN;
+                }
+            } catch (ClassCastException e) {
+                return null;
+            }
+        }
+        return dAry;
+    }
+
+    public static String[] getStringAryFromJson(String json) {
+        if (json==null) return null;
+        JsonHelper helper= JsonHelper.parse(json);
+        JSONArray list= helper.getValue(new JSONArray());
+        if (list==null || list.isEmpty()) return null;
+        String[] sAry= new String[list.size()];
+        for(int i=0;(i<sAry.length);i++) {
+            Object v= list.get(i);
+            sAry[i]= v!=null ? v.toString() : null;
+        }
+        return sAry;
+    }
+
     public boolean getOptionalBoolean(String key, boolean defval) {
         String v= getOptional(key);
-        return v==null ? defval : Boolean.valueOf(v);
+        return v==null ? defval : Boolean.parseBoolean(v);
     }
 
     public boolean getRequiredBoolean(String key) {
-        return Boolean.valueOf(getRequired(key));
+        return Boolean.parseBoolean(getRequired(key));
     }
 
     public WebPlotRequest getOptionalWebPlotRequest(String key) {
@@ -285,30 +367,34 @@ public class SrvParam {
 //  Table related convenience methods
 //====================================================================
     public TableServerRequest getTableServerRequest() {
-        return getTableServerRequest(ServerParams.REQUEST);
-    }
-
-    public TableServerRequest getTableServerRequest(String key) {
-        String reqString = getRequired(key);
+        String reqString = getRequired(ServerParams.REQUEST);
         return QueryUtil.convertToServerRequest(reqString);
     }
 
-    public TableUtil.Format getTableFormat() {
-        final String fileFormat = getOptional("file_format").toLowerCase();
-
-        Map<String, TableUtil.Format> allFormats = TableUtil.getAllFormats();
-
-        String formatInMap;
-        if (StringUtils.isEmpty(fileFormat)) {
-            formatInMap = "ipac";
-        } else {
-            Object[] formats = allFormats.keySet().stream()
-                    .filter((t) -> fileFormat.equals(t))
-                    .toArray();
-            formatInMap = (formats.length != 1) ? "ipac" : (String)formats[0];
+    public void insertJobId(String jobId) {
+        try {
+            TableServerRequest request = getTableServerRequest();
+            request.setJobId(jobId);                    // for future reference
+            request.setParam(FF_SESSION_ID, jobId);     // for caching
+            setParam(ServerParams.REQUEST, JsonTableUtil.toJsonTableRequest(request).toJSONString());
+        }catch (Exception e) {
+            // just ignore.  will generate error downstream.
         }
-
-        return allFormats.get(formatInMap);
     }
+
+    public DownloadRequest getDownloadRequest() {
+        String tableReqStr = getRequired(ServerParams.REQUEST);
+        String dlReqStr = getRequired(ServerParams.DOWNLOAD_REQUEST);
+        String selInfoStr = getOptional(ServerParams.SELECTION_INFO);
+        return QueryUtil.convertToDownloadRequest(dlReqStr, tableReqStr, selInfoStr);
+    }
+
+    public Format getTableFormat() {
+        final String fileFormat = getOptional("file_format", Format.IPACTABLE.name()).toLowerCase();
+
+        Format formatInMap = TableUtil.getAllFormats().get(fileFormat);
+        return formatInMap == null ? Format.IPACTABLE : formatInMap;
+    }
+
 }
 

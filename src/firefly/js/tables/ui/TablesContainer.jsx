@@ -2,14 +2,13 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {PureComponent} from 'react';
+import React, {useEffect} from 'react';
 import PropTypes from 'prop-types';
-import {isEmpty, get} from 'lodash';
+import {isEmpty, get, union} from 'lodash';
 
-import {flux} from '../../core/ReduxFlux.js';
 import * as TblUtil from '../TableUtil.js';
 import {TablePanel} from './TablePanel.jsx';
-import {TabsView, Tab} from '../../ui/panel/TabPanel.jsx';
+import {Tab, TabPanel} from '../../ui/panel/TabPanel.jsx';
 import {dispatchTableRemove, dispatchActiveTableChanged} from '../TablesCntlr.js';
 import {hashCode} from '../../util/WebUtil.js';
 
@@ -18,62 +17,30 @@ import {LO_VIEW, LO_MODE, dispatchSetLayoutMode, getExpandedMode} from '../../co
 import {CloseButton} from '../../ui/CloseButton.jsx';
 
 import {Logger} from '../../util/Logger.js';
+import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
+import {getTableUiById, getTableUiByTblId, getTblIdsByGroup} from '../TableUtil.js';
 
 const logger = Logger('Tables').tag('TablesContainer');
 
-// logic moved to SearchServicesJson.fetchTable because it was causing multiple render.
-function updateTitles(tables) {
-    if (isEmpty(tables)) return tables;
-    return Object.entries(tables).reduce( (obj,[key,{title,tbl_id, ...tableInfo}]) => {
-            obj[key]= {...tableInfo, tbl_id, title:(TblUtil.getTblById(tbl_id)?.tableMeta?.title ?? title)};
-            return obj;
-        },{});
-}
+export function TablesContainer(props) {
+    const {mode='both', closeable=true, tableOptions, style, expandedMode:xMode=false} = props;
+    const expandedMode = useStoreConnector(() => xMode || getExpandedMode() === LO_VIEW.tables);
+    const tbl_group = expandedMode && mode !== 'standard' ? TblUtil.getTblExpandedInfo().tbl_group : props.tbl_group;
 
-export class TablesContainer extends PureComponent {
-    constructor(props) {
-        super(props);
-        this.state = this.nextState(props);
-    }
+    const tables = useStoreConnector(() => TblUtil.getTableGroup(tbl_group)?.tables);
+    const active = useStoreConnector(() => TblUtil.getTableGroup(tbl_group)?.active);
+    useStoreConnector((lastTitles) => {// force a rerender if any title ui changes
+        const titles= getTblIdsByGroup().map( (tbl_id) => getTableUiByTblId(tbl_id)?.title);
+        if (!lastTitles) return titles;
+        return (union(titles,lastTitles).length === titles?.length) ? lastTitles : titles;
+    });
 
-    componentDidMount() {
-        logger.debug('mounted');
-        this.removeListener= flux.addListener(() => this.storeUpdate());
-    }
+    logger.debug('render... tbl_group: ' + tbl_group);
 
-    componentWillUnmount() {
-        logger.debug('unmounted');
-        this.removeListener && this.removeListener();
-        this.isUnmounted = true;
-    }
-
-    nextState(props) {
-        var {mode, tbl_group, closeable, tableOptions} = props;
-        const expandedMode = props.expandedMode || getExpandedMode() === LO_VIEW.tables;
-        if (expandedMode && mode !== 'standard') {
-            tbl_group = TblUtil.getTblExpandedInfo().tbl_group;
-        }
-        const {tables, layout, active} = TblUtil.getTableGroup(tbl_group) || {};
-
-        return {closeable, tbl_group, expandedMode, tables:updateTitles(tables), tableOptions, layout, active};
-    }
-
-    storeUpdate() {
-        if (!this.isUnmounted) {
-            this.setState(this.nextState(this.props));
-        }
-    }
-
-    render() {
-        const {closeable, tbl_group, expandedMode, tables, tableOptions, layout, active, style} = this.state;
-
-        logger.debug('render... tbl_group: ' + tbl_group);
-
-        if (expandedMode) {
-            return <ExpandedView {...{active, tables, tableOptions, layout, expandedMode, closeable, tbl_group}} />;
-        } else {
-            return isEmpty(tables) ? <div></div> : <StandardView {...{active, tables, tableOptions, expandedMode, tbl_group, style}} />;
-        }
+    if (expandedMode) {
+        return <ExpandedView {...{active, tables, tableOptions, expandedMode, closeable, tbl_group}} />;
+    } else {
+        return isEmpty(tables) ? <div/> : <StandardView {...{active, tables, tableOptions, expandedMode, tbl_group, style}} />;
     }
 }
 
@@ -82,12 +49,8 @@ TablesContainer.propTypes = {
     closeable: PropTypes.bool,
     tbl_group: PropTypes.string,
     style: PropTypes.object,
+    tableOptions: PropTypes.object,
     mode: PropTypes.oneOf(['expanded', 'standard', 'both'])
-};
-TablesContainer.defaultProps = {
-    expandedMode: false,
-    closeable: true,
-    mode: 'both'
 };
 
 
@@ -97,7 +60,7 @@ function ExpandedView(props) {
     return (
         <div style={{ display: 'flex', height: '100%', flexGrow: 1, flexDirection: 'column', overflow: 'hidden'}}>
             <div style={{marginBottom: 3}}>
-                {closeable && <CloseButton style={{display: 'inline-block', paddingLeft: 10}} onClick={() => dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none)}/>}
+                {closeable && <CloseButton style={{paddingLeft: 10}} onClick={() => dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none)}/>}
             </div>
             {!isEmpty(tables) &&
                 <div style={{position: 'relative', flexGrow: 1}}>
@@ -115,10 +78,7 @@ function ExpandedView(props) {
 function StandardView(props) {
     const {tables, tableOptions, expandedMode, active, tbl_group, style={}} = props;
 
-    var activeIdx = Object.keys(tables).findIndex( (tbl_ui_id) => get(tables,[tbl_ui_id,'tbl_id']) === active);
-    activeIdx = activeIdx === -1 ? 0 : activeIdx;
-    const onTabSelect = (idx) => {
-        const tbl_id = get(tables, [Object.keys(tables)[idx], 'tbl_id']);
+    const onTabSelect = (tbl_id) => {
         tbl_id && dispatchActiveTableChanged(tbl_id, tbl_group);
     };
     const keys = Object.keys(tables);
@@ -127,9 +87,10 @@ function StandardView(props) {
     } else {
         const uid = hashCode(keys.join());
         return (
-            <TabsView key={uid} style={{height: '100%', width: '100%', ...style}} defaultSelected={activeIdx} onTabSelect={onTabSelect} resizable={true}>
+            <TabPanel key={uid} sx={style} value={active}
+                      onTabSelect={onTabSelect} resizable={true} showOpenTabs={true}>
                 {tablesAsTab(tables, tableOptions, expandedMode)}
-            </TabsView>
+            </TabPanel>
         );
     }
 }
@@ -140,22 +101,24 @@ function SingleTable({table, tableOptions, expandedMode}) {
     options = Object.assign({}, options, tableOptions);
 
     return  (
-        <TablePanel key={tbl_id} border={true} {...{title, removable, tbl_id, tbl_ui_id, ...options, expandedMode}} />
+        <TablePanel key={tbl_id} {...{title, removable, tbl_id, tbl_ui_id, ...options, expandedMode}} />
     );
 }
 
 function tablesAsTab(tables, tableOptions, expandedMode) {
-
     return tables &&
         Object.keys(tables).map( (key) => {
-            var {tbl_id, title, removable, tbl_ui_id, options={}} = tables[key];
-            options = Object.assign({}, options, tableOptions);
+            const {tbl_id, removable, tbl_ui_id, options:inOptions={}, title:titleStr} = tables[key];
+            const {title:titleUI, color} = getTableUiById(tbl_ui_id) || {};
+            const options = {...inOptions, tableOptions};
             const onTabRemove = () => {
                 dispatchTableRemove(tbl_id);
             };
             return  (
-                <Tab key={tbl_ui_id} name={title} removable={removable} onTabRemove={onTabRemove}>
-                    <TablePanel key={tbl_id} border={false} showTitle={false} {...{tbl_id, tbl_ui_id, ...options, expandedMode}} />
+                <Tab key={tbl_id} id={tbl_id} label={titleUI} name={titleStr} colorSwatch={color} removable={removable} onTabRemove={onTabRemove}>
+                    <TablePanel key={tbl_id}
+                                slotProps={{ toolbar:{variant:'plain'}, root:{variant: 'plain'} }}
+                                {...{tbl_id, tbl_ui_id, ...options, expandedMode, showTitle: false}} />
                 </Tab>
             );
         } );

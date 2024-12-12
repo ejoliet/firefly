@@ -2,13 +2,13 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 import {logger} from '../../util/Logger.js';
-import ImagePlotCntlr, {makeUniqueRequestKey, IMAGE_PLOT_KEY, dispatchPlotMask, dispatchZoom, dispatchPlotMaskLazyLoad} from '../ImagePlotCntlr.js';
+import ImagePlotCntlr, {makeUniqueRequestKey, IMAGE_PLOT_KEY, dispatchPlotMaskLazyLoad} from '../ImagePlotCntlr.js';
 import {
     primePlot,
     getOverlayByPvAndId,
     getPlotViewById,
     getOverlayById,
-    hasLocalStretchByteData, canLoadStretchDataDirect
+    hasLocalStretchByteData,
 } from '../PlotViewUtil.js';
 import {PlotState} from '../PlotState.js';
 import {RequestType} from '../RequestType.js';
@@ -16,10 +16,10 @@ import {ZoomType} from '../ZoomType.js';
 import {clone} from '../../util/WebUtil.js';
 import {WebPlot} from '../WebPlot.js';
 import {callGetWebPlot} from '../../rpc/PlotServicesJson.js';
-import {populateFromHeader} from './PlotImageTask';
 import {dispatchAddActionWatcher} from '../../core/MasterSaga';
 import {isPlotIdInPvNewPlotInfoAry} from '../PlotViewUtil';
 import {changeLocalMaskColor} from 'firefly/visualize/rawData/RawDataOps.js';
+import {populateFromHeader} from 'firefly/visualize/task/CreateTaskUtil.js';
 
 const colorList= [
     '#FF0000','#00FF00', '#0000FF', '#91D33D',
@@ -197,7 +197,6 @@ function makeMaskRequest(fileKey, imageOverlayId, pv, maskValue, imageNumber, co
     if (state) {
         r.setZoomType(ZoomType.LEVEL);
         r.setInitialZoomLevel(plot.zoomFactor);
-        r.setFlipY(state.isFlippedY());
     }
     return r;
 }
@@ -212,10 +211,9 @@ function processMaskSuccessResponse(dispatcher, payload, result) {
 
         const plotState= PlotState.makePlotStateWithJson(PlotCreate[0].plotState);
         const imageOverlayId= plotState.getWebPlotRequest().getPlotId();
-        // const imageOverlayId= WebPlotRequest.parse(result.PlotCreateHeader.plotRequestSerialize).getPlotId();
 
-        var plot= WebPlot.makeWebPlotData(imageOverlayId, PlotCreate[0], {}, true);
-        if (canLoadStretchDataDirect(plot,true)) plot.tileData = undefined;
+        const plot= WebPlot.makeWebPlotData(imageOverlayId, undefined, PlotCreate[0], {}, true, undefined, plotState.getWebPlotRequest());
+        plot.tileData = undefined;
         const resultPayload= clone(payload, {plot});
         dispatcher({type: ImagePlotCntlr.PLOT_MASK, payload: resultPayload});
     }

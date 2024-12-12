@@ -3,17 +3,19 @@
  */
 
 import Enum from 'enum';
-import validator from 'validator';
 import DrawObj from './DrawObj';
 import DrawUtil from './DrawUtil';
-import VisUtil, {convertAngle, convert, lineCrossesRect, segmentIntersectRect} from '../VisUtil.js';
+import {
+    convertAngle, convertCelestial, lineCrossesRect, segmentIntersectRect, calculatePosition, distToLine, distanceToPolygon,
+    computeSimpleDistance, computeSimpleSlopeAngle
+} from '../VisUtil.js';
 import {TextLocation, Style, DEFAULT_FONT_SIZE} from './DrawingDef.js';
 import Point, {makeScreenPt, makeDevicePt, makeOffsetPt, makeWorldPt, makeImagePt, SimplePt} from '../Point.js';
 import {toRegion} from './ShapeToRegion.js';
 import {getDrawobjArea,  isScreenPtInRegion, makeHighlightShapeDataObj} from './ShapeHighlight.js';
 import CsysConverter from '../CsysConverter.js';
 import {has, isNil, get, set, isEmpty} from 'lodash';
-import {getPlotViewById, getCenterOfProjection} from '../PlotViewUtil.js';
+import {getPlotViewById, getCenterOfProjection, getFoV} from '../PlotViewUtil.js';
 import {visRoot} from '../ImagePlotCntlr.js';
 import {getPixScaleArcSec, getScreenPixScaleArcSec} from '../WebPlot.js';
 import {toRadians, toDegrees} from '../VisUtil.js';
@@ -21,7 +23,27 @@ import {rateOpacity, maximizeOpacity} from '../../util/Color.js';
 
 const FONT_FALLBACK= ',sans-serif';
 
-const UnitType= new Enum(['PIXEL','ARCSEC','IMAGE_PIXEL']);
+/**
+ * @typedef {Object} UnitType
+ * @type {Enum}
+ * @prop PIXEL
+ * @prop ARCSEC
+ * @prop IMAGE_PIXEL
+ */
+export const UnitType= new Enum(['PIXEL','ARCSEC','IMAGE_PIXEL']);
+/**
+ * @typedef {Object} ShapeType
+ * @type {Enum}
+ * @prop Line
+ * @prop Text
+ * @prop Circle
+ * @prop Rectangle
+ * @prop Ellipse
+ * @prop Annulus
+ * @prop BoxAnnulus
+ * @prop EllipseAnnulus
+ * @prop Polygon
+ */
 export const ShapeType= new Enum(['Line', 'Text','Circle', 'Rectangle', 'Ellipse',
                          'Annulus', 'BoxAnnulus', 'EllipseAnnulus', 'Polygon'], { ignoreCase: true });
 export const SHAPE_DATA_OBJ= 'ShapeDataObj';
@@ -44,7 +66,7 @@ export function makePoint(pt, plot, toType) {
 export function flipTextLocAroundY(plot, textLoc) {
     const pv = getPlotViewById(visRoot(), plot.plotId);
 
-    if (pv.flipY) {
+    if (pv?.flipY) {
         const locSet = [TextLocation.CIRCLE_NE, TextLocation.CIRCLE_NW,
             TextLocation.CIRCLE_SE, TextLocation.CIRCLE_SW,
             TextLocation.RECT_NE, TextLocation.RECT_NW,
@@ -54,7 +76,7 @@ export function flipTextLocAroundY(plot, textLoc) {
             TextLocation.REGION_NE, TextLocation.REGION_NW,
             TextLocation.REGION_SE, TextLocation.REGION_SW];
 
-        var idx = locSet.findIndex((loc) => (loc === textLoc));
+        let idx = locSet.findIndex((loc) => (loc === textLoc));
 
         if (idx >= 0) {
             idx = idx%2 ? idx - 1 : idx + 1;
@@ -67,7 +89,7 @@ export function flipTextLocAroundY(plot, textLoc) {
 export function getPVRotateAngle(plot, angle) {
      const pv = getPlotViewById(visRoot(), plot.plotId);
 
-     var angleInRadian = pv.rotation ? convertAngle('deg', 'radian', pv.rotation) : 0.0;
+     let angleInRadian = pv.rotation ? convertAngle('deg', 'radian', pv.rotation) : 0.0;
      if (pv.flipY) {
          angleInRadian = Math.PI - (angle - angleInRadian);
      } else {
@@ -223,6 +245,7 @@ function makePolygon(ptAry, drawObjAry=null) {
  *  @param   pt
  *  @param  text
  *  @param  rotationAngle - the rotation angle + 'deg'
+ *  @param isLonLine
  * @return {*}
  */
 
@@ -236,15 +259,15 @@ function makeTextWithOffset(textOffset, pt, text) {
 
 
 function makeDrawParams(drawObj,def={}) {
-    var style= drawObj.style || def.style || Style.STANDARD;
-    var lineWidth= drawObj.lineWidth || def.lineWidth || DEF_WIDTH;
-    var textLoc= drawObj.textLoc || def.textLoc || TextLocation.DEFAULT;
-    var unitType= drawObj.unitType || def.unitType || UnitType.PIXEL;
-    var fontName= drawObj.fontName || def.fontName || 'helvetica';
-    var fontSize= drawObj.fontSize || def.fontSize || DEFAULT_FONT_SIZE;
-    var fontWeight= drawObj.fontWeight || def.fontWeight || 'normal';
-    var fontStyle= drawObj.fontStyle || def.fontStyle || 'normal';
-    var rotationAngle = drawObj.rotationAngle||undefined;
+    const style= drawObj.style || def.style || Style.STANDARD;
+    const lineWidth= drawObj.lineWidth || def.lineWidth || DEF_WIDTH;
+    const textLoc= drawObj.textLoc || def.textLoc || TextLocation.DEFAULT;
+    const unitType= drawObj.unitType || def.unitType || UnitType.PIXEL;
+    const fontName= drawObj.fontName || def.fontName || 'helvetica';
+    const fontSize= drawObj.fontSize || def.fontSize || DEFAULT_FONT_SIZE;
+    const fontWeight= drawObj.fontWeight || def.fontWeight || 'normal';
+    const fontStyle= drawObj.fontStyle || def.fontStyle || 'normal';
+    const rotationAngle = drawObj.rotationAngle||undefined;
 
     return {
         color: DrawUtil.getColor(drawObj.color,def.color),
@@ -304,8 +327,8 @@ const draw=  {
     getScreenDist(drawObj,plot, pt) {
         let dist = -1;
 
-        if (drawObj.sType === ShapeType.Line ) return VisUtil.distToLine(drawObj.pts, plot, pt);
-        if (drawObj.sType === ShapeType.Polygon) return VisUtil.distanceToPolygon(drawObj.pts, plot, pt);
+        if (drawObj.sType === ShapeType.Line ) return distToLine(drawObj.pts, plot, pt);
+        if (drawObj.sType === ShapeType.Polygon) return distanceToPolygon(drawObj.pts, plot, pt);
         if (drawObj.sType === ShapeType.Circle) return distanceToCircle(drawObj, plot, pt);
         if (drawObj.sType === ShapeType.Rectangle) return distanceToRectangle(drawObj, plot, pt);
 
@@ -409,7 +432,7 @@ function getRectangleCenterScreenPt(drawObj,plot,unitType) {
  * @param width  in arcsec
  * @param height in arcsec
  * @param {CysConverter} plot
- * @returns {{upperLeft: *, upperRight: *, lowerLeft: *, lowerRight: *}} corners in world coordinate
+ * @returns {{upperLeft: *, upperRight: *, lowerLeft: *, lowerRight: *, center:WorldPt}} corners in world coordinate
  */
 function getRectCorners(pt, isCenter, width, height, plot) {
     let wpt = plot.getWorldCoords(pt);
@@ -420,15 +443,15 @@ function getRectCorners(pt, isCenter, width, height, plot) {
     if (!wpt) return false;
     // compute 4 corners in J2000
     if (!isCenter) {
-        const posCenter = VisUtil.calculatePosition(wpt, +w, -h); // go east and south to find the center
+        const posCenter = calculatePosition(wpt, +w, -h); // go east and south to find the center
 
         wpt = makeWorldPt(posCenter.getLon(), posCenter.getLat());
     }
 
-    const posLeft = VisUtil.calculatePosition(wpt, +w, 0.0); // go east
-    const posRight = VisUtil.calculatePosition(wpt, -w, 0.0);
-    const posUp = VisUtil.calculatePosition(wpt, 0.0, +h);   // go north
-    const posDown = VisUtil.calculatePosition(wpt, 0.0, -h);
+    const posLeft = calculatePosition(wpt, +w, 0.0); // go east
+    const posRight = calculatePosition(wpt, -w, 0.0);
+    const posUp = calculatePosition(wpt, 0.0, +h);   // go north
+    const posDown = calculatePosition(wpt, 0.0, -h);
 
     const upperLeft = makeWorldPt(posLeft.getLon(), posUp.getLat());
     const upperRight = makeWorldPt(posRight.getLon(), posUp.getLat());
@@ -567,7 +590,7 @@ export function drawShape(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
             drawLine(drawObj, ctx,  plot, drawParams, onlyAddToPath);
             break;
         case ShapeType.Circle:
-            drawCircle(drawObj, ctx,  plot, drawParams, onlyAddToPath);
+            drawCircle(drawObj, ctx,  plot, drawParams);
             break;
         case ShapeType.Rectangle:
             drawRectangle(drawObj, ctx,  plot, drawParams, onlyAddToPath);
@@ -586,17 +609,14 @@ export function drawShape(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
 }
 
 function boxIntersectRect(pts, plot, w, h, isCenter, sRect, renderOptions) {
-    let corners_rect = [];     // corners in device coordinate
+    const corners_rect = [];     // corners in device coordinate
 
     if (isCenter) {
         if (!sRect) return false;
 
         for (let i = 0; i < 4; i++) {
-            let c_pt = plot.getDeviceCoords(sRect.corners[i]);
-
-            if (!c_pt) {
-                return false;
-            }
+            const c_pt = plot.getDeviceCoords(sRect.corners[i]);
+            if (!c_pt) return false;
             corners_rect.push(c_pt);
         }
     } else {
@@ -607,7 +627,7 @@ function boxIntersectRect(pts, plot, w, h, isCenter, sRect, renderOptions) {
         const t_y = translation? translation.y : 0;
 
         for (let i = 0; i < 0; i++) {
-            let c_pt = plot.getDeviceCoords(makeDevicePt(corner_loc[i][0] * w + pt.x + t_x,
+            const c_pt = plot.getDeviceCoords(makeDevicePt(corner_loc[i][0] * w + pt.x + t_x,
                 corner_loc[i][1] * h + pt.y + t_y));
 
             if (!c_pt) {
@@ -762,7 +782,7 @@ function drawLine(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
     }
 
     if ([Style.HANDLED, Style.STARTHANDLED, Style.ENDHANDLED].includes(style)) {
-        const rAngle = VisUtil.computeSimpleSlopeAngle(devPt0, devPt1);
+        const rAngle = computeSimpleSlopeAngle(devPt0, devPt1);
         const rOptions = {};
 
         rOptions.rotAngle = rAngle;
@@ -796,8 +816,6 @@ function drawCircle(drawObj, ctx,  plot, drawParams) {
     let screenRadius= 1;
     let cenDevPt;
     let inView = false;
-
-    const {width: vWidth, height: vHeight} = plot.viewDim;
 
     if (pts.length===1 && !isNil(radius)) {
         switch (unitType) {
@@ -862,7 +880,7 @@ export function drawText(drawObj, ctx, plot, inPt, drawParams) {
            textAngle=0, offsetOnScreen=false}= drawObj;
     let { textAlign='start'} = drawObj;
     //the angle of the grid line
-    let angle=0;
+    let angle;
     let pvAngle=undefined;
 
     if (rotationAngle){
@@ -926,7 +944,7 @@ export function drawText(drawObj, ctx, plot, inPt, drawParams) {
     const color = drawParams.color || drawObj.color || 'black';
 
     let textHeight= 12;
-    if (validator.isFloat(fontSize.substring(0, fontSize.length - 2))) {
+    if (!isNaN(parseFloat(fontSize.substring(0, fontSize.length - 2)))) {
         textHeight = parseFloat(fontSize.substring(0, fontSize.length - 2)) * 14 / 10;
     }
 
@@ -1107,7 +1125,7 @@ function drawRectangle(drawObj, ctx, plot, drawParams, onlyAddToPath) {
                 centerPt = makeDevicePt(x+w/2, y+h/2);
             }
 
-            if (style === Style.FILL) {
+            if ((style === Style.FILL || style === Style.DESTINATION_OUTLINE)) {
                 DrawUtil.fillRec(ctx, color, x, y, w, h, renderOptions, color);
             } else {
                 if (!onlyAddToPath || style === Style.HANDLED) {
@@ -1140,7 +1158,7 @@ function drawRectangle(drawObj, ctx, plot, drawParams, onlyAddToPath) {
 
         inView = true;
 
-        if (style === Style.FILL) {
+        if ((style === Style.FILL || style === Style.DESTINATION_OUTLINE)) {
             DrawUtil.fillRec(ctx, color, x, y, w, h, renderOptions, color);
         } else {
             if (!onlyAddToPath || style === Style.HANDLED) {
@@ -1280,7 +1298,7 @@ function drawCompositeObject(drawObj, ctx, plot, drawParams, onlyAddToPath) {
  */
 function getWorldPtByAngleFromProjectCenter(pt, plot, angleFromCenter) {
     const pt1 = getCenterOfProjection(plot);
-    const pt2 = convert(pt, plot.projection.coordSys);
+    const pt2 = convertCelestial(pt, plot.projection.coordSys);
 
     /* world point to Cartesian coordinate */
     const WorldPtToxyz = (wpt) => {
@@ -1317,7 +1335,7 @@ function getWorldPtByAngleFromProjectCenter(pt, plot, angleFromCenter) {
             if (ra < 0) ra += 360;
         }
 
-        return convert(makeWorldPt(ra, dec, plot.projection.coordSys));
+        return convertCelestial(makeWorldPt(ra, dec, plot.projection.coordSys));
     };
 
     // get norm in cartesian coordinate
@@ -1385,7 +1403,7 @@ function getEdgePtOnGreatCircleFromCenterTo(pt, plot) {
 function drawPolygon(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
     const {style, color, lineWidth=1} = drawParams;
 
-    if (style !== Style.FILL && !isEmpty(drawObj.drawObjAry)) {
+    if ((style !== Style.FILL && style!==Style.DESTINATION_OUTLINE) && !isEmpty(drawObj.drawObjAry)) {
         drawCompositeObject(drawObj, ctx,  plot, drawParams, onlyAddToPath);
         return;
     }
@@ -1400,7 +1418,7 @@ function drawPolygon(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
             }
          }
 
-        if (style !== Style.FILL) return devPt;
+        if (style !== Style.FILL || style !== Style.DESTINATION_OUTLINE) return devPt;
 
         const {x,y}= devPt;
         const {width,height}= plot.viewDim;
@@ -1414,7 +1432,22 @@ function drawPolygon(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
     };
 
     const isPolygonInDisplay = (pts, style, plot) => {
-        const devPts = pts.map((onePt) => plot.getDeviceCoords(onePt));
+        let wrapping= false;
+        const checkWrap= Boolean(plot.projection.isWrappingProjection()) && getFoV(plot) >200;
+        let devPts = pts.map((onePt,idx) => {
+            const dPt= plot.getDeviceCoords(onePt);
+            if (idx===0 || !dPt) return dPt;
+            if (checkWrap && plot.coordsWrap(onePt, pts[idx-1])) {
+                wrapping= true;
+                return undefined;
+            }
+            return dPt;
+        });
+
+        if (checkWrap) {
+            devPts= devPts.filter( (pt) => pt);
+        }
+
         const {width, height} = plot.viewDim;
 
         // detect if none of the points are visible
@@ -1436,18 +1469,18 @@ function drawPolygon(drawObj, ctx,  plot, drawParams, onlyAddToPath) {
         });
 
 
-        return {devPts:newPts, inDisplay};
+        return {devPts:newPts, inDisplay, wrapping};
     };
 
     const {pts, renderOptions}= drawObj;
 
     if (pts) {
 
-        const {devPts, inDisplay} = isPolygonInDisplay(pts, style, plot);  // check if polygon is out of display
+        const {devPts, inDisplay, wrapping} = isPolygonInDisplay(pts, style, plot);  // check if polygon is out of display
 
-        if (inDisplay <= 0) return;   // not visible
+        if (inDisplay <= 0 || wrapping) return;   // not visible
 
-        if ((style === Style.FILL)) {
+        if ((style === Style.FILL || style === Style.DESTINATION_OUTLINE)) {
             if (inDisplay < devPts.length) {
                 console.log('less visible');     // test if this may happen
             }
@@ -1585,7 +1618,7 @@ function makeTextLocationLine(plot, textLoc, fontSize, inPt0, inPt1, tIndex, dra
 
     if (textLoc===TextLocation.LINE_MID_POINT || textLoc===TextLocation.LINE_MID_POINT_OR_BOTTOM ||
             textLoc===TextLocation.LINE_MID_POINT_OR_TOP) {
-        const dist= VisUtil.computeSimpleDistance(pt1,pt0);
+        const dist= computeSimpleDistance(pt1,pt0);
         if (textLoc===TextLocation.LINE_MID_POINT_OR_BOTTOM && dist<100) {
             textLoc= TextLocation.LINE_BOTTOM;
         }
@@ -1610,7 +1643,7 @@ function makeTextLocationLine(plot, textLoc, fontSize, inPt0, inPt1, tIndex, dra
             break;
         case TextLocation.LINE_TOP_STACK:    // stack multiple text lines at top side of the line
                                              // calculate rotation angle on screen coordinate domain
-            const slope = VisUtil.computeSimpleSlopeAngle(pt0, pt1);
+            const slope = computeSimpleSlopeAngle(pt0, pt1);
             const ratio = [1/5, 4/5];
             let   offset = height * (tIndex + 0.5);
             const r = -1;
@@ -1921,7 +1954,7 @@ function isAreaInView(objArea, plot) {
 export function fontHeight (fontSize) {
     let height = 12;
 
-    if (validator.isFloat(fontSize.substring(0, fontSize.length-2))) {
+    if (!isNaN(parseFloat(fontSize.substring(0, fontSize.length-2)))) {
         height = parseFloat(fontSize.substring(0, fontSize.length-2)) * 14/10 + 0.5;
     }
     return height;
@@ -2033,9 +2066,15 @@ export function distanceToCircle(drawObj, cc, pt) {
 
     if (radius) {
         radius = cc ? lengthToScreenPixel(radius, cc, unitType) : radius;
+        const devIn= cc.getDeviceCoords(pt);
+        const devC= cc.getDeviceCoords(drawObj.pts[0]);
+        return computeSimpleDistance(devIn,devC);
+    }
+    else {
+         return 1;
     }
 
-    return VisUtil.distanceToCircle(radius, drawObj.pts, cc, pt);
+    // return distanceToCircle(radius, drawObj.pts, cc, pt);
 }
 
 export function distanceToRectangle(drawObj, cc, pt) {
@@ -2073,7 +2112,7 @@ export function distanceToRectangle(drawObj, cc, pt) {
 
     return corners.reduce((prev, pt, idx) => {
         const nIdx = (idx+1)%4;
-        const d = VisUtil.distToLine([corners[idx], corners[nIdx]], cc, spt);
+        const d = distToLine([corners[idx], corners[nIdx]], cc, spt);
 
         if (d < prev) {
             prev = d;

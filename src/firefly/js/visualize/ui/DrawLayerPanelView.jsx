@@ -2,36 +2,25 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React from 'react';
+import {Box, Button, Stack, Tooltip, Typography} from '@mui/joy';
+import {HelpIcon} from 'firefly/ui/HelpIcon.jsx';
+import {toRGB} from 'firefly/util/Color.js';
+import {groupBy, padStart} from 'lodash';
 import PropTypes from 'prop-types';
-import {padStart, groupBy, get} from 'lodash';
-import {isDrawLayerVisible, getAllDrawLayersForPlot,
-    getLayerTitle, getDrawLayersByDisplayGroup}  from '../PlotViewUtil.js';
-import {operateOnOverlayPlotViewsThatMatch, enableRelatedDataLayer,
-               findUnactivatedRelatedData, setMaskVisible } from '../RelatedDataUtil.js';
-import {DrawLayerItemView} from './DrawLayerItemView.jsx';
-import {ColorChangeType} from '../draw/DrawLayer.js';
-import {GroupingScope} from '../DrawLayerCntlr.js';
-import {clone} from '../../util/WebUtil.js';
-import {dispatchChangeDrawingDef, dispatchChangeVisibility,
-        dispatchDetachLayerFromPlot, getDlAry} from '../DrawLayerCntlr.js';
-import {visRoot, dispatchOverlayPlotChangeAttributes, dispatchDeleteOverlayPlot} from '../ImagePlotCntlr.js';
+import React from 'react';
+import ImageRoot from '../../drawingLayers/ImageRoot.js';
 import {showColorPickerDialog} from '../../ui/ColorPicker.jsx';
 import {showPointShapeSizePickerDialog} from '../../ui/PointShapeSizePicker.jsx';
+import {clone} from '../../util/WebUtil.js';
+import {dispatchChangeVisibility, dispatchDetachLayerFromPlot, GroupingScope} from '../DrawLayerCntlr.js';
+import {dispatchDeleteOverlayPlot, dispatchOverlayPlotChangeAttributes, visRoot} from '../ImagePlotCntlr.js';
 import {getPlotViewById} from '../PlotViewUtil';
-import ImageRoot from '../../drawingLayers/ImageRoot.js';
-
-
-
-
-const dlPanelViewStyle= {
-    width:'calc(100% - 12px)',
-    height:'100%',
-    padding: 6,
-    position: 'relative',
-    overflow:'hidden'
-};
-
+import {getAllDrawLayersForPlot, getHDU, getLayerTitle, isDrawLayerVisible, primePlot} from '../PlotViewUtil.js';
+import {
+    enableRelatedDataLayer, findUnactivatedRelatedData, operateOnOverlayPlotViewsThatMatch, setMaskVisible
+} from '../RelatedDataUtil.js';
+import {DrawLayerItemView} from './DrawLayerItemView.jsx';
+import {modifyDrawColor} from './DrawLayerUIComponents';
 
 
 export function DrawLayerPanelView({dlAry, plotView, mouseOverMaskValue, drawLayerFactory}) {
@@ -45,13 +34,13 @@ export function DrawLayerPanelView({dlAry, plotView, mouseOverMaskValue, drawLay
     },20);
 
     return (
-        <div style={dlPanelViewStyle}>
-            <div style={{overflow:'auto', maxHeight:500}}>
+        <Stack direction='column' p={1}>
+            <Box sx={{overflow:'auto', maxHeight:500}}>
                 {makeImageLayerItemAry(plotView,maxTitleChars,layers.length===0, mouseOverMaskValue)}
                 {makeDrawLayerItemAry(layers,plotView,maxTitleChars, drawLayerFactory)}
-            </div>
+            </Box>
             {makePermInfo(plotView,layers)}
-        </div>
+        </Stack>
     );
 }
 
@@ -72,36 +61,29 @@ function getUIComponent(dl,pv, factory, maxTitleChars) {
 
 function makePermInfo(pv,layers) {
     return (
-        <div style={{minWidth: 260, borderTop:'1px solid rgba(0, 0, 0, 0.298039)', paddingTop: 5, margin: '4px 5px 0 5px'}}>
-            {makeAddRelatedDataAry(pv)}
-            <div style={{paddingTop:5}}>
-                <button style={{display : 'inline-block'}} type='button'
-                        className='button'
-                        onClick={() => showAllLayers(layers,pv,true)}>
-                    {'Show All'}
-                </button>
-                <button style={{display : 'inline-block'}} type='button'
-                        className='button'
-                        onClick={() => showAllLayers(layers,pv,false)}>
-                    {'Hide All'}
-                </button>
-
-            </div>
-        </div>
+        <Stack {...{direction:'row', justifyContent: 'space-between', minWidth: 260, alignItems:'center', mt:1}}>
+            <Stack {...{direction:'row', spacing:1, ml:.4}}>
+                {makeAddRelatedDataAry(pv)}
+                <Tooltip  title='Show all drawing layers'>
+                    <Button onClick={() => showAllLayers(layers,pv,true)}> Show All </Button>
+                </Tooltip>
+                <Tooltip  title='Hide all drawing layers'>
+                    <Button onClick={() => showAllLayers(layers,pv,false)}> Hide All </Button>
+                </Tooltip>
+            </Stack>
+            <HelpIcon helpId={'visualization.layerPanel'}/>
+        </Stack>
     );
 }
 
 function showAllLayers(layers, pv, visible) {
 
+    const plot= primePlot(pv);
     pv.overlayPlotViews.forEach( (opv) => {
-        setMaskVisibleInGroup(opv,visible);
+        const match= !opv.plot || (opv.plot?.dataWidth===plot?.dataWidth && opv.plot?.dataHeight===plot?.dataHeight);
+        if (match) setMaskVisibleInGroup(opv,visible);
     });
-
-
-    let overlayLayers = layers.filter( (l)=>
-       l.drawLayerTypeId!==ImageRoot.TYPE_ID
-    );
-
+    const overlayLayers = layers.filter( (l)=> l.drawLayerTypeId!==ImageRoot.TYPE_ID );
     return overlayLayers.forEach( (dl) => {
         changeVisible(dl, visible,pv.plotId );
     });
@@ -113,20 +95,18 @@ function makeAddRelatedDataAry(pv) {
 
     const relatedData= findUnactivatedRelatedData(pv);
 
-    return relatedData.map( (d,idx) => {
-        return (
-            <div key={`button- ${idx}`}>
-                <div style={{display : 'inline-block', width: 150, marginRight:10, fontStyle: 'italic', textAlign:'right'}}>
-                    {`${d.desc} Layer found :`}
-                </div>
-                <button style={{display : 'inline-block'}} type='button'
-                        className='button'
-                        onClick={() => enableRelatedDataLayer(visRoot(), pv, d)}>
-                    {'Enable'}
-                </button>
-            </div>
-        );
-    });
+    return relatedData
+        .filter( (d) => d.primaryHduIdx===getHDU(primePlot(pv)))
+        .map( (d,idx) => {
+            return (
+                <Stack {...{spacing:1, direction:'row', pr: 2, alignItems:'center', key:idx+''}}>
+                    <Typography {...{color:'warning', mr:.5}}>
+                        {`${d.desc} Layer found :`}
+                    </Typography>
+                    <Button color='warning' onClick={() => enableRelatedDataLayer(visRoot(), pv, d)}> Enable</Button>
+                </Stack>
+            );
+        });
 }
 
 
@@ -145,33 +125,35 @@ function makeDrawLayerItemAry(layers,pv, maxTitleChars, factory) {
     const sortedGroupedObj= groupBy([...sortedLayer], 'layersPanelLayoutId' );
     const sortedGroupedLayer= Object.values(sortedGroupedObj).flat(1);
 
-    return sortedGroupedLayer.map( (l,idx) =>
-        <DrawLayerItemView key={l.drawLayerId}
-                           maxTitleChars={maxTitleChars}
-                           helpLine={l.helpLine}
-                           lastItem={idx===last}
-                           canUserDelete={l.canUserDelete}
-                           canUserHide={l.canUserHide}
-                           canUserChangeColor={l.canUserChangeColor}
-                           isPointData={l.isPointData}
-                           drawingDef={l.drawingDef}
-                           color={l.drawingDef.color}
-                           packWithNext= {idx!==last && l.layersPanelLayoutId && l.layersPanelLayoutId===get(sortedGroupedLayer[idx+1],'layersPanelLayoutId')}
-                           autoFormatTitle={l.autoFormatTitle}
-                           title= {getLayerTitle(pv.plotId,l)}
-                           visible={isDrawLayerVisible(l,pv.plotId)}
-                           modifyColor={() => modifyColor(l,pv.plotId)}
-                           modifyShape={() => modifyShape(l,pv.plotId)}
-                           deleteLayer={() => deleteLayer(l,pv.plotId)}
-                           changeVisible={() => flipVisible(l,pv.plotId)}
-                           UIComponent={getUIComponent(l,pv,factory, maxTitleChars)}
-    />);
+    return sortedGroupedLayer.map( (l,idx) => (
+        <DrawLayerItemView {...{
+            key:l.drawLayerId,
+            maxTitleChars,
+            helpLine: l.helpLine,
+            lastItem: idx===last,
+            canUserDelete: l.canUserDelete,
+            canUserHide: l.canUserHide,
+            canUserChangeColor:l.canUserChangeColor,
+            isPointData: l.isPointData,
+            drawingDef: l.drawingDef,
+            color: l.drawingDef.color,
+            packWithNext: idx!==last && l.layersPanelLayoutId && l.layersPanelLayoutId===sortedGroupedLayer?.[idx+1]?.layersPanelLayoutId,
+            autoFormatTitle: l.autoFormatTitle,
+            title: getLayerTitle(pv.plotId,l),
+            visible: isDrawLayerVisible(l,pv.plotId),
+            modifyColor: () => modifyDrawColor(l,pv.plotId,l.tbl_id),
+            modifyShape: () => modifyShape(l,pv.plotId),
+            deleteLayer: () => deleteLayer(l,pv.plotId),
+            changeVisible: () => flipVisible(l,pv.plotId),
+            UIComponent: getUIComponent(l,pv,factory, maxTitleChars) }}
+        />));
 }
 
 function makeImageLayerItemAry(pv, maxTitleChars, hasLast, mouseOverMaskValue) {
     if (!pv.overlayPlotViews) return [];
+    const {dataWidth=0,dataHeight=0}= primePlot(pv)??{};
     const last= pv.overlayPlotViews.length-1;
-    const retAry= pv.overlayPlotViews.map( (opv,idx) =>
+    const retAry= pv.overlayPlotViews.map( (opv,idx) => (
         <DrawLayerItemView key={'MaskControl-'+idx}
                            maxTitleChars={maxTitleChars}
                            helpLine={''}
@@ -179,20 +161,22 @@ function makeImageLayerItemAry(pv, maxTitleChars, hasLast, mouseOverMaskValue) {
                            canUserDelete={true}
                            canUserChangeColor={true}
                            isPointData={false}
+                           packWithNext= {idx!==last}
                            color={opv.colorAttributes.color}
                            autoFormatTitle={true}
-                           title= {makeOverlayTitle(opv, (mouseOverMaskValue & opv.maskValue)) }
+                           title= {makeOverlayTitle(opv, Boolean(mouseOverMaskValue & opv.maskValue), dataWidth, dataHeight) }
                            visible={opv.visible}
                            modifyColor={() => modifyMaskColor(opv)}
                            deleteLayer={() => deleteMaskLayer(opv)}
                            changeVisible={() => setMaskVisibleInGroup(opv, !opv.visible)}
                            UIComponent={null}
-    />);
+    />));
     return retAry;
 }
 
 
-function makeOverlayTitle(opv,mouseOn) {
+function makeOverlayTitle(opv,mouseOn, dataWidth, dataHeight) {
+    const match= !opv.plot || (opv.plot?.dataWidth===dataWidth && opv.plot?.dataHeight===dataHeight);
     let {title, maskNumber}= opv;
     const { colorAttributes:{color}, plot, visible, uiCanAugmentTitle}= opv;
     maskNumber= Number(maskNumber);
@@ -210,41 +194,26 @@ function makeOverlayTitle(opv,mouseOn) {
     if (!plot && visible) {
         title= `${title} - loading`;
     }
-
-    mouseOn= Boolean(mouseOn);
+    if (!match) title= `Disabled non-matching: ${title}`;
 
     return (
-        <div style={{color : mouseOn ? color : 'inherit'}}>{title}
+        <div style={{color : match && mouseOn ? color : 'inherit'}}>{title}
             {mouseOn && <span style={{fontStyle: 'italic'}}> over</span>}
         </div>
     );
 }
 
 
-function modifyColor(dl,plotId) {
-    showColorPickerDialog(dl.drawingDef.color, dl.canUserChangeColor===ColorChangeType.STATIC, false,
-        (ev) => {
-            const {r,g,b,a}= ev.rgb;
-            const rgbStr= `rgba(${r},${g},${b},${a})`;
-            dl = getDrawLayersByDisplayGroup(getDlAry(), dl.displayGroupId);
-            dispatchChangeDrawingDef(dl.displayGroupId, Object.assign({},dl.drawingDef,{color:rgbStr}),plotId, dl.titleMatching);
-        }, dl.drawLayerId);
-}
-
 const hexC= (v) =>  padStart(v.toString(16),2,'0');
 
 
 function modifyMaskColor(opv) {
 
-    const {color}= opv.colorAttributes;
-    const rV= parseInt(color.substring(1,3),16);
-    const gV= parseInt(color.substring(3,5),16);
-    const bV= parseInt(color.substring(5,7),16);
-
-
+    const [rV,gV,bV]= toRGB(opv.colorAttributes.color);
     const rgbStr= `rgba(${rV},${gV},${bV},${opv.opacity})`;
     showColorPickerDialog(rgbStr, false, true,
         (ev, okPushed) => {
+            if (!ev?.rgb) return;
             const {r,g,b,a}= ev.rgb;
             const newColor= `#${hexC(r)}${hexC(g)}${hexC(b)}`;
 
@@ -265,7 +234,7 @@ function modifyShape(dl, plotId) {
 }
 
 function deleteLayer(dl,plotId) {
-    dispatchDetachLayerFromPlot(dl.displayGroupId,plotId,true, dl.destroyWhenAllDetached);
+    dispatchDetachLayerFromPlot(dl.displayGroupId,plotId,true, dl.destroyWhenAllDetached||dl.destroyWhenAllUserDetached);
 }
 
 function deleteMaskLayer(opv) {
@@ -277,7 +246,7 @@ function deleteMaskLayer(opv) {
 
 /**
  *
- * @param {DrawingLayer} dl
+ * @param {DrawLayer} dl
  * @param {string} plotId
  */
 function flipVisible(dl, plotId) {
@@ -287,7 +256,7 @@ function flipVisible(dl, plotId) {
 
 /**
  *
- * @param {DrawingLayer} dl
+ * @param {DrawLayer} dl
  * @param {boolean} visible
  * @param {string} plotId
  */

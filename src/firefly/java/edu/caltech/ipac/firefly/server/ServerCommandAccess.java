@@ -2,7 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.firefly.server;
-/**
+/*
  * User: roby
  * Date: 1/4/12
  * Time: 2:46 PM
@@ -15,7 +15,9 @@ import edu.caltech.ipac.firefly.server.rpc.PushCommands;
 import edu.caltech.ipac.firefly.server.rpc.ResolveServerCommands;
 import edu.caltech.ipac.firefly.server.rpc.VisServerCommands;
 import edu.caltech.ipac.firefly.server.servlets.HttpServCommands;
+import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.server.ws.WsServerCommands;
+import edu.caltech.ipac.firefly.core.background.Job;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -39,20 +41,16 @@ public class ServerCommandAccess {
     }
 
     private static void initCommand() {
-        _cmdMap.put(ServerParams.FILE_FLUX_JSON, new VisServerCommands.FileFluxCmdJson());
-        _cmdMap.put(ServerParams.CREATE_PLOT,  new VisServerCommands.GetWebPlotCmd());
-        _cmdMap.put(ServerParams.CREATE_PLOT_GROUP,  new VisServerCommands.GetWebPlotGroupCmd());
-        _cmdMap.put(ServerParams.ZOOM,         new VisServerCommands.ZoomCmd());
-        _cmdMap.put(ServerParams.STRETCH,      new VisServerCommands.StretchCmd());
-        _cmdMap.put(ServerParams.CHANGE_COLOR, new VisServerCommands.ChangeColor());
-        _cmdMap.put(ServerParams.CROP,         new VisServerCommands.Crop());
-        _cmdMap.put(ServerParams.HISTOGRAM,    new VisServerCommands.ColorHistogram());
-        _cmdMap.put(ServerParams.STAT,         new VisServerCommands.AreaStat());
-        _cmdMap.put(ServerParams.GET_FLOAT_DATA,  new VisServerCommands.FloatAryCmd());
-        _cmdMap.put(ServerParams.GET_BYTE_DATA,  new VisServerCommands.ByteAryCmd());
-
-        _cmdMap.put(ServerParams.DS9_REGION,   new VisServerCommands.DS9Region());
-        _cmdMap.put(ServerParams.SAVE_DS9_REGION,      new VisServerCommands.SaveDS9Region());
+        _cmdMap.put(ServerParams.FILE_FLUX_JSON,        new VisServerCommands.FileFluxCmdJson());
+        _cmdMap.put(ServerParams.CREATE_PLOT,           new VisServerCommands.GetWebPlotCmd());
+        _cmdMap.put(ServerParams.CREATE_PLOT_GROUP,     new VisServerCommands.GetWebPlotGroupCmd());
+        _cmdMap.put(ServerParams.CROP,                  new VisServerCommands.Crop());
+        _cmdMap.put(ServerParams.HISTOGRAM,             new VisServerCommands.ColorHistogram());
+        _cmdMap.put(ServerParams.STAT,                  new VisServerCommands.AreaStat());
+        _cmdMap.put(ServerParams.GET_BYTE_DATA,         new VisServerCommands.ByteAryCmd());
+        _cmdMap.put(ServerParams.FITS_EXTRACTION,       new VisServerCommands.ExtractionCmd());
+        _cmdMap.put(ServerParams.DS9_REGION,            new VisServerCommands.DS9Region());
+        _cmdMap.put(ServerParams.SAVE_DS9_REGION,       new VisServerCommands.SaveDS9Region());
         _cmdMap.put(ServerParams.GET_IMAGE_MASTER_DATA, new VisServerCommands.GetMasterImageData());
 
         //Workspaces
@@ -67,25 +65,26 @@ public class ServerCommandAccess {
         _cmdMap.put(ServerParams.WS_PUT_IMAGE_FILE,     new WsServerCommands.WsPutImgFile());
 
         _cmdMap.put(ServerParams.JSON_DATA,              new SearchServerCommands.GetJSONData());
-        _cmdMap.put(ServerParams.SUB_BACKGROUND_SEARCH,  new SearchServerCommands.SubmitBackgroundSearch());
-        _cmdMap.put(ServerParams.GET_STATUS,             new SearchServerCommands.GetStatus());
+
+        // Background Job related
         _cmdMap.put(ServerParams.ADD_JOB,                new SearchServerCommands.AddBgJob());
         _cmdMap.put(ServerParams.REMOVE_JOB,             new SearchServerCommands.RemoveBgJob());
         _cmdMap.put(ServerParams.CANCEL,                 new SearchServerCommands.Cancel());
-        _cmdMap.put(ServerParams.CLEAN_UP,               new SearchServerCommands.CleanUp());
-        _cmdMap.put(ServerParams.DOWNLOAD_PROGRESS,      new SearchServerCommands.DownloadProgress());
         _cmdMap.put(ServerParams.SET_EMAIL,              new SearchServerCommands.SetEmail());
-        _cmdMap.put(ServerParams.SET_ATTR,               new SearchServerCommands.SetAttribute());
-        _cmdMap.put(ServerParams.GET_EMAIL,              new SearchServerCommands.GetEmail());
         _cmdMap.put(ServerParams.RESEND_EMAIL,           new SearchServerCommands.ResendEmail());
-        _cmdMap.put(ServerParams.CLEAR_PUSH_ENTRY,       new SearchServerCommands.ClearPushEntry());
-        _cmdMap.put(ServerParams.REPORT_USER_ACTION,     new SearchServerCommands.ReportUserAction());
         _cmdMap.put(ServerParams.CREATE_DOWNLOAD_SCRIPT, new SearchServerCommands.CreateDownloadScript());
+        _cmdMap.put(ServerParams.UWS_JOB_INFO,           new SearchServerCommands.UwsJobInfo());
+        _cmdMap.put(ServerParams.GET_CAPABILITIES,       new SearchServerCommands.GetCapabilities());
+
+        _cmdMap.put(ServerParams.TABLE_SEARCH_SPATIAL_BINARY, new SearchServerCommands.TableSearchSpatialBinary());
+
+        _cmdMap.put(ServerParams.REPORT_USER_ACTION,     new SearchServerCommands.ReportUserAction());
         _cmdMap.put(ServerParams.PACKAGE_REQUEST,        new SearchServerCommands.PackageRequest());
         _cmdMap.put(ServerParams.TABLE_SEARCH,           new SearchServerCommands.TableSearch());
         _cmdMap.put(ServerParams.QUERY_TABLE,            new SearchServerCommands.QueryTable());
         _cmdMap.put(ServerParams.SELECTED_VALUES,        new SearchServerCommands.SelectedValues());
-        _cmdMap.put(ServerParams.JSON_SEARCH,            new SearchServerCommands.JsonSearch());
+        _cmdMap.put(ServerParams.ADD_OR_UPDATE_COLUMN,   new SearchServerCommands.AddOrUpdateColumn());
+        _cmdMap.put(ServerParams.DELETE_COLUMN,          new SearchServerCommands.DeleteColumn());
 
         _cmdMap.put(ServerParams.TABLE_SAVE,             new HttpServCommands.TableSave());
         _cmdMap.put(ServerParams.UPLOAD,                 new HttpServCommands.Upload());
@@ -99,6 +98,7 @@ public class ServerCommandAccess {
         _cmdMap.put(ServerParams.VIS_PUSH_ACTION,        new PushCommands.PushAction());
 
         _cmdMap.put(ServerParams.INIT_APP,               new AppServerCommands.InitApp());
+        _cmdMap.put(ServerParams.JSON_PROPERTY,          new AppServerCommands.JsonProperty());
         _cmdMap.put(ServerParams.LOGOUT,                 new AppServerCommands.Logout());
         _cmdMap.put(ServerParams.GET_USER_INFO,          new AppServerCommands.GetUserInfo());
         _cmdMap.put(ServerParams.GET_ALERTS,             new AppServerCommands.GetAlerts());
@@ -107,6 +107,20 @@ public class ServerCommandAccess {
 
     public static HttpCommand getCommand(String cmd) {
         return _cmdMap.get(cmd);
+    }
+
+    public static Job getCmdJob(SrvParam param) {
+        HttpCommand c = getCommand(param.getCommandKey());
+        try {
+            if (c instanceof Job) {
+                Job job = (Job) c.getClass().getDeclaredConstructor().newInstance();
+                job.setParams(param);
+                return job;
+            }
+        } catch (Exception e) {
+            Logger.warn(String.format("Unknown command %s", param.getCommandKey()));
+        }
+        return null;
     }
 
     public static abstract class HttpCommand {

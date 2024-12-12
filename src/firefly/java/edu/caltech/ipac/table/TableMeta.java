@@ -43,6 +43,7 @@ public class TableMeta implements Serializable {
     public static final String PRECISION_TAG = "col.@.precision";
     public static final String UCD_TAG = "col.@.UCD";
     public static final String UTYPE_TAG = "col.@.utype";
+    public static final String XTYPE_TAG = "col.@.xtype";
     public static final String REF_TAG = "col.@.ref";
     public static final String MIN_VALUE_TAG = "col.@.minValue";
     public static final String MAX_VALUE_TAG = "col.@.maxValue";
@@ -51,6 +52,8 @@ public class TableMeta implements Serializable {
     public static final String ARY_SIZE_TAG = "col.@.arraySize";
     public static final String CELL_RENDERER = "col.@.cellRenderer";
 
+    public static final String TBL_RELATED_COLS = "tbl.relatedCols";    // rows where relatedCols are equal will be highlighted in a preset color
+
     public static final String TBL_RESOURCES = "tbl.resources";
     public static final String TBL_LINKS = "tbl.links";
     public static final String TBL_GROUPS = "tbl.groups";
@@ -58,14 +61,21 @@ public class TableMeta implements Serializable {
     public static final String RESULTSET_ID = "resultSetID";            // this meta if exists contains the ID of the resultset returned.
     public static final String RESULTSET_REQ = "resultSetRequest";      // this meta if exists contains the Request used to create this resultset.
 
-    public static final String IS_FULLY_LOADED = "isFullyLoaded";
 
     public static final String ID = "ID";
     public static final String REF = "ref";
     public static final String UCD = "ucd";
     public static final String UTYPE = "utype";
-    public static final String DESC = "desc";
+    public static final String XTYPE = "xtype";
+    public static final String DESC = "description";
     public static final String NAME = "name";
+    public static final String DERIVED_FROM = "DERIVED_FROM";
+
+    public static final String DOCLINK = "doclink.url";
+    public static final String DOCLINK_DESC = "doclink.desc";
+    public static final String DOCLINK_LABEL = "doclink.label";
+
+
 
     private Map<String, DataGroup.Attribute> attributes = new HashMap<>();                      // including keywords and meta added during processing
     private List<DataGroup.Attribute> keywords = new ArrayList<>();                             // meta from the original source
@@ -124,9 +134,19 @@ public class TableMeta implements Serializable {
         }
     }
 
+    public String getAttribute(String key, boolean ignoreCase) {
+        DataGroup.Attribute val = null;
+        if (ignoreCase) {
+            String kk = attributes.keySet().stream().filter(k -> k.equalsIgnoreCase(key)).findFirst().orElse(null);
+            if (kk != null) val = attributes.get(kk);
+        } else {
+            val = attributes.get(key);
+        }
+        return val == null ? null : val.getValue();
+    }
+
     public String getAttribute(String key) {
-        DataGroup.Attribute v = attributes.get(key);
-        return v == null ? null : v.getValue();
+        return getAttribute(key, false);
     }
 
     /**

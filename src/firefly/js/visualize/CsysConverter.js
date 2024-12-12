@@ -2,13 +2,13 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 import CoordinateSys from './CoordSys.js';
-import {convert, computeDistance} from './VisUtil.js';
+import {convertCelestial, computeDistance} from './VisUtil.js';
 import {makeRoughGuesser} from './ImageBoundsData.js';
 import Point, {makeImageWorkSpacePt, makeImagePt,
     makeScreenPt, makeWorldPt, makeDevicePt,
     isValidPoint, makeFitsImagePt, makeZeroBasedImagePt} from './Point.js';
 import {Matrix} from '../externalSource/transformation-matrix-js/matrix.js';
-import {getPixScaleDeg, isHiPS} from './WebPlot.js';
+import {getDevPixScaleDeg, isHiPS, isHiPSAitoff} from './WebPlot.js';
 
 
 function convertToCorrect(wp) {
@@ -53,7 +53,7 @@ export class CysConverter {
         this.plotState= plot.plotState;
         this.dataWidth= plot.dataWidth;
         this.dataHeight= plot.dataHeight;
-        this.projection= plot.allWCSMap[whichWCS];
+        this.projection= plot.allWCSMap?.[whichWCS] ?? plot.projection;
         this.zoomFactor= plot.zoomFactor;
         this.imageCoordSys= plot.imageCoordSys;
         this.inPlotRoughGuess= null;
@@ -111,7 +111,7 @@ export class CysConverter {
 
 
     /**
-     * This method returns false it the point is definitely not in plot.  It returns true if the point might be in the plot.
+     * This method returns false if the point is definitely not in plot.  It returns true if the point might be in the plot.
      * Used for tossing out points that we know that are not in plot without having to do all the math.  It is much faster.
      * @param {WorldPt} wp
      * @return {boolean} true in we guess it might be in the bounds, false if we know that it is not in the bounds
@@ -164,6 +164,7 @@ export class CysConverter {
 
     pointOnDisplay(pt) {
         if (!isValidPoint(pt)) return false;
+        if (isHiPS(this) && isHiPSAitoff(this)) return this.pointInView(pt);
         const devPt= this.getDeviceCoords(pt);
         if (!devPt) return false;
         const {x,y}= devPt;
@@ -333,7 +334,7 @@ export class CysConverter {
                 retval= CysConverter.makeIPtFromFitsImPt(pt);
                 break;
             case Point.ZERO_BASED_IM_PT:
-                retval= this.makeIPtFromxZeroImPt(pt);
+                retval= this.makeIPtFromZeroImPt(pt);
                 break;
             case Point.W_PT:
                 retval = this.getImageCoordsFromWorldPt(pt);
@@ -356,7 +357,7 @@ export class CysConverter {
         return pt ? makeImagePt(pt.x-.5, pt.y-.5) : null;
     }
 
-    makeIPtFromxZeroImPt(pt) {
+    makeIPtFromZeroImPt(pt) {
         if (!pt) return null;
         const {ltv1,ltv2}= CysConverter.getLtv(this.header);
         return makeImagePt(pt.x+.5+ltv1, pt.y+.5+ltv2);
@@ -366,7 +367,7 @@ export class CysConverter {
     /**
      * @desc Return the image coordinates given a WorldPt class.
      * @param {WorldPt} wpt the class containing the point in sky coordinates
-     * @returns {ImagePt} the translated coordinates
+     * @returns {ImagePt|null} the translated coordinates
      */
     getImageCoordsFromWorldPt(wpt) {
         if (!wpt) return null;
@@ -377,8 +378,9 @@ export class CysConverter {
             const originalWp= wpt;
             retval= this.conversionCache.get(checkedPt.toString() );
             if (!retval) {
-                if (this.imageCoordSys!==wpt.getCoordSys()) {
-                    wpt= convert(wpt,this.imageCoordSys);
+                const csys = wpt.getCoordSys();
+                if (csys?.isCelestial() && this.imageCoordSys!==csys) {
+                    wpt= convertCelestial(wpt,this.imageCoordSys);
                 }
                 const projPt= this.projection.getImageCoords(wpt.getLon(),wpt.getLat());
                 retval= projPt ? makeImagePt( projPt.x+ 0.5 ,  projPt.y+ 0.5) : null;
@@ -429,7 +431,6 @@ export class CysConverter {
             case Point.SPT:
                 retval= this.makeDevicePtFromSp(pt, altTransform);
                 break;
-                break;
         }
         return retval;
     }
@@ -448,7 +449,7 @@ export class CysConverter {
     /**
      *
      * @param {Object} sp ScreenPt
-     * @param {Object} altTransform
+     * @param {Object} [altTransform]
      * @return {DevicePt}
      */
      makeDevicePtFromSp(sp, altTransform) {
@@ -538,8 +539,8 @@ export class CysConverter {
             }
             else {
                 const originalWp= wpt;
-                if (this.imageCoordSys!==wpt.getCoordSys()) {
-                    wpt= convert(wpt,this.imageCoordSys);
+                if (csys.isCelestial() && this.imageCoordSys!==csys) {
+                    wpt= convertCelestial(wpt,this.imageCoordSys);
                 }
 
                 const  proj_pt= this.projection.getImageCoords(wpt.getLon(),wpt.getLat());
@@ -580,7 +581,7 @@ export class CysConverter {
 
     /**
      *
-     * @param {ImageWorkspacePt} iwpt ImageWorkspacePt
+     * @param {ImageWpt} iwpt ImageWorkspacePt
      * @param {number} [altZoomLevel]
      */
     makeSPtFromIWPt(iwpt, altZoomLevel) {
@@ -598,9 +599,9 @@ export class CysConverter {
 
     /**
      * @desc Return the sky coordinates given a image x (fsamp) and  y (fline)
-     * @param {Point} pt  the point to convert
+     * @param {Point|undefined} pt  the point to convert
      * @param  {CoordinateSys} [outputCoordSys] (optional) The coordinate system to return, default to coordinate system of image
-     * @returns {WorldPt} the translated coordinates
+     * @returns {WorldPt|null} the translated coordinates
      */
     getWorldCoords(pt, outputCoordSys= undefined) {
         if (!isValidPoint(pt)) return null;
@@ -619,7 +620,12 @@ export class CysConverter {
                 retval= this.makeWorldPtFromIPt(this.getImageCoords(pt),outputCoordSys);
                 break;
             case Point.W_PT:
-                retval=  (outputCoordSys===pt.getCoordSys()) ? pt : convert(pt, outputCoordSys);
+                const csys = pt?.getCoordSys();
+                if (csys?.isCelestial() && outputCoordSys!==csys) {
+                    retval= convertCelestial(pt, outputCoordSys);
+                } else {
+                    retval= pt;
+                }
                 break;
         }
         return retval;
@@ -629,8 +635,9 @@ export class CysConverter {
     makeWorldPtFromIPt( ipt, outputCoordSys) {
         if (!ipt) return null;
         let wpt = this.projection.getWorldCoords(ipt.x - .5 ,ipt.y - .5);
-        if (wpt && outputCoordSys!==wpt.getCoordSys()) {
-            wpt= convert(wpt, outputCoordSys);
+        const csys = wpt?.getCoordSys();
+        if (csys?.isCelestial() && outputCoordSys!==csys) {
+            wpt= convertCelestial(wpt, outputCoordSys);
         }
         return wpt;
     }
@@ -642,33 +649,24 @@ export class CysConverter {
 //----------------------------- Conversion Methods End -----------------------------------
 //========================================================================================
 //========================================================================================
-//========================================================================================
-//========================================================================================
-//========================================================================================
-//========================================================================================
 
-    coordsWrap(wp1, wp2) {
-        if (!wp1 || !wp2) return false;
-
-        let retval= false;
-        if (this.projection.isWrappingProjection()) {
-            const  worldDist= computeDistance(wp1, wp2);
-            const pix= getPixScaleDeg(this);
-            const value1= worldDist/pix;
-
-            const ip1= this.getImageWorkSpaceCoords(wp1);
-            const ip2= this.getImageWorkSpaceCoords(wp2);
-            if (ip1 && ip2) {
-                const xDiff= ip1.x-ip2.x;
-                const yDiff= ip1.y-ip2.y;
-                const imageDist= Math.sqrt(xDiff*xDiff + yDiff*yDiff);
-                retval= ((imageDist / value1) > 3);
-            }
-            else {
-                retval= false;
-            }
-        }
-        return retval;
+    /**
+     * @param wp1
+     * @param wp2
+     * @param [lenientFactor] how aggressive to check
+     * @return {boolean}
+     */
+    coordsWrap(wp1, wp2, lenientFactor= 3) {
+        if (!wp1 || !wp2 || !this.projection.isWrappingProjection()) return false;
+        const dp1= this.getDeviceCoords(wp1);
+        const dp2= this.getDeviceCoords(wp2);
+        if (!dp1 || !dp2) return false;
+        const xDiff= dp1.x-dp2.x;
+        const yDiff= dp1.y-dp2.y;
+        const worldDist= computeDistance(wp1, wp2);
+        const expectedDevicePixels= worldDist/getDevPixScaleDeg(this);
+        const deviceDist= Math.sqrt(xDiff*xDiff + yDiff*yDiff);
+        return ((deviceDist / expectedDevicePixels) > lenientFactor); //these two number should be close to 1, if >10 then we think it wraps
     }
 
     /**
@@ -678,7 +676,7 @@ export class CysConverter {
      * @returns {CysConverter}
      */
     static make(plot, altAffTrans) {
-        return plot ? new CysConverter(plot, altAffTrans) : null;
+        return plot ? new CysConverter(plot, altAffTrans) : undefined;
     }
 } //end of class definition
 
@@ -716,19 +714,19 @@ export const CCUtil = {
      * @memberof   firefly.util.image.CCUtil
      * @public
      */
-    getImageWorkSpaceCoords : (plot,pt) => CysConverter.make(plot).getImageWorkSpaceCoords(pt),
+    getImageWorkSpaceCoords : (plot,pt) => plot && CysConverter.make(plot).getImageWorkSpaceCoords(pt),
     
     /**
      *
      * Convert to Image Point
-     * @param {WebPlot} plot - the image
+     * @param {WebPlot|undefined} plot - the image
      * @param {object} pt - the point to convert
      * @return {ImagePt}
      * @function getImageCoords
      * @memberof  firefly.util.image.CCUtil
      * @public
      */
-    getImageCoords: (plot,pt) => CysConverter.make(plot).getImageCoords(pt),
+    getImageCoords: (plot,pt) => plot && CysConverter.make(plot).getImageCoords(pt),
     
     /**
      *
@@ -740,38 +738,32 @@ export const CCUtil = {
      * @public
      * @memberof firefly.util.image.CCUtil
      */
-    getDeviceCoords: (plot,pt) => CysConverter.make(plot).getDeviceCoords(pt),
+    getDeviceCoords: (plot,pt) => plot && CysConverter.make(plot).getDeviceCoords(pt),
     
     /*
      *
      * Convert to Screen Point
      * */
     /**
-     * @param {WebPlot} plot - the image
+     * @param {WebPlot|undefined} plot - the image
      * @param {object} pt - the point to convert
      * @function  getScreenCoords
      * @memberof  firefly.util.image.CCUtil
      */
-    getScreenCoords: (plot,pt) => CysConverter.make(plot).getScreenCoords(pt),
+    getScreenCoords: (plot,pt) => plot && CysConverter.make(plot).getScreenCoords(pt),
     
     /**
      *
      * Convert to World Point
-     * @param {WebPlot} plot - the image
+     * @param {WebPlot|undefined} plot - the image
      * @param  pt - the point to convert
      * @return {WorldPt}
      * @function getWorldCoords
      * @memberof  firefly.util.image.CCUtil
      * @public
      */
-    getWorldCoords: (plot,pt) => CysConverter.make(plot).getWorldCoords(pt),
+    getWorldCoords: (plot,pt) => plot && CysConverter.make(plot).getWorldCoords(pt),
 
-    /**
-     *
-     * @ignore
-     *
-     */
-    getWorldPtRepresentation
 };
 
 

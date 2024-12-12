@@ -2,30 +2,35 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {PureComponent} from 'react';
-import {get, set, isEmpty, unset, isNil} from 'lodash';
+import React from 'react';
+import {isEmpty, isNil} from 'lodash';
 
 import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
 import {PopupPanel} from '../../ui/PopupPanel.jsx';
 import {InputField} from '../../ui/InputField.jsx';
-import {ProgressBar} from '../../ui/ProgressBar.jsx';
 import Validate from '../../util/Validate.js';
 import {HelpIcon} from '../../ui/HelpIcon.jsx';
-import {dispatchShowDialog, dispatchHideDialog} from '../../core/ComponentCntlr.js';
-import {getBackgroundInfo, BG_STATE, isActive, isDone, isSuccess, emailSent, canCreateScript} from './BackgroundUtil.js';
-import {dispatchBgStatus, dispatchJobRemove, dispatchBgSetEmailInfo, dispatchJobCancel} from './BackgroundCntlr.js';
-import {DownloadProgress} from '../../rpc/SearchServicesJson.js';
+import {dispatchShowDialog, dispatchHideDialog} from '../ComponentCntlr.js';
+import {getBackgroundInfo, isActive, isAborted, isDone, isSuccess, getJobInfo, canCreateScript
+} from './BackgroundUtil.js';
+import {dispatchBgJobInfo, dispatchJobRemove, dispatchBgSetEmailInfo, dispatchJobCancel} from './BackgroundCntlr.js';
 import {showScriptDownloadDialog} from '../../ui/ScriptDownloadDialog.jsx';
-import {SimpleComponent} from '../../ui/SimpleComponent.jsx';
+import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {dispatchTableSearch} from '../../tables/TablesCntlr.js';
+import {download} from '../../util/fetch';
+import {showInfoPopup} from '../../ui/PopupUtil.jsx';
+import {updateSet} from '../../util/WebUtil.js';
+import {getRequestFromJob} from '../../tables/TableRequestUtil.js';
+import {showJobInfo} from './JobInfo.jsx';
+import {Checkbox, Stack, ChipDelete, Typography, Box, Link, Tooltip, LinearProgress} from '@mui/joy';
 
 import LOADING from 'html/images/gxt/loading.gif';
 import CANCEL from 'html/images/stop.gif';
 import DOWNLOAED from 'html/images/blue_check-on_10x10.gif';
 import FAILED from 'html/images/exclamation16x16.gif';
+import INFO from 'html/images/info-icon.png';
+import CompleteButton from 'firefly/ui/CompleteButton';
 
-import './BackgroundMonitor.css';
-import {downloadWithProgress} from '../../util/fetch';
 
 export function showBackgroundMonitor(show=true) {
     const content= (
@@ -41,261 +46,235 @@ export function showBackgroundMonitor(show=true) {
     }
 }
 
-class BackgroundMonitor extends SimpleComponent {
+ function BackgroundMonitor() {
 
-    getNextState(np) {
-        return getBackgroundInfo();
-    }
+    const {jobs={}, email, enableEmail, help_id} = useStoreConnector(() => getBackgroundInfo());
 
-    render() {
-        const {jobs={}, email='', help_id, enableEmail} = this.state || {};
-        const packages = Object.entries(jobs)
-                        .filter(([id, job]) => get(job, 'TYPE') === 'PACKAGE')
-                        .map( ([id, job]) => {
-                            return (<PackageStatus key={id} {...job} />);
-                        });
-        const searches = Object.entries(jobs)
-            .filter(([id, job]) => get(job, 'TYPE') === 'SEARCH')
-            .map( ([id, job]) => {
-                return (<SearchItem key={id} {...job} />);
-            });
-        const unknown = Object.entries(jobs)
-            .filter(([id, job]) => get(job, 'TYPE') === 'UNKNOWN')
-            .map( ([id, job]) => {
-                return (<SearchItem key={id} {...job} />);
-            });                                                         // failed requests..  should not happen.  Not sure what to do with this yet.
-        return (
-            <div className='BGMon'>
-                <div className='BGMon__content'>
-                    {!isEmpty(packages) && packages}
-                    {!isEmpty(searches) && searches}
-                    {!isEmpty(unknown) && unknown}
-                </div>
-                <BgFooter {...{help_id, email, enableEmail}}/>
-            </div>
-        );
-    }
+    const items = Object.values(jobs)
+                    .filter((job) => job.jobInfo?.monitored)
+                    .map( (job) =>  job.jobInfo?.type === 'PACKAGE' ?
+                        <PackageJob key={job.jobId} jobInfo={job} /> :
+                        <SearchJob key={job.jobId} jobInfo={job} />
+                    );
+
+    return (
+        <Stack justifyContent='space-between' spacing={1} alignItems='left' minHeight={200}
+                    minWidth={330} maxWidth={590} sx={{resize: 'both', overflow: 'auto'}}>
+            <Box {...{flexGrow: 1, overflow: 'auto'}}>
+                {!isEmpty(items) && items}
+            </Box>
+            <BgFooter {...{help_id, email, enableEmail}}/>
+        </Stack>
+    );
 }
 
-class BgFooter extends PureComponent {
+function BgFooter ({help_id='basics.bgmon', email, enableEmail}) {
 
-    onHide() {
+    const onHide = () => {
         showBackgroundMonitor(false);
-    }
+    };
 
-    onEmailChanged(v) {
-        if (get(v, 'valid')) {
-            const {email} = this.props;
+    const onEmailChanged = (v) => {
+        if (v?.valid) {
             if (email !== v.value) dispatchBgSetEmailInfo({email: v.value});
         }
-    }
+    };
 
-    render() {
-        const {help_id = 'basics.bgmon', email=''} = this.props;
-        const enableEmail = isNil(this.props.enableEmail) ? !!email : this.props.enableEmail;
-        const toggleEnableEmail = (e) => {
-            const checked = e.target.checked;
-            const m_email = checked ? email : '';
-            dispatchBgSetEmailInfo({email: m_email, enableEmail: checked});
+    enableEmail = isNil(enableEmail) ? !!email : enableEmail;
+    const toggleEnableEmail = (e) => {
+        const checked = e.target.checked;
+        const m_email = checked ? email : '';
+        dispatchBgSetEmailInfo({email: m_email, enableEmail: checked});
 
-        };
-        return (
-            <div className='BGMon__footer' key='bgMonFooter'>
-                <button className='button std hl' onClick={this.onHide}
-                        title='Hide Background Monitor'>Hide</button>
-                <div>
-                    <div style={{width: 250}}><input type='checkbox' checked={enableEmail} value='' onChange={toggleEnableEmail}/>Enable email notification</div>
-                    {enableEmail &&
+    };
+
+      // TODO: email is commented out, when we make a notification plan we can re-add it.
+
+    return (
+        <Stack direction='row' alignItems='flex-start' justifyContent='space-between'>
+            <Tooltip title='Hide Background Monitor'>
+                <CompleteButton color='primary' onSuccess={onHide} text={'Hide'} />
+            </Tooltip>
+            <Stack>
+                {/*<Checkbox p={1} size='sm' checked={enableEmail} onChange={toggleEnableEmail} label={'Enable email notification'}/>*/ }
+                {enableEmail &&
+                    <Stack direction='row' alignItems='center' width={200}>
+                        <Typography component='label' level='title-md' sx={{mr: 1}}>
+                            Email:
+                        </Typography>
                         <InputField
                             validator={Validate.validateEmail.bind(null, 'an email field')}
                             tooltip='Enter an email to be notified when a process completes.'
-                            label='Email:'
-                            labelStyle={{display: 'inline-block', marginLeft: 18, width: 32, fontWeight: 'bold'}}
+                            slotProps={{label:{sx:{ml:0}}}}
                             value={email}
                             placeholder='Enter an email to get notification'
-                            style={{width: 170}}
-                            onChange={this.onEmailChanged.bind(this)}
+                            sx={{width:170}}
+                            onChange={onEmailChanged}
                             actOn={['blur','enter']}
                         />
-                    }
-                </div>
-                <div>
-                    <HelpIcon helpId={help_id} />
-                </div>
-            </div>
+                    </Stack>
+                }
+            </Stack>
+            <HelpIcon helpId={help_id}/>
+        </Stack>
         );
-    }
 }
 
-function SearchItem(bgStatus) {
-    const {ID, STATE, SERVER_REQ, Title='unknown'} = bgStatus;
-    const emailed = emailSent(bgStatus);    // this is not implemented yet.
+function SearchJob({jobInfo}) {
+    const {email} = jobInfo;
     return (
-        <div className='BGMon__package'>
-            <div className='BGMon__package--box'>
-                <SearchStatus {...{ID, STATE, Title, SERVER_REQ}}/>
-                { emailed &&
-                    <div className='BGMon__package--status'>
-                        <div>Notification email sent</div>
-                    </div>
-                }
-            </div>
-        </div>
+        <Box {...{m:0.5, p:0.5}}>
+            <JobHeader jobInfo={jobInfo}/>
+            {email && (
+                <Stack {...{direction:'row', justifyContent:'space-between', alignItems:'center', width: '100%', p:0.5}}>
+                    <Typography level='body-sm'>Notification email sent</Typography>
+                </Stack>
+            )}
+        </Box>
     );
 }
 
-function SearchStatus({ID, STATE, Title, SERVER_REQ}) {
-    var progress;
-    if (BG_STATE.WAITING.is(STATE)) {
-        progress = <div className='BGMon__header--waiting'>In progress... <img style={{marginLeft: 3}} src={LOADING}/></div>;
-    } else if (BG_STATE.CANCELED.is(STATE)) {
-        progress = <div>User aborted this request</div>;
-    } else {
-        if (isEmpty(SERVER_REQ)) {
-            progress = <div className='BGMon__header--waiting'>unexpected error</div>;
-        } else {
-            const request = JSON.parse(SERVER_REQ);
-            unset(request, 'META_INFO.backgroundable');
-            progress = <div className='BGMon__packageItem--url' onClick={() => dispatchTableSearch(request, {backgroundable: false})}>Show results</div>;
-        }
-    }
+function PackageJob({jobInfo}) {
+    const {jobId, results, DATA_SOURCE, email, jobInfo:others} = jobInfo;
+    const label = others?.label || 'unknown';
+
+    const script = canCreateScript(jobInfo) && isSuccess(jobInfo) && results?.length > 1;
+
+    const items = results?.map( (url, idx) => <PackageItem key={'multi-' + idx} jobId={jobInfo.jobId} index={idx} />);
+
     return (
-        <PackageHeader {...{ID, Title, progress, STATE}} />
+        <Stack {...{m: 0.5, p: 0.5, justifyContent:'flex-end'}} >
+            <JobHeader jobInfo={jobInfo}/>
+            {items?.length > 1 &&
+                <Stack {...{ml:2.5}}> {items} </Stack>
+            }
+            {(email || script) &&
+                <Stack {...{direction:'row', justifyContent:'space-between', alignItems:'center', width:'100%', p:0.5}}>
+                    {email ? <Typography level='body-sm'>Notification email sent</Typography> : null}
+                    {script && (
+                        <Link component={'button'} onClick={() => showScriptDownloadDialog({ jobId, label, DATA_SOURCE })}>
+                            Get Download Script
+                        </Link>
+                    )}
+                </Stack>
+            }
+        </Stack>
     );
 }
 
-function PackageStatus(bgStatus) {
-    const {PACKAGE_CNT, ID, STATE, DATA_SOURCE, Title='unknown'} = bgStatus;
-    const Content = PACKAGE_CNT > 1 ? MultiPackage : SinglePackage;
-    const emailed = emailSent(bgStatus);
-    const script = canCreateScript(bgStatus) && isSuccess(STATE) && PACKAGE_CNT > 1;
-    
-    return (
-        <div className='BGMon__package'>
-            <div className='BGMon__package--box'>
-                <Content {...bgStatus}/>
-                { (emailed || script) &&
-                    <div className='BGMon__package--status'>
-                        { emailed ? <div>Notification email sent</div> : <div/>}
-                        { script  && <div className='BGMon__packageItem--url' onClick={() => showScriptDownloadDialog({ID, Title, DATA_SOURCE})}>Get Download Script</div> }
-                    </div>
-                }
-            </div>
-        </div>
-    );
-}
+function JobHeader({jobInfo}) {
+    const jobId = jobInfo?.jobId;
+    const label = jobInfo?.jobInfo?.label;
 
-function SinglePackage({ID, Title, WS_DEST_PATH, STATE, ITEMS=[]}) {
-    var progress;
-    if (BG_STATE.WAITING.is(STATE)) {
-        progress = <div className='BGMon__header--waiting'>Computing number of packages... <img style={{marginLeft: 3}} src={LOADING}/></div>;
-    } else if (BG_STATE.WORKING.is(STATE)) {
-            progress = <div className='BGMon__header--waiting'>In progress.... <img style={{marginLeft: 3}} src={LOADING}/></div>;
-    } else if (BG_STATE.CANCELED.is(STATE)) {
-        progress = <div>User aborted this request</div>;
-    } else {
-        const params = ITEMS[0] || {};
-        progress = <PackageItem SINGLE={true} {...{STATE, ID, WS_DEST_PATH}} {...params} />;
-    }
-    return (
-        <PackageHeader {...{ID, Title, progress, STATE}} />
-    );
-}
-
-function MultiPackage({ID, Title, WS_DEST_PATH, STATE, ITEMS}) {
-    var progress = BG_STATE.CANCELED.is(STATE) && <div>User aborted this request</div>;
-    const packages = ITEMS.map( (pi, INDEX) => {
-                return <PackageItem key={'multi-' + INDEX} {...{STATE, ID, WS_DEST_PATH}} {...ITEMS[INDEX]} />;
-            });
-
-    return (
-        <div>
-            <PackageHeader {...{ID, Title, progress, STATE}} />
-            <div className='BGMon__multiItems'>
-                {packages}
-            </div>
-        </div>
-    );
-}
-
-function PackageHeader({ID, Title, progress, STATE}) {
     const removeBgStatus = () => {
-        dispatchJobRemove(ID);
+        dispatchJobRemove(jobId);
     };
     const doCancel = () => {
-        dispatchJobCancel(ID);
+        dispatchJobCancel(jobId);
     };
-
+    const showInfo = () => {
+        showJobInfo(jobId);
+    };
     return (
-        <div className='BGMon__header'>
-            <div className='BGMon__header--title' title={Title}>{Title}</div>
-            <div style={{display: 'inline-flex', alignItems: 'center', paddingLeft: 5}}>
-                {progress}
-                <div className='BGMon__header--action'>
-                    {isActive(STATE) && <img className='BGMon__action' src={CANCEL} onClick={doCancel} title='Abort this job.'/>}
-                    {isDone(STATE) &&
-                    <div className='btn-close'
-                         title='Remove Background Job'
-                         onClick={removeBgStatus}/>
+        <Stack {...{alignItems:'center', flexDirection:'row', width: '100%' }}>
+            <Stack {...{direction:'row', alignItems:'center', overflow: 'hidden', title:{label}, justifyContent:'flex-start'}}>
+                <Typography level='title-md' alignItems='center' sx={{ml: 0.375, whiteSpace: 'nowrap', overflow: 'hidden',
+                    textOverflow: 'ellipsis'}}>{label}
+                </Typography>
+                <Box display={'flex'} height={20} sx={{'&:hover img': {cursor: 'pointer'}, ml:1}}>
+                    <img src={INFO} onClick={showInfo}/>
+                </Box>
+            </Stack>
+            <Stack direction='row' spacing={2} alignItems='flex-end' sx={{pl: 1, flexShrink: 0, flexGrow: 1}} justifyContent={'flex-end'}>
+                <JobProgress jobInfo={jobInfo}/>
+                <Box>
+                    {isActive(jobInfo) &&
+                        <Box display={'flex'} height={14} width={14} sx={{'&:hover img': {cursor: 'pointer'}, ml:3}}>
+                            <img src={CANCEL} onClick={doCancel} title='Abort this job.'/>
+                        </Box>
                     }
-                </div>
-            </div>
-        </div>
+                    {isDone(jobInfo) &&
+                        <Tooltip placement='left' title='Remove Background Job'>
+                            <ChipDelete {...{ onClick: () => removeBgStatus(), sx:{'--Chip-deleteSize': '1.5rem'} }}/>
+                        </Tooltip>
+                    }
+                </Box>
+            </Stack>
+        </Stack>
     );
 }
 
-function PackageItem(progress) {
-    const {SINGLE, ID, INDEX, STATE, WS_DEST_PATH, finalCompressedBytes, processedBytes, totalBytes, processedFiles, totalFiles, url, downloaded} = progress;
-    const doDownload = () => {
-        var bgStatus = set({ID}, ['ITEMS', INDEX, 'downloaded'], DownloadProgress.WORKING);
-        dispatchBgStatus(bgStatus);
-        downloadWithProgress(url)
-            .then( () => {
-                bgStatus = set({ID}, ['ITEMS', INDEX, 'downloaded'], DownloadProgress.DONE);
-                dispatchBgStatus(bgStatus);
-                }
-            ).catch(() => {
-                bgStatus = set({ID}, ['ITEMS', INDEX, 'downloaded'], DownloadProgress.FAIL);
-                dispatchBgStatus(bgStatus);
-            });
-    };
-    const BY_SIZE = totalBytes && totalBytes >= processedBytes;
-    var pct= BY_SIZE ? (processedBytes / totalBytes) :
-                         (processedFiles / totalFiles);
-    pct = Math.round(100 * pct);
-    const pctOf = BY_SIZE ? Math.round(Math.max(totalBytes/1024/1024,1)) + ' MB' :
-                    totalFiles + ' files';
-    const finalSize = Math.round(Math.max(finalCompressedBytes/1024/1024,1));
-    const dlmsg = SINGLE ? 'Download Now' : `Download Part #${INDEX+1}`;
-
-    const action = WS_DEST_PATH
-                   ? <div className='BGMon__packageItem--info'> Downloaded to Workspace </div>
-                   : <div className='BGMon__packageItem--url' onClick={doDownload}>{dlmsg}</div>;
-
-    if (isSuccess(STATE) || pct === 100) {      // because when there is only 1 item, state is set to success but pct does not calculate to 100%
+function JobProgress({jobInfo}) {
+    const {jobId} = jobInfo;
+    const {progressDesc, progress, type} = jobInfo.jobInfo || {};
+    if (isActive(jobInfo)) {
         return (
-            <div className='BGMon__packageItem'>
-                {action}
-                <div style={{display: 'inline-flex', alignItems: 'center'}}>
-                    <div style={{marginRight: 3}}>{`${finalSize} MB`}</div>
-                    <div style={{width: 15}}>
-                        {DownloadProgress.DONE.is(downloaded) && <img src={DOWNLOAED}/>}
-                        {DownloadProgress.WORKING.is(downloaded) && <img src={LOADING}/>}
-                        {DownloadProgress.FAIL.is(downloaded) && <img src={FAILED} title='Download may have failed or timed out'/>}
-                    </div>
-                </div>
-            </div>
+            <Box {...{alignItems:'center', width:150, flex:2}}>
+                <Typography sx={{mr: 1}}>{progressDesc}</Typography>
+                <LinearProgress determinate={true} value={progress} />
+            </Box>
         );
-    } else if(pct === 0) {
-        return false;
+    } else if (isAborted(jobInfo)) {
+        return <Typography>{jobInfo?.error || 'Job aborted'}</Typography>;
+    } else if (isSuccess(jobInfo)) {
+        if (type === 'PACKAGE') {
+            return jobInfo?.results?.length === 1 ? <PackageItem {...{SINGLE:true, jobId, index:0}} /> : <div/> ;
+        } else {
+            const showTable = () => {
+                const request = getRequestFromJob(jobInfo.jobId);
+                request && dispatchTableSearch(request);
+            };
+            return (<Link onClick={() => showTable()}>
+                Show results
+                </Link>);
+        }
     } else {
-        return (
-            <div className='BGMon__packageItem'>
-                <ProgressBar
-                    value= {pct}
-                    text= {`Zipped ${pct}% of ${pctOf}`}
-                />
-            </div>
-        );
+        return <Typography  color={'danger'}>Job Failed</Typography>;
     }
+}
+
+function PackageItem({SINGLE, jobId, index}) {
+    const jobInfo = useStoreConnector(() => getJobInfo(jobId));
+
+    const {parameters, downloadState} = jobInfo;
+    const dlreq = JSON.parse(parameters?.downloadRequest);
+    const dlState = downloadState?.[index];
+
+    const doDownload = () => {
+        const url = jobInfo?.results?.[index]?.href;
+        if (!url) {
+            showInfoPopup('Bad URL. Cannot download');
+            return;
+        }
+        dispatchBgJobInfo( updateSet(jobInfo, ['downloadState',index], 'WORKING') );
+        download(url).then( () => {
+            dispatchBgJobInfo( updateSet(jobInfo, ['downloadState',index], 'DONE') );
+        }).catch(() => {
+            dispatchBgJobInfo( updateSet(jobInfo, ['downloadState',index], 'FAIL') );
+        });
+    };
+    const dlmsg = SINGLE ? 'Download Now' : `Download Part #${index+1}`;
+
+
+    const action = dlreq?.WS_DEST_PATH
+        ? (<Link>
+            Downloaded to Workspace
+        </Link>)
+        : (<Link onClick={() => doDownload()}>
+            {dlmsg}
+        </Link>);
+    const showState = !SINGLE || (SINGLE && dlState);
+
+    return (
+        <Stack {...{direction:'row', width:200, height:20, spacing:1, justifyContent:'flex-end', display: 'inline-flex', my:1/4, mx:1/2}}>
+            {action}
+            {showState && (
+                <Stack direction='row' width={15} height={15} justifyContent={'flex-end'}>
+                    {dlState === 'DONE' && <img src={DOWNLOAED} alt='Done'/>}
+                    {dlState === 'WORKING' && <img src={LOADING} alt='Loading'/>}
+                    {dlState === 'FAIL' && <img src={FAILED} alt='Failed' title='Download may have failed or timed out'/>}
+                </Stack>
+            )}
+        </Stack>
+    );
 }

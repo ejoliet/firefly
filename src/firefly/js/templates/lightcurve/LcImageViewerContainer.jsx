@@ -4,11 +4,11 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import {MultiViewStandardToolbar} from '../../visualize/ui/MultiViewStandardToolbar.jsx';
 import {MultiImageViewer} from '../../visualize/ui/MultiImageViewer.jsx';
 import {DEFAULT_FITS_VIEWER_ID, NewPlotMode} from '../../visualize/MultiViewCntlr.js';
 import {LO_MODE, LO_VIEW, dispatchSetLayoutMode} from '../../core/LayoutCntlr.js';
 import {dispatchChangeExpandedMode, ExpandType} from '../../visualize/ImagePlotCntlr.js';
+import {LcImageToolbarView} from './LcImageToolbarView.jsx';
 
 /**
  * A wrapper component for MultiImageViewer where expended mode is supported.
@@ -23,27 +23,26 @@ import {dispatchChangeExpandedMode, ExpandType} from '../../visualize/ImagePlotC
  * @returns {Object}
  * @constructor
  */
-export function LcImageViewerContainer({viewerId, imageExpandedMode=false, closeable=true, insideFlex=false,
-                                        forceRowSize, activeTableId, Toolbar= MultiViewStandardToolbar}) {
+export function LcImageViewerContainer({viewerId=DEFAULT_FITS_VIEWER_ID, imageExpandedMode=false, closeable=true, insideFlex=false,
+                                        forceRowSize, activeTableId, Toolbar= LcImageToolbarView}) {
     
     if (imageExpandedMode) {
         return (
             <MultiImageViewer Toolbar={Toolbar}
                               viewerId={viewerId}
-                              closeFunc={closeable ? closeExpanded : null}
+                              insideFlex={insideFlex}
                               showWhenExpanded={true}
                               defaultDecoration={false}
-                              insideFlex={insideFlex}
+                              closeFunc={closeable ? closeExpanded : null}
             />
         );
     } else {
-        return ( <MultiImageViewer
-                        viewerId = {viewerId}
-                        insideFlex= {insideFlex}
-                        forceRowSize={forceRowSize}
-                        canReceiveNewPlots= {NewPlotMode.create_replace.key}
-                        Toolbar = {Toolbar}
-                        tableId={activeTableId}
+        return ( <MultiImageViewer Toolbar = {Toolbar}
+                                   viewerId = {viewerId}
+                                   insideFlex= {insideFlex}
+                                   forceRowSize={forceRowSize}
+                                   canReceiveNewPlots= {NewPlotMode.create_replace.key}
+                                   tableId={activeTableId}
             />
         );
     }
@@ -61,9 +60,7 @@ LcImageViewerContainer.propTypes = {
     closeable: PropTypes.bool,
     insideFlex: PropTypes.bool,
     forceRowSize: PropTypes.number,
-    activeTableId: PropTypes.string
+    activeTableId: PropTypes.string,
+    Toolbar: PropTypes.element
 };
 
-LcImageViewerContainer.defaultProps = {
-    viewerId: DEFAULT_FITS_VIEWER_ID
-};

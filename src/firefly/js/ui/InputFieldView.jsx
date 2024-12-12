@@ -1,127 +1,66 @@
-import React, {PureComponent} from 'react';
-import {pickBy} from 'lodash';
-import {bool,string,number,object, func, oneOfType} from 'prop-types';
-import {PointerPopup} from '../ui/PointerPopup.jsx';
-import InputFieldLabel from './InputFieldLabel.jsx';
-import DialogRootContainer from './DialogRootContainer.jsx';
-import './InputFieldView.css';
-import EXCLAMATION from 'html/images/exclamation16x16.gif';
+import {FormControl, FormLabel, Input, Stack, Tooltip, Typography} from '@mui/joy';
+import React from 'react';
+import {bool, string, number, object, func, oneOfType, shape, element} from 'prop-types';
 
 
-
-
-function computeStyle(valid,hasFocus,readonly) {
-    if (!valid) {
-        return 'ff-inputfield-view-error';
-    } else if(readonly) {
-        return 'ff-inputfield-view-readonly';
-    } else {
-        return hasFocus ? 'ff-inputfield-view-focus' : 'ff-inputfield-view-valid';
-    }
+export function inputFieldTooltipProps({valid, message, showWarning=true, tooltip}) {
+    const showErrorTip= !valid && showWarning && message;
+    const title= showErrorTip ?
+        (
+            <Stack direction='column'>
+                <Typography level='body-md' color={'danger'}> {message} </Typography>
+                <Typography level='body-md' color={'neutral'} whiteSpace='pre'> {tooltip} </Typography>
+            </Stack>
+        ) : tooltip && <Typography level='body-md' whiteSpace='pre'>{tooltip}</Typography>;
+    const enterDelay = showErrorTip ? 700 : undefined;
+    return {title, enterDelay};
 }
 
+export const inputFieldValue = (type, value) => (type==='file') ? '' : (value??'');
 
-function makeMessage(message) {
+
+
+export function InputFieldView(props) {
+    const {visible=true,label,tooltip,value,inputRef, slotProps,
+        valid=true,onChange, onBlur, onKeyPress, onKeyDown, onKeyUp, showWarning=true,
+        message='', type='text', placeholder, sx, startDecorator, endDecorator,
+        readonly=false, required=false, orientation='vertical'}= props;
+    if (!visible) return null;
+    let {form='__ignore'}= props;
+    // form to relate this input field to.
+    // assign form to null or empty-string to use it within a form tag (similar to input tag without form attribute).
+    // if form is not given, it will default to __ignore so that it does not interfere with embedded forms.
+    form = form || undefined;
+    const showErrorTip= !valid && showWarning && message;
+    const currValue = inputFieldValue(type, value);
+    const tooltipProps = inputFieldTooltipProps({valid, message, showWarning, tooltip});
+
     return (
-        <div style={{whiteSpace:'nowrap'}}>
-            <img src={EXCLAMATION} style={{display:'inline-block', paddingRight:5}}/>
-            <div style={{display:'inline-block'}}> {message} </div>
-        </div>
+        <Stack {...{className:'ff-Input InputFieldView', sx}}>
+            <Tooltip {...{...tooltipProps, placement:showErrorTip? 'right':undefined , ...slotProps?.tooltip}}>
+                <FormControl {...{orientation, required, error:!valid, ...slotProps?.control}}>
+                    {label && <FormLabel {...slotProps?.label}>{label}</FormLabel>}
+                    <Input {...{
+                        value: currValue??'',
+                        disabled:readonly,
+                        ref: inputRef,
+                        startDecorator, endDecorator,
+                        type,
+                        form,
+                        ...slotProps?.input,
+                        placeholder,
+                        title:'',       // explicitly remove browser's tooltip.  Required fields was generating default title.
+                        onChange:(ev) => onChange ? onChange(ev) : null,
+                        onBlur: (ev) => onBlur?.(ev),
+                        onKeyPress: (ev) => onKeyPress && onKeyPress(ev,currValue),
+                        onKeyDown: (ev) => onKeyDown && onKeyDown(ev,currValue),
+                        onKeyUp: (ev) => onKeyUp && onKeyUp(ev),
+                    }}
+                    />
+                </FormControl>
+            </Tooltip>
+        </Stack>
     );
-}
-
-const makeInfoPopup = (mess,x,y) => <PointerPopup x={x} y={y} message={makeMessage(mess)}/>;
-
-
-function computeWarningXY(warnIcon) {
-    var bodyRect = document.body.getBoundingClientRect();
-    if (!warnIcon) return {};
-    var elemRect = warnIcon.getBoundingClientRect();
-    var warningOffsetX = (elemRect.left - bodyRect.left) + warnIcon.offsetWidth / 2;
-    var warningOffsetY = elemRect.top - bodyRect.top;
-    return {warningOffsetX, warningOffsetY};
-}
-
-const ICON_SPACE_STYLE= {
-    verticalAlign: 'middle',
-    paddingLeft: 3,
-    width: 16,
-    height: 16,
-    display:'inline-block'};
-
-
-export class InputFieldView extends PureComponent {
-    constructor(props) {
-        super(props);
-        this.warnIcon = null;
-        this.state = { hasFocus: false, infoPopup: false };
-    }
-
-    componentDidUpdate() {
-        var {infoPopup}= this.state;
-        if (infoPopup && this.warnIcon) {
-            var {warningOffsetX, warningOffsetY}= computeWarningXY(this.warnIcon);
-            var {message}= this.props;
-            if (this.hider) this.hider();
-            this.hider = DialogRootContainer.showTmpPopup(makeInfoPopup(message, warningOffsetX, warningOffsetY));
-        }
-        else if (this.hider) {
-            this.hider();
-            this.hider = null;
-        }
-    }
-
-    makeWarningArea(warn) {
-        if (warn) {
-            return (
-                <div style={ICON_SPACE_STYLE}
-                     onMouseOver={() => this.setState({infoPopup:true})}
-                     onMouseLeave={() => this.setState({infoPopup:false})}>
-                    <img src={EXCLAMATION} ref={(c) => this.warnIcon= c}/>
-                </div>
-            );
-        }
-        else {
-            return <div style={ICON_SPACE_STYLE}/>;
-        }
-    }
-
-    render() {
-        var {hasFocus}= this.state;
-        var {visible,disabled, label,tooltip,labelWidth,value,style,wrapperStyle,labelStyle,
-             valid,size,onChange, onBlur, onKeyPress, onKeyDown, onKeyUp, showWarning, message, type, placeholder, form='__ignore', readonly}= this.props;
-        if (!visible) return null;
-        wrapperStyle = Object.assign({whiteSpace:'nowrap', display: this.props.inline?'inline-block':'block'}, wrapperStyle);
-        // form to relate this input field to.
-        // assign form to null or empty-string to use it within a form tag (similar to input tag without form attribute).
-        // if form is not given, it will default to __ignore so that it does not interfere with embedded forms.
-        form = form || undefined;
-
-        const currValue= (type==='file') ? undefined : value;
-
-        return (
-            <div style={wrapperStyle}>
-                {label && <InputFieldLabel labelStyle={labelStyle} label={label} tooltip={tooltip} labelWidth={labelWidth}/> }
-                <input style={Object.assign({display:'inline-block'}, style)}
-                       className={computeStyle(valid,hasFocus, readonly)}
-                       onChange={(ev) => onChange ? onChange(ev) : null}
-                       onFocus={ () => !hasFocus ? this.setState({hasFocus:true, infoPopup:false}) : ''}
-                       onBlur={ (ev) => {
-                                onBlur && onBlur(ev);
-                                this.setState({hasFocus:false, infoPopup:false});
-                            }}
-                       onKeyPress={(ev) => onKeyPress && onKeyPress(ev,currValue)}
-                       onKeyDown={(ev) => onKeyDown && onKeyDown(ev,currValue)}
-                       onKeyUp={(ev) => onKeyUp && onKeyUp(ev)}
-                       value={currValue}
-                       disabled={readonly}
-                       title={ (!showWarning && !valid) ? message : tooltip}
-                       {...pickBy({size, type, disabled, placeholder, form})}
-                />
-                {showWarning && this.makeWarningArea(!valid)}
-            </div>
-        );
-    }
 }
 
 InputFieldView.propTypes= {
@@ -129,15 +68,10 @@ InputFieldView.propTypes= {
     visible : bool,
     disabled : bool,
     message : string,
-    tooltip : string,
+    tooltip : oneOfType([string, bool]),
     label : string,
-    inline : bool,
-    labelWidth: number,
-    style: object,
-    wrapperStyle: object,
-    labelStyle: object,
+    orientation: string,
     value   : oneOfType([string, number]).isRequired,
-    size : number,
     onChange : func.isRequired,
     onBlur : func,
     onKeyPress : func,
@@ -147,16 +81,17 @@ InputFieldView.propTypes= {
     type: string,
     placeholder: string,
     form: string,
-    readonly: bool
-};
-
-InputFieldView.defaultProps= {
-    showWarning : true,
-    valid : true,
-    visible : true,
-    message: '',
-    type: 'text',
-    readonly: false
+    readonly: bool,
+    required: bool,
+    startDecorator: element,
+    endDecorator: element,
+    sx: object,
+    slotProps: shape({
+        input: object,
+        control: object,
+        label: object,
+        tooltip: object
+    })
 };
 
 export const propTypes = InputFieldView.propTypes;

@@ -2,7 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.firefly.server;
-/**
+/*
  * User: roby
  * Date: 7/26/13
  * Time: 9:57 AM
@@ -10,7 +10,8 @@ package edu.caltech.ipac.firefly.server;
 
 
 import edu.caltech.ipac.firefly.server.security.SsoAdapter;
-import edu.caltech.ipac.util.AppProperties;
+import edu.caltech.ipac.firefly.server.util.VersionUtil;
+import edu.caltech.ipac.firefly.server.visualize.VisContext;
 import edu.caltech.ipac.util.ComparisonUtil;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.StringUtils;
@@ -43,7 +44,6 @@ public class Counters {
     private final KeyComparator keyComparator= new KeyComparator();
     private final SizeComparator sizeComparator= new SizeComparator();
     private static final long startTime= System.currentTimeMillis();
-    private static final String HOST_NAME= FileUtil.getHostname();
 
 
 
@@ -138,6 +138,7 @@ public class Counters {
     }
 
     public List<String> reportStatus() {
+        ServerContext.Info sInfo = ServerContext.getSeverInfo();
         List<String> outList= new ArrayList<String>(cntMap.keySet());
         List<String> retList= new ArrayList<String>(cntMap.size()+40);
         Collections.sort(outList,catComparator);
@@ -146,14 +147,22 @@ public class Counters {
 
         String elapse= UTCTimeUtil.getDHMS((System.currentTimeMillis()-startTime)/1000);
         retList.add("Overview");
-        addToList(retList,"Hostname", HOST_NAME);
+        addToList(retList,"Hostname", sInfo.host());
+        addToList(retList,"Total physical memory", FileUtil.getSizeAsString(sInfo.pMemory()));
+        addToList(retList,"IP", sInfo.ip());
         addToList(retList, "Up time", elapse);
         addToList(retList, "Client Base URL", ServerContext.getRequestOwner().getBaseUrl());
         SsoAdapter ssoAdapter = ServerContext.getRequestOwner().getSsoAdapter();
         addToList(retList, "Login URL", ssoAdapter == null ? "n/a" : ssoAdapter.getLoginUrl(""));
         addToList(retList, "Auth Token", (ssoAdapter != null && ssoAdapter.getAuthToken() != null) ? ssoAdapter.getAuthToken().getId() : null);
+        addToList(retList, "Session ID", ServerContext.getRequestOwner().getRequestAgent().getSessId());
+        addToList(retList, "User Key", ServerContext.getRequestOwner().getUserKey());
+
         retList.add("");
-        addMemoryStatus(retList);
+        addMemoryStatus(retList, sInfo);
+
+        retList.add("");
+        addVersionInfo(retList);
 
         String pagesCat= Category.Pages.toString();
         List<String> pagesList= new ArrayList<String>(300);
@@ -171,16 +180,12 @@ public class Counters {
                         lastCat= kp.getCat();
                     }
                     switch (kp.getUnit()) {
-                        case CNT:
-                            addToList(retList,kp.getKey(),cntMap.get(mapKey).get());
-                            break;
-                        case KB:
-                            String sizeStr= StringUtils.getKBSizeAsString(cntMap.get(mapKey).get());
-                            addToList(retList,kp.getKey(),sizeStr);
-                            break;
-                        default:
-                            // do nothing
-                            break;
+                        case CNT -> addToList(retList, kp.getKey(), cntMap.get(mapKey).get());
+                        case KB -> {
+                            String sizeStr = StringUtils.getKBSizeAsString(cntMap.get(mapKey).get());
+                            addToList(retList, kp.getKey(), sizeStr);
+                        }
+                        default -> { }// do nothing
                     }
 
                 }
@@ -215,17 +220,27 @@ public class Counters {
 
 
 
-    public void addMemoryStatus(List<String> retList) {
-        Runtime rt= Runtime.getRuntime();
-        long totMem= rt.totalMemory();
-        long freeMem= rt.freeMemory();
-        retList.add("Memory");
-        long maxMem= rt.maxMemory();
-        addMemStrToList(retList,"Used", FileUtil.getSizeAsString(totMem-freeMem));
-        addMemStrToList(retList,"Max", FileUtil.getSizeAsString(maxMem));
-        addMemStrToList(retList,"Max Free", FileUtil.getSizeAsString(maxMem-(totMem-freeMem)));
-        addMemStrToList(retList,"Free Active", FileUtil.getSizeAsString(freeMem));
-        addMemStrToList(retList,"Total Active", FileUtil.getSizeAsString(totMem));
+    public void addMemoryStatus(List<String> retList, ServerContext.Info sInfo) {
+        retList.add("JVM Memory");
+
+        addMemStrToList(retList,"Used", FileUtil.getSizeAsString(sInfo.jvmTotal()-sInfo.jvmFree()));
+        addMemStrToList(retList,"Max", FileUtil.getSizeAsString(sInfo.jvmMax()));
+        addMemStrToList(retList,"Max Free", FileUtil.getSizeAsString(sInfo.jvmMax()-(sInfo.jvmTotal()-sInfo.jvmFree())));
+        addMemStrToList(retList,"Free Active", FileUtil.getSizeAsString(sInfo.jvmFree()));
+        addMemStrToList(retList,"Total Active", FileUtil.getSizeAsString(sInfo.jvmTotal()));
+        retList.add("");
+        retList.add("Limits");
+        addToList(retList, "Cores", Runtime.getRuntime().availableProcessors());
+        addToList(retList, "Max FITS File size", FileUtil.getSizeAsString(VisContext.FITS_MAX_SIZE));
+        retList.add("");
+    }
+
+
+    private void addVersionInfo(List<String> retList) {
+        retList.add("Version Information");
+        VersionUtil.getVersionInfo().forEach(verInfoKeyVal ->
+                addToList(retList, verInfoKeyVal.getKey(), verInfoKeyVal.getValue()));
+        addToList(retList,"Java Version", System.getProperty("java.version"));
         retList.add("");
     }
 

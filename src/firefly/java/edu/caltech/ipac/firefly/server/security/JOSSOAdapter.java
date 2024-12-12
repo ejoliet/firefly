@@ -13,7 +13,6 @@ import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.Base64;
 import edu.caltech.ipac.util.StringUtils;
-import org.apache.http.HttpResponse;
 import org.josso.gateway.ws._1_2.protocol.AssertIdentityWithSimpleAuthenticationRequestType;
 import org.josso.gateway.ws._1_2.protocol.AssertIdentityWithSimpleAuthenticationResponseType;
 import org.josso.gateway.ws._1_2.protocol.AssertionNotValidErrorType;
@@ -45,9 +44,8 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.xml.rpc.ServiceException;
 import java.rmi.RemoteException;
-import java.util.HashMap;
-import java.util.Map;
 
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
@@ -247,6 +245,7 @@ public class JOSSOAdapter implements SsoAdapter {
         RequestAgent http = ServerContext.getRequestOwner().getRequestAgent();
         if(http!=null){
             if (SsoAdapter.requireAuthCredential(inputs.getRequestUrl(), "ipac.caltech.edu")) {
+                applyIfNotEmpty(http.getHeader("Authorization"), (v) -> inputs.setHeader("Authorization", v));      // pass along authorization header; this includes more than just basic-auth. should this in mind.
                 for (String name : ID_COOKIE_NAMES) {
                     String value = http.getCookieVal(name);
                     if (!isEmpty(value)) {

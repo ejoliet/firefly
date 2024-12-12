@@ -3,23 +3,29 @@
  */
 package edu.caltech.ipac.admin_tools;
 
-import java.lang.reflect.*;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.File;
-import java.io.FileReader;
+import edu.caltech.ipac.visualize.plot.plotdata.FitsReadUtil;
+import nom.tam.fits.BasicHDU;
+import nom.tam.fits.Fits;
+import nom.tam.fits.FitsException;
+import nom.tam.fits.Header;
+import nom.tam.fits.HeaderCard;
+import nom.tam.fits.ImageData;
+import nom.tam.util.BufferedDataOutputStream;
+import nom.tam.util.Cursor;
+
 import java.io.BufferedReader;
-import java.io.FileWriter;
 import java.io.BufferedWriter;
-import java.io.IOException;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
-import java.util.StringTokenizer;
-import java.util.ArrayList;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URL;
-
-import nom.tam.fits.*;
-import nom.tam.util.*;
+import java.util.ArrayList;
+import java.util.StringTokenizer;
 
 public class CreateFiles
 {
@@ -243,10 +249,6 @@ static public void main(String args[])
 	    }
 	    out.close();
 	}
-	catch (FileNotFoundException fe)
-	{
-	    System.err.println("ABORT: " + fe.getMessage());
-	}
 	catch (IOException ioe)
 	{
 	    System.err.println("ABORT: " + ioe.getMessage());
@@ -306,7 +308,7 @@ static public void main(String args[])
 		}
 	    }
 	    new_image_data = new ImageData(new_data32);
-	    BasicHDU new_HDU = new ImageHDU(new_header, new_image_data);
+	    BasicHDU<?> new_HDU = FitsReadUtil.makeImageHDU(new_header, new_image_data);
 	    Fits new_fits = new Fits();
 	    new_fits.addHDU(new_HDU);
 
@@ -317,14 +319,12 @@ static public void main(String args[])
 	    BufferedDataOutputStream o = new BufferedDataOutputStream(fo);
 	    new_fits.write(o);
 	}
-	catch (FitsException e)
+	catch (FitsException | IOException e)
 	{
-	    e.printStackTrace();
-	} catch (FileNotFoundException e) {
 	    e.printStackTrace();
 	}
 
-    }
+	}
 
 
     static Header clone_header(Header header)

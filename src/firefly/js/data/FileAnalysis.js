@@ -11,7 +11,20 @@ export const FileAnalysisType = {
     LoadInBrowser: 'LoadInBrowser',
     Unknown: 'UNKNOWN',
     HTML: 'HTML',
-    REGION: 'REGION'
+    REGION: 'REGION',
+    PNG: 'PNG',
+    UWS: 'UWS'
+};
+
+export const DataProductTypes = {
+    spectrum : 'spectrum',
+    image : 'image',
+    cube : 'cube',
+    sed : 'sed',
+    timeseries : 'timeseries',
+    visibility : 'visibility',
+    event : 'event',
+    mesurements : 'mesurements',
 };
 
 export const UIRender = {
@@ -38,6 +51,7 @@ export const Format= {
     JSON: 'JSON',
     PDF: 'PDF',
     TAR: 'TAR',
+    PNG: 'PNG',
     REGION: 'REGION',
     VO_TABLE: 'VO_TABLE',
     VO_TABLE_TABLEDATA: 'VO_TABLE_TABLEDATA',
@@ -90,6 +104,9 @@ export const makeFileAnalysisPart= (index,fileLocationIndex=0) => (
  * @prop {string} xAxis
  * @prop {string} yAxis
  * @prop {Array.<FileAnalysisChartParams>} chartParamsAry
+ * @prop {boolean} useChartChooser
+ * @props {Array.<string>} [cUnits]
+ * @props {Array.<string>} [cNames]
  *
  */
 
@@ -131,6 +148,7 @@ export const makeFileAnalysisPart= (index,fileLocationIndex=0) => (
  *  @prop {boolean} [interpretedData] - should be true if this is data that has been added to the original
  *  @prop {string} chartTableDefOption - only used if there is a chart on of 'auto', 'showChart', 'showTable', 'showImage'
  *  @prop {TableModel} [details]
+ *  @prop {Number} [totalTableRows] if the part is a table the number of rows in the table, otherwise undefined
  *
  *
  */

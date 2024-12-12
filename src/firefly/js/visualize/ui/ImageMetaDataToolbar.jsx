@@ -4,7 +4,7 @@
 
 import React, {Component} from 'react';
 import PropTypes from 'prop-types';
-import {isEmpty,omit} from 'lodash';
+import {omit} from 'lodash';
 import {flux} from '../../core/ReduxFlux.js';
 import shallowequal from 'shallowequal';
 import {ImageMetaDataToolbarView} from './ImageMetaDataToolbarView.jsx';
@@ -22,9 +22,8 @@ export class ImageMetaDataToolbar extends Component {
     shouldComponentUpdate(np,ns) {
         const {props,state}= this;
         const om= ['visRoot'];
-        var update= !shallowequal(omit(props,om), omit(np,om)) || !shallowequal(ns,state);
+        const update= !shallowequal(omit(props,om), omit(np,om)) || !shallowequal(ns,state);
         if (update) return true;
-
         return ((np.layoutType===SINGLE && props.visRoot.activePlotId!==np.visRoot.activePlotId));
     }
 
@@ -50,14 +49,13 @@ export class ImageMetaDataToolbar extends Component {
 
     render() {
         const {activeTable}= this.state;
-        
-        const {visRoot, viewerId, viewerPlotIds, layoutType, dlAry, makeDropDown}= this.props;
+        const {visRoot, viewerId, viewerPlotIds, layoutType, dlAry, makeDropDown, serDef, factoryKey, enableCutout, pixelBasedCutout= false}= this.props;
         return (
-            <ImageMetaDataToolbarView activePlotId={visRoot.activePlotId} viewerId={viewerId}
+            <ImageMetaDataToolbarView activePlotId={visRoot.activePlotId} viewerId={viewerId}  serDef={serDef}
+                                      enableCutout={enableCutout} pixelBasedCutout={pixelBasedCutout}
                                       viewerPlotIds={viewerPlotIds} layoutType={layoutType} dlAry={dlAry}
                                       activeTable={activeTable} makeDataProductsConverter={makeDataProductsConverter}
-                                      makeDropDown={makeDropDown}
-                                        /> 
+                                      makeDropDown={makeDropDown} factoryKey={factoryKey} />
         );
     }
 }
@@ -69,5 +67,9 @@ ImageMetaDataToolbar.propTypes= {
     layoutType : PropTypes.string.isRequired,
     viewerPlotIds : PropTypes.arrayOf(PropTypes.string).isRequired,
     tableId: PropTypes.string,
-    makeDropDown: PropTypes.func
+    factoryKey: PropTypes.string,
+    makeDropDown: PropTypes.func,
+    enableCutout: PropTypes.bool,
+    pixelBasedCutout: PropTypes.bool,
+    serDef: PropTypes.object
 };

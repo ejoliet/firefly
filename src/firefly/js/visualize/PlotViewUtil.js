@@ -1,37 +1,46 @@
 /*
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
-import {flatten, has, isArray, isEmpty, isObject, isString, isUndefined, uniq} from 'lodash';
+import {dispatchDeletePlotView, ExpandType, visRoot} from 'firefly/visualize/ImagePlotCntlr.js';
+import {has, isArray, isEmpty, isObject, isString, isUndefined} from 'lodash';
 import shallowequal from 'shallowequal';
-import {getPlotGroupById} from './PlotGroup.js';
-import {makeDevicePt, makeImagePt, makeWorldPt, pointEquals} from './Point.js';
-import {makeTransform} from './PlotTransformUtils.js';
+import {memorizeLastCall} from '../util/WebUtil';
 import CysConverter, {CCUtil} from './CsysConverter';
-import {isHiPS, isImage} from './WebPlot.js';
-import {isDefined, memorizeLastCall} from '../util/WebUtil';
-import {getWavelength, isWLAlgorithmImplemented, PLANE} from './projection/Wavelength.js';
 import {getNumberHeader, HdrConst} from './FitsHeaderUtil.js';
-import {computeDistance, getRotationAngle, isCsysDirMatching, isEastLeftOfNorth, isPlotNorth} from './VisUtil';
+import {getViewer} from './MultiViewCntlr.js';
+import {getMatchingPlotRotationAngle, getRotationAngle, isPlotNorth } from './WebPlotAnalysis';
+import {getPlotGroupById} from './PlotGroup.js';
+import {makeTransform} from './PlotTransformUtils.js';
+import {makeDevicePt, makeImagePt, makeWorldPt, pointEquals} from './Point.js';
+import {getWavelength} from './projection/Wavelength.js';
 import {removeRawData} from './rawData/RawDataCache.js';
-import {MAX_DIRECT_IMAGE_SIZE, MAX_DIRECT_MASK_IMAGE_SIZE, MAX_RAW_IMAGE_SIZE} from './rawData/RawDataCommon.js';
-import {hasClearedDataInStore, hasLocalRawDataInStore, hasLocalStretchByteDataInStore} from './rawData/RawDataOps.js';
+import {hasClearedDataInStore, hasLocalStretchByteDataInStore} from './rawData/RawDataOps.js';
+import {computeDistance} from './VisUtil';
+import {isHiPS, isHiPSAitoff, isImage} from './WebPlot.js';
 
 
 export const CANVAS_IMAGE_ID_START= 'image-';
 export const CANVAS_DL_ID_START= 'dl-';
+export const DEFAULT_COVERAGE_PLOT_ID = 'CoveragePlot';
+export const DEFAULT_COVERAGE_VIEWER_ID = 'CoverageImages';
+
 /**
  * 
- * @param {VisRoot | PlotView[]} ref
+ * @param {VisRoot | PlotView[]| undefined} ref
+ * @param {String} [plotGroupId] return only the PlotViews with the same group id, if undefined return all
  * @returns {PlotView[]}
  */
-export function getPlotViewAry(ref) {
+export function getPlotViewAry(ref, plotGroupId= undefined) {
     if (!ref) return undefined;
+    let pvAry;
     if (ref.plotViewAry && has(ref,'activePlotId')) { // I was passed the visRoot
-        return ref.plotViewAry;
+        pvAry= ref.plotViewAry;
     }
     else if (isArray(ref) && ref.length>0 && ref[0].plotId)  { // passed a plotViewAry
-        return ref;
+        pvAry= ref;
     }
+    if (!plotGroupId) return pvAry;
+    return pvAry.filter( (pv) => pv.plotGroupId===plotGroupId);
 }
 
 /**
@@ -68,13 +77,13 @@ export const primePlot= memorizeLastCall( (ref,plotId) => {
  * last call results are cached, for optimizations, after 2000 calls cached calls are about 2 times faster.
  * cache is hit about 1.5 times for every non-cache all
  *
- * @param {VisRoot | PlotView[] } ref this can be the visRoot object or a plotViewAry array.
+ * @param {VisRoot | PlotView[] | undefined } ref this can be the visRoot object or a plotViewAry array.
  * @param {string} plotId
  *
  * @returns {PlotView|undefined} the plot view object, or undefined if it is not found
  */
 export const getPlotViewById= memorizeLastCall( (ref,plotId) =>{
-    if (!plotId) return undefined;
+    if (!plotId || !ref) return undefined;
     const plotViewAry= getPlotViewAry(ref);
     if (!plotViewAry) return undefined;
     return plotViewAry.find( (pv) => pv.plotId===plotId);
@@ -91,12 +100,15 @@ export function getPlotGroupIdxById(ref,plotGroupId) {
 
 /**
  * @param {PlotView[]|PlotView|VisRoot|CysConverter|WebPlot} ref this can be the visRoot or the plotViewAry, or a plotView Object.
- * @return {boolean} true if there is a projection
+ * @param {Boolean} includeNoncelestial if True include non-celestial coordinate systems into consideration
+ * @return {boolean} true if there is a projection for recognized celestial system by default or,
+ *  if unrecognizedCelestial is true, for any coordinate system with recognized projection algorithm.
  */
-export function hasWCSProjection(ref) {
+export function hasWCSProjection(ref, includeNoncelestial=false) {
     if (!ref) return false;
     const projection= ref.projection ?? primePlot(ref)?.projection;
-    return Boolean(projection?.isSpecified() && projection?.isImplemented());
+    const hasProjection = Boolean(projection?.isSpecified() && projection?.isImplemented());
+    return hasProjection && projection?.coordSys?.isCelestial() || includeNoncelestial;
 }
 
 /**
@@ -116,7 +128,7 @@ export function getPlotViewIdListByPositionLock(visRoot, pvOrId) {
 /**
  * Return an array of plotId's that are in the plot group associated with the the pvOrId parameter.
  * @param {VisRoot} visRoot - root of the visualization object in store
- * @param pvOrId this parameter will take the plotId string or a plotView objectgs
+ * @param pvOrId this parameter will take the plotId string or a plotView objects
  * @returns {Array.<String>}
  */
 export function getPlotViewIdListInOverlayGroup(visRoot,pvOrId) {
@@ -142,6 +154,7 @@ export function getPlotViewIdListInOverlayGroup(visRoot,pvOrId) {
 export function getAllPlotViewIdByOverlayLock(visRoot, pvOrId, hasPlots=false, plotTypeMustMatch) {
     if (!pvOrId) return [];
     const majorPv= (typeof pvOrId ==='string') ? getPlotViewById(visRoot,pvOrId) : pvOrId;
+    if (!majorPv) return [];
     const gid= majorPv.plotGroupId;
     const group= getPlotGroupById(visRoot,gid);
     const locked= hasOverlayColorLock(majorPv,group);
@@ -193,32 +206,18 @@ export const isPlotView= (obj) =>
 
 /**
  *
- * @param {PlotView} pv
+ * @param {PlotView|undefined} pv
  * @param {String} imageOverlayId
  * @return {OverlayPlotView|undefined}
  */
 export const getOverlayById= (pv, imageOverlayId) =>
                        pv?.overlayPlotViews.find( (opv) => opv.imageOverlayId===imageOverlayId);
 
-/**
- * Look for a cached image tile that has been reprocessed from the original. Match by plotId and the original
- * url key of the unprocessed tile
- * @param {VisRoot} visRoot
- * @param {string} plotId
- * @param {string} originalUrlkey
- * @return {ClientTile}
- */
-export function findProcessedTile(visRoot, plotId, originalUrlkey) {
-    if (!visRoot) return undefined;
-    return flatten(visRoot.processedTiles.filter( (e) => e.plotId===plotId).map( (e) => e.clientTileAry))
-        .find( (tile) => tile.url===originalUrlkey );
-}
-
 
 /**
  *
- * @param ref
- * @param plotId
+ * @param {VisRoot | PlotView[] | undefined } ref
+ * @param {string} plotId
  * @param imageOverlayId
  * @return {OverlayPlotView}
  */
@@ -253,11 +252,13 @@ export function getAllDrawLayersForPlot(ref,plotId,mustBeVisible=false) {
 }
 
 
-export function getConnectedPlotsIds(ref, drawLayerId) {
-    if (!ref) return null;
+export function getConnectedPlotsIds(ref, drawLayerId, mustBeVisible=false) {
+    if (!ref) return [];
     const dlAry= ref.drawLayerAry ? ref.drawLayerAry : ref;
     const dl= getDrawLayerById(dlAry,drawLayerId);
-    return dl ? dl.plotIdAry : [];
+    if (!dl) return [];
+    const ary= mustBeVisible ? dl.visiblePlotIdAry : dl.plotIdAry;
+    return dl ? ary : [];
 }
 
 
@@ -277,7 +278,7 @@ export function getDrawLayerByType(ref,typeId) {
  * get all drawing layers of type 'typeId'
  * @param {DrawLayer[]|DrawLayerRoot} ref - the root of the drawing layer controller or the master array of all drawing layers
  * @param typeId
- * @return {object} the draw layer
+ * @return {Array.<DrawLayer>} the draw layer
  */
 export function getDrawLayersByType(ref,typeId) {
     if (!ref) return undefined;
@@ -362,6 +363,11 @@ export function getPlotStateAry(pv) {
 }
 
 
+/**
+ * @param {PlotView} pv
+ * @param {PlotGroup} plotGroup
+ * @return {boolean}
+ */
 export function hasOverlayColorLock(pv,plotGroup) {
     return Boolean(plotGroup && plotGroup.plotGroupId && plotGroup.overlayColorLock &&
         pv && pv.plotGroupId===plotGroup.plotGroupId);
@@ -374,7 +380,7 @@ export function hasOverlayColorLock(pv,plotGroup) {
  * @return {*}
  */
 export function findPlotGroup(plotGroupId, plotGroupAry) {
-    if (!plotGroupId || !plotGroupAry) return null;
+    if (!plotGroupId || !plotGroupAry) return undefined;
     return plotGroupAry.find( (pg) => pg.plotGroupId===plotGroupId);
 }
 
@@ -469,7 +475,7 @@ export function matchPlotViewByPositionGroup(vr, sourcePv, plotViewAry, matchAny
 
 /**
  * perform an operation on a plotView or its related group depending on the lock state.
- * Typically used inside of reducer
+ * Typically, used inside of reducer.
  * @param {boolean} toAll
  * @param {Array.<PlotView>} plotViewAry plotViewAry
  * @param {string} plotId the that is primary.
@@ -634,6 +640,10 @@ export function isPlotIdInPvNewPlotInfoAry(pvNewPlotInfoAry, plotId) {
     return pvNewPlotInfoAry.some( (npi) => npi.plotId===plotId);
 }
 
+/**
+ * @typedef {Object} Canvas
+ * @prop id
+ */
 
 /**
  *
@@ -684,26 +694,27 @@ export function getAllCanvasLayersForPlot(plotId) {
 
 /**
  *
- * @param {PlotView} pv
+ * @param {PlotView|WebPlot} plotOrPv
  * @param {number} [alternateZoomFactor]
  * @return {number|boolean} fov in degrees, or false if it can't be computed
  */
-export function getFoV(pv, alternateZoomFactor) {
-    const plot= primePlot(pv);
+export function getFoV(plotOrPv, alternateZoomFactor) {
+    if (!plotOrPv) return false;
+    const plot= isPlotView(plotOrPv) ? primePlot(plotOrPv) : plotOrPv;
+    const {width, height} = plot.viewDim;
     const cc = CysConverter.make(plot);
-    const {width, height} = pv.viewDim;
-    const allSkyImage= Boolean(isImage(plot) && plot.projection.isWrappingProjection());
     if (!cc || !width || !height) return false;
+    const allSkyImage= Boolean(plot.projection.isWrappingProjection());
     if (alternateZoomFactor) cc.zoomFactor= alternateZoomFactor;
     const pt1 = cc.getWorldCoords(makeDevicePt(1, height / 2));
     const pt2 = (allSkyImage) ? cc.getWorldCoords(makeDevicePt(width/2, height / 2))  :
-                                cc.getWorldCoords(makeDevicePt(width - 1, height / 2));
+        cc.getWorldCoords(makeDevicePt(width - 1, height / 2));
 
     const dist= (pt1 && pt2) && computeDistance(pt1, pt2);
     if (dist) return allSkyImage ? dist*2 : dist;
 
     if (isHiPS(plot)) {
-        return 180; // todo: this may need to consider the projection type in to future, ie aitoff 360
+        return isHiPSAitoff(plot) ? 360 : 180;
     }
     else if (allSkyImage) {
         return 360;
@@ -713,7 +724,9 @@ export function getFoV(pv, alternateZoomFactor) {
         const ip2=  cc.getWorldCoords(makeImagePt(plot.dataWidth, 0));
         const idist= (ip1 && ip2) && computeDistance(ip1, ip2);
         if (!idist) return false;
-        return (pv.viewDim.width/plot.screenSize.width) * idist;
+        return alternateZoomFactor ?
+            (width/(plot.dataWidth*alternateZoomFactor)) * idist :
+            (width/plot.screenSize.width) * idist;
     }
 }
 
@@ -730,30 +743,20 @@ export function getFoV(pv, alternateZoomFactor) {
  * @param {PlotView} pv
  * @return {boolean} true if there are cubes or images
  */
-export const isMultiImageFits= (pv) => Boolean(isMultiHDUFits(pv) || getNumberOfCubesInPV(pv)>0);
+export const isMultiImageFits= (pv) => pv.plots.length>1 && !isHiPS(primePlot(pv));
 
 /**
  * Does the image file have more than one HDU
  * @param {PlotView} pv
  * @return {boolean} true if this file has more than one HDU
  */
-export function isMultiHDUFits(pv) {
-    if (!pv) return false;
-    const hduCnt= uniq(pv.plots.map( (p) => getNumberHeader(p,HdrConst.SPOT_EXT,0)));
-    return hduCnt.length>1;
-}
+export const isMultiHDUFits= (pv) => Boolean(pv?.plotViewCtx.multiHdu);
 
 /**
  * @param {PlotView} pv
- * @return {Array.<number>|boolean}
+ * @return {Array.<number>|false}
  */
-export function getHduPlotStartIndexes(pv) {
-    if (!pv) return false;
-    if (!isMultiHDUFits(pv)) return [0];
-    return pv.plots
-        .map( (p,idx) => idx)
-        .filter( (idx) => getImageCubeIdx(pv.plots[idx])<1);
-}
+export const getHduPlotStartIndexes= (pv) => pv?.plotViewCtx.hduPlotStartIndexes;
 
 /**
  * @param {PlotView} pv
@@ -769,24 +772,19 @@ export const getHDUCount= (pv) => getHduPlotStartIndexes(pv).length;
  */
 export function getNumberOfCubesInPV(pv) {
     if (!pv || !isImage(primePlot(pv)) ) return 0;
-    return pv.plots.reduce( (total, p, idx) => {
-        if (idx===0) return getImageCubeIdx(p)>=0 ? 1 : 0;
-        return ( getHDU(p)!==getHDU(pv.plots[idx-1]) && getImageCubeIdx(p)>-1) ? total+1 : total;
-    }, 0);
+    return pv.plotViewCtx.cubeCnt;
 }
 
 /**
  * Get the total number of planes in the cube of the plot
- * @param {PlotView} pv
- * @param {WebPlot} [plot] the plot to check, defaults to primaryPlot
- * @return {number}
+ * @param {PlotView|WebPlot} plotOrPv
+ * @return {number} the number of cube planes, 0 if this is not a cube
  */
-export function getCubePlaneCnt(pv, plot) {
-    if (!plot) plot= primePlot(pv);
+export const getCubePlaneCnt= (plotOrPv) => {
+    const plot= isPlotView(plotOrPv) ? primePlot(plotOrPv) : plotOrPv;
     if (!isImageCube(plot)) return 0;
-    const hdu= getHDU(plot);
-    return pv.plots.filter( (p) => getHDU(p)===hdu).length;
-}
+    return plot.cubeCtx.cubeLength;
+};
 
 
 /**
@@ -804,15 +802,15 @@ export function getPrimaryPlotHdu(pv) {
 /**
  * Get the HDU of this image in the FITS file, this is not the index of the HDU of load images since there
  * might be tables in between images
- * @param {WebPlot} plot
+ * @param {WebPlot|undefined} plot
  * @return {number} the HDU number, single images will always return 0
  */
 export const getHDU= (plot) => getNumberHeader(plot,HdrConst.SPOT_EXT,0);
 
 /**
  *
- * @param {PlotView} pv
- * @param {WebPlot} plot
+ * @param {PlotView|undefined} pv
+ * @param {WebPlot|undefined} plot
  * @return {number}
  */
 export function getHDUIndex(pv, plot= undefined) {
@@ -826,14 +824,14 @@ export function getHDUIndex(pv, plot= undefined) {
 
 /**
  * Find if there are image cube this this plotview
- * @param {PlotView} pv
+ * @param {PlotView|undefined} pv
  * @return {boolean} true if there are any image cube in the PlotView
  */
 export const hasImageCubes = (pv) => getNumberOfCubesInPV(pv)>0;
 
 /**
  * get the plane index of this plot in cube
- * @param {WebPlot} plot
+ * @param {WebPlot|undefined} plot
  * @return {number} the plane index, -1 if not in a cube
  */
 export const getImageCubeIdx = (plot) => plot?.cubeCtx?.cubePlane ?? -1;
@@ -841,21 +839,21 @@ export const getImageCubeIdx = (plot) => plot?.cubeCtx?.cubePlane ?? -1;
 
 /**
  * plot is plane in a image cube
- * @param {WebPlot} plot
+ * @param {WebPlot|undefined} plot
  * @return {boolean} true if plot is a plane in a cube, otherwise false
  */
 export const isImageCube = (plot) => getImageCubeIdx(plot) > -1;
 
 /**
  * Given a HDU index and optionally a cube index, return the image idx
- * @param {PlotView} pv
+ * @param {PlotView|undefined} pv
  * @param {number} hduIdx
  * @param {number|'follow'} cubeIdx
  * @return {number|undefined} the hdu number or undefined if bad parameters
  */
 export function convertHDUIdxToImageIdx(pv, hduIdx, cubeIdx=0) {
     if (!pv || !isPlotView(pv)) return undefined;
-    if (!isMultiImageFits(pv)) return 0;
+   if (!isMultiImageFits(pv)) return 0;
     const plot= primePlot(pv);
     if (cubeIdx==='follow' && isImageCube(plot)) {
         const idx= pv.plots.findIndex((p)=> p===plot);
@@ -863,7 +861,7 @@ export function convertHDUIdxToImageIdx(pv, hduIdx, cubeIdx=0) {
     }
     const startIndexes= getHduPlotStartIndexes(pv);
     if (hduIdx>startIndexes.length-1)return 0;
-    const cnt= getCubePlaneCnt(pv, pv.plots[startIndexes[hduIdx]]);
+    const cnt= getCubePlaneCnt(pv.plots[startIndexes[hduIdx]]);
     return (isImageCube(pv.plots[startIndexes[hduIdx]]) && cubeIdx<cnt) ? startIndexes[hduIdx]+cubeIdx : startIndexes[hduIdx];
 }
 
@@ -897,24 +895,40 @@ export function convertImageIdxToHDU(pv, imageIdx) {
  * Only CTYPEka = 'WAVE-ccc', exists, the hasWLInfo is true.
  * also check if vrad data is available, when CTYPE# = 'VRAD-xxx', hasVRADInfo is true.
  * If the wlType or vradType is not defined, it is a pure cube data
- * @param {WebPlot} plot
+ * @param {WebPlot|undefined} plot
  * @return {boolean}
  */
 export const hasWLInfo= (plot) =>
-           Boolean(plot && plot.wlData && isDefined(plot.wlData.wlType) && isWLAlgorithmImplemented(plot.wlData) );
+           Boolean(plot?.wlData?.hasPlainOnlyCoordInfo || plot?.wlData?.hasPixelLevelCoordInfo );
 
-export const wavelengthInfoParsedSuccessfully= (plot) => hasWLInfo(plot) && !Boolean(plot.wlData.failReason);
+export const wavelengthInfoParsedSuccessfully= (plot) => !Boolean(plot?.wlData?.failReason);
 
-export const getWavelengthParseFailReason= (plot) => hasWLInfo(plot) && plot.wlData.failReason;
+export const getWavelengthParseFailReason= (plot) => plot?.wlData?.failReason;
+
+export const hasPixelLevelWLInfo= (plot) => Boolean(plot?.wlData?.hasPixelLevelCoordInfo);
+
+export const hasPlaneOnlyWLInfo= (plot) => Boolean(plot?.wlData?.hasPlainOnlyCoordInfo);
 
 /**
- * check to see if wavelength data is available as the plain level (not pixel level) only
- * @param {WebPlot} plot
- * @return {boolean}
+ * if this is a spectral cube and each plane has a single wavelength then return an array of wavelengths for each plane.
+ * @param pv
+ * @param {Point} [imPt] an image point that is used if the image has Pixel Level wavelength info
+ * @return {number[]}
  */
-export const hasPlaneOnlyWLInfo= (plot) => hasWLInfo(plot) && plot.wlData.algorithm===PLANE;
+export function getAllWaveLengthsForCube(pv,imPt) {
+    const plot= primePlot(pv);
+    if (!plot || !isImageCube(plot) || !hasWLInfo(plot)) return;
+    const len= getCubePlaneCnt(pv);
+    if (!len) return;
+    return Array(len).fill('').map( (v,i) => getPtWavelength(plot, imPt, i));
+}
 
-export const hasPixelLevelWLInfo= (plot) => hasWLInfo(plot) && plot.wlData.algorithm!==PLANE;
+export function getCubePlaneFromWavelength(pv,wl,imPt) {
+    const wlAry= getAllWaveLengthsForCube(pv,imPt);
+    if (!wlAry?.length) return -1;
+    const wlInt= Math.trunc(wl*1000000);
+    return wlAry.findIndex( (testWl) => Math.trunc(testWl*1000000)===wlInt);
+}
 
 /**
  * Return the units string
@@ -923,19 +937,19 @@ export const hasPixelLevelWLInfo= (plot) => hasWLInfo(plot) && plot.wlData.algor
  */
 export function getWaveLengthUnits(plot) {
     if (!plot || !hasWLInfo(plot)) return '';
-    return plot.wlData?.units ?? '';
+    return plot.wlData?.spectralCoords?.[0].units ?? '';
 }
 
 
-const MICRON_SYMBOL= String.fromCharCode(0x03BC)+'m';
 
 /**
  *
- * @param {WebPlot|String} plotOrStr - pass a webplot to get the units from and the format or a string that will be formatted
+ * @param {WebPlot|String} plotOrStr - pass a WebPlot to get the units from and the format or a string that will be formatted
  * @param {boolean} anyPartOfStr - replace units with symbols in any part of a longer string
  * @return {string}
  */
 export function getFormattedWaveLengthUnits(plotOrStr, anyPartOfStr=false) {
+    const MICRON_SYMBOL= String.fromCharCode(0x03BC)+'m';
     const uStr= isString(plotOrStr) ? plotOrStr : getWaveLengthUnits(plotOrStr);
     if (anyPartOfStr) {
         return uStr.replace(new RegExp('microns|micron|um|micrometers','gi'),MICRON_SYMBOL);
@@ -946,15 +960,16 @@ export function getFormattedWaveLengthUnits(plotOrStr, anyPartOfStr=false) {
     }
 }
 
+
 /**
  *
- * @param {WebPlot} plot
+ * @param {WebPlot|undefined} plot
  * @param {Point} pt
  * @param {number} cubeIdx
  * @return {number}
  */
 export const getPtWavelength= (plot, pt, cubeIdx) =>
-          hasWLInfo(plot) && getWavelength(CCUtil.getImageCoords(plot,pt),cubeIdx,plot.wlData);
+    (plot && hasWLInfo(plot) && getWavelength(CCUtil.getImageCoords(plot,pt),cubeIdx,plot.wlData))?.[0] ?? 0;
 
 
 //=============================================================
@@ -1035,12 +1050,13 @@ export const pvEqualExScroll= memorizeLastCall((pv1,pv2) => {
                 p1.dataRequested!==p2.dataRequested ||
                 p1.blankColor!==p2.blankColor ||
                 p1.rawData!==p2.rawData ||
+                p1.projection.header.maptype!==p2.projection.header.maptype ||
                 p1.plotState !== p2.plotState) result= false;
         }
     }
     if (result && (
         pv1.visible!==pv2.visible || pv1.request!==pv2.request ||
-        pv1.viewDim!==pv2.viewDim || pv1.menuItemKeys!==pv2.menuItemKeys ||
+        pv1.viewDim!==pv2.viewDim || pv1.plotViewCtx.menuItemKeys!==pv2.plotViewCtx.menuItemKeys ||
         pv1.plotViewCtx!==pv2.plotViewCtx || pv1.rotation!==pv2.rotation ||
         pv1.flipY!==pv2.flipY)) result= false;
     if (result && !shallowequal(pv1.overlayPlotViews, pv2.overlayPlotViews)) result= false;
@@ -1074,55 +1090,6 @@ export function isRotationMatching(pv1, pv2) {
 
 const isNorthCountingRotation = (pv, plot) => pv.plotViewCtx.rotateNorthLock || (isPlotNorth(plot) && !pv.rotation);
 
-/**
- * return an angle that will rotate the pv to match the rotation of masterPv
- * @param {PlotView} masterPv
- * @param {PlotView} pv
- * @return {number}
- */
-export function getMatchingRotationAngle(masterPv, pv) {
-    const plot = primePlot(pv);
-    const masterPlot = primePlot(masterPv);
-    if (!plot || !masterPlot) return 0;
-    const masterRot = masterPv.rotation * (masterPv.flipY ? -1 : 1);
-    const rot = getRotationAngle(plot);
-    let targetRotation;
-    if (isEastLeftOfNorth(masterPlot)) {
-        targetRotation = ((getRotationAngle(masterPlot) + masterRot) - rot) * (masterPv.flipY ? 1 : -1);
-    } else {
-        targetRotation = ((getRotationAngle(masterPlot) + (360 - masterRot)) - rot) * (masterPv.flipY ? 1 : -1);
-
-    }
-    if (!isCsysDirMatching(plot, masterPlot)) targetRotation = 360 - targetRotation;
-    if (targetRotation < 0) targetRotation += 360;
-    if (targetRotation > 359) targetRotation %= 360;
-    return targetRotation;
-}
-
-export function canLoadStretchData(plot) {
-    if (!plot || !isImage(plot)) return false;
-    return (plot.dataWidth*plot.dataHeight) < MAX_RAW_IMAGE_SIZE;
-}
-
-export function canLoadStretchDataDirect(plot, mask=false) {
-    if (!plot || !isImage(plot)) return false;
-    const size= (plot.dataWidth*plot.dataHeight);
-    return mask ?
-        size<Math.min(MAX_RAW_IMAGE_SIZE,MAX_DIRECT_MASK_IMAGE_SIZE)  :
-        size<Math.min(MAX_RAW_IMAGE_SIZE,MAX_DIRECT_IMAGE_SIZE);
-}
-
-export function isAllStretchDataLoadable(vr) {
-    return getPlotViewAry(vr)
-        .map( (pv) => primePlot(pv))
-        .filter( (p) => isImage(p))
-        .every( (p) => canLoadStretchData(p));
-}
-
-export function hasLocalRawData(plot) {
-    return hasLocalRawDataInStore(plot);
-}
-
 export function hasLocalStretchByteData(plot) {
     return hasLocalStretchByteDataInStore(plot);
 }
@@ -1136,4 +1103,66 @@ export function isAllStretchDataLoaded(vr) {
         .map( (pv) => primePlot(pv))
         .filter( (p) => isImage(p))
         .every( (p) => hasLocalStretchByteData(p));
+}
+
+/**
+ *
+ * @param {VisRoot} vr
+ * @param {MultiViewerRoot} mvr
+ * @returns {boolean}
+ */
+export function isDefaultCoverageActive(vr, mvr) {
+    if (getActivePlotView(vr)?.plotId!==DEFAULT_COVERAGE_PLOT_ID) return false;
+    return Boolean(getViewer(mvr,DEFAULT_COVERAGE_VIEWER_ID)?.mounted);
+}
+
+export const isImageExpanded = (expandedMode) => expandedMode === true ||
+    expandedMode === ExpandType.GRID ||
+    expandedMode === ExpandType.SINGLE;
+
+
+/**
+ * remove all the failed plots in the store
+ * @param {VisRoot} [vr]
+ */
+export const deleteAllFailedPlots = (vr= visRoot()) =>
+    getPlotViewAry(vr)
+        .filter((pv) => pv.serverCall === 'fail')
+        .forEach(({plotId}) => dispatchDeletePlotView({plotId})); // set 20 as the maximum plot
+
+
+
+function* getHiPSPlotId() {
+    let index = 0;
+
+    while (true) {
+        ++index;
+        yield 'aHiPSId' + index;
+    }
+}
+
+const nextHipsId = getHiPSPlotId();
+
+export const getNextHiPSPlotId = () => nextHipsId.next().value;
+
+/**
+ * return true if the plotview can be converted between HiPS and FITS
+ * @param {PlotView} pv
+ * @return {boolean}
+ */
+export function canConvertBetweenHipsAndFits(pv) {
+    if (!pv?.plotViewCtx?.hipsImageConversion) return false;
+    const {hipsRequestRoot, imageRequestRoot} = pv.plotViewCtx.hipsImageConversion;
+    return Boolean(hipsRequestRoot && imageRequestRoot);
+}
+
+/**
+ * return an angle that will rotate the pv to match the rotation of masterPv
+ * @param {PlotView} masterPv
+ * @param {PlotView} pv
+ * @return {number}
+ */
+export function getMatchingRotationAngle(masterPv, pv) {
+    const masterPlot = primePlot(masterPv);
+    return getMatchingPlotRotationAngle(masterPlot,primePlot(pv),masterPv?.rotation,masterPv?.flipY);
 }

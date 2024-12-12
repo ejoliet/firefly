@@ -7,15 +7,15 @@ import {has} from 'lodash';
 import Point, {makeWorldPt, makeImagePt} from '../Point.js';
 import {RegionFactory} from '../region/RegionFactory.js';
 import {drawRegions} from '../region/RegionDrawer.js';
-import VisUtil from '../VisUtil.js';
+import {computeCentralPointAndRadius, getTranslateAndRotatePosition} from '../VisUtil.js';
 
 const PRELIM = 'prelim.';
 const NoPRELIM = '';
 
 // SPITZER is not included  06/24/2016
 export const FootprintList = ['Spitzer', 'SOFIA', 'HST', 'JWST', 'Roman'];
-export const FOOTPRINT = new Enum({HST: NoPRELIM, Spitzer: NoPRELIM, JWST: PRELIM, Roman: NoPRELIM, SOFIA:NoPRELIM});
-const JWST_INST = new Enum(['FGS', 'MIRI', 'NIRCAM', 'NIS', 'NIRSPEC']);
+export const FOOTPRINT = new Enum({HST: NoPRELIM, Spitzer: NoPRELIM, JWST: NoPRELIM, Roman: NoPRELIM, SOFIA:NoPRELIM});
+const JWST_INST = new Enum(['FGS', 'MIRI', 'NIRCAM', 'NIRISS', 'NIRSPEC']);
 const HST_INST = new Enum(['NICMOS', 'WFPC2', 'ACS/WFC', 'ACS/HRC', 'ACS/SBC', 'WFC3/UVIS', 'WFC3/IR']);
 const SPITZER_INST = new Enum(['IRAC36', 'IRAC45']);
 
@@ -99,7 +99,7 @@ export class FootprintFactory {
     static getDrawObjFromOriginalRegion(regions, refCenter, moveToRelativeCenter, cc) {
         const getCenter = (wpAry) => {
             if (wpAry[0].type === Point.W_PT) {
-                return VisUtil.computeCentralPointAndRadius(wpAry).centralPoint;
+                return computeCentralPointAndRadius(wpAry).centralPoint;
             } else {
                 return getImageCenter(wpAry);
             }
@@ -119,7 +119,7 @@ export class FootprintFactory {
                 if (!region.wpAry || region.wpAry.length <= 0 ) return;
                 if (region.wpAry[0].type === Point.W_PT) {
                     const centerWpt = moveToRelativeCenter && instCenter ? instCenter : makeWorldPt(0, 0);
-                    region.wpAry = region.wpAry.map((wp) => VisUtil.getTranslateAndRotatePosition(centerWpt, refCenter, wp));
+                    region.wpAry = region.wpAry.map((wp) => getTranslateAndRotatePosition(centerWpt, refCenter, wp));
                 } else {
                     // move center of footprint or image pt (0,0) to refCenter
                     const refCenterImg = cc.getImageCoords(refCenter);

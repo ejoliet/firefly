@@ -2,74 +2,61 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {memo, useEffect} from 'react';
+import {Stack, Typography} from '@mui/joy';
+import React, {memo, useEffect, useState} from 'react';
 import PropTypes from 'prop-types';
-import {isEmpty, capitalize} from 'lodash';
+import {capitalize, isEmpty, isFunction} from 'lodash';
 import shallowequal from 'shallowequal';
 import {flux} from '../../core/ReduxFlux.js';
-import {getMenu, isAppReady, dispatchSetMenu,
-    dispatchOnAppReady, dispatchNotifyRemoteAppReady} from '../../core/AppDataCntlr.js';
+
+import {dispatchNotifyRemoteAppReady, dispatchOnAppReady, dispatchSetMenu} from '../../core/AppDataCntlr.js';
 import {dispatchHideDropDown, getLayouInfo, SHOW_DROPDOWN} from '../../core/LayoutCntlr.js';
-import {lcManager, LC} from './LcManager.js';
+import {FileDropZone} from '../../visualize/ui/FileUploadViewPanel.jsx';
+import {LC, lcManager} from './LcManager.js';
 import {LcResult} from './LcResult.jsx';
 import {LcPeriodPlotly} from './LcPeriodPlotly.jsx';
-import {Menu} from '../../ui/Menu.jsx';
-import {Banner} from '../../ui/Banner.jsx';
-import {DropDownContainer} from '../../ui/DropDownContainer.jsx';
+import {makeBannerTitle} from '../../ui/Banner.jsx';
 import {getActionFromUrl} from '../../core/History.js';
 import {dispatchAddSaga} from '../../core/MasterSaga.js';
 import {FormPanel} from './../../ui/FormPanel.jsx';
 import {FieldGroup} from '../../ui/FieldGroup.jsx';
-import {getFieldVal} from '../../fieldGroup/FieldGroupUtils.js';
+import FieldGroupUtils, {getFieldVal} from '../../fieldGroup/FieldGroupUtils.js';
 import {FileUpload} from '../../ui/FileUpload.jsx';
 import {ListBoxInputField} from '../../ui/ListBoxInputField.jsx';
 import {dispatchTableSearch} from '../../tables/TablesCntlr.js';
-import {HelpIcon} from './../../ui/HelpIcon.jsx';
-import {getAllConverterIds, getConverter, getMissionName, DL_DATA_TAG} from './LcConverterFactory.js';
-import FieldGroupUtils from '../../fieldGroup/FieldGroupUtils.js';
-import {HelpText} from './../../ui/HelpText.jsx';
-import {dispatchAllowDataTag} from '../../core/background/BackgroundCntlr.js';
+import {HelpIcon, HelpLink} from './../../ui/HelpIcon.jsx';
+import {getAllConverterIds, getConverter, getMissionName} from './LcConverterFactory.js';
 import {WorkspaceUpload} from '../../ui/WorkspaceViewer.jsx';
 import {RadioGroupInputField} from '../../ui/RadioGroupInputField.jsx';
 import {getWorkspaceConfig, initWorkspace} from '../../visualize/WorkspaceCntlr.js';
 import {ServerParams} from '../../data/ServerParams.js';
-import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
-import {warningDivId} from '../../ui/LostConnection';
+import {useFieldGroupValue, useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {startTTFeatureWatchers} from '../common/ttFeatureWatchers.js';
-import {makeSearchOnce} from '../../util/WebUtil.js';
+import {makeSearchOnce, setIf as setIfUndefined} from '../../util/WebUtil.js';
 import {upload} from '../../rpc/CoreServices.js';
+import App from 'firefly/ui/App.jsx';
+import {cloneDeep} from 'lodash/lang.js';
 
 
 const vFileKey = LC.FG_FILE_FINDER;
 const DEFAULT_TITLE = 'Time Series Tool';
-const topStyle = {fontSize:'18pt', display:'flex', flexDirection:'column', alignItems:'flex-end'};
-const subStyle = {fontSize: '11pt', fontWeight: 100};
 
 /**
  * light curve viewer
  */
-export const LcViewer = memo((props) => {
+export const LcViewer = memo(({menu, dropdownPanels=[], appTitle, slotProps, ...appProps}) => {
 
     useEffect(() => {
         startTTFeatureWatchers();
         dispatchAddSaga(lcManager);
         getWorkspaceConfig() && initWorkspace();
-        dispatchOnAppReady((state) => onReady({state, menu:props.menu}));
+        dispatchOnAppReady((state) => onReady({state, menu}));
     }, []);
 
-    const [storeState]= useStoreConnector((oldState={}) => {
-        const fileLocation = getFieldVal(vFileKey, 'uploadContainer', 'isLocal');
-        const newState= {fileLocation, menu:getMenu(), isReady:isAppReady(), ...getLayouInfo()};
-        return shallowequal(oldState,newState) ? oldState : newState;
-    });
-
-    const {isReady, menu={}, appTitle, altAppIcon, dropDown,
-        dropdownPanels=[], footer, style, displayMode, missionEntries, fileLocation, error} = storeState;
-    const {appIcon, additionalTitleStyle= {}, bannerLeftStyle, bannerMiddleStyle} = props;
-    const additionalTitleStylePlus= {marginRight: 20, alignSelf: 'flex-start',...additionalTitleStyle}
-    const bannerMiddleStylePlus= {flexDirection: 'row', ...bannerMiddleStyle};
-
-    if (!isReady) return (<div style={{top: 0}} className='loading-mask'/>);
+    const fileLocation= useStoreConnector(() => getFieldVal(vFileKey, 'uploadContainer', 'isLocal'));
+    const error = useStoreConnector(() => getLayouInfo()?.error);
+    const displayMode = useStoreConnector(() => getLayouInfo()?.displayMode);
+    const missionEntries = useStoreConnector(() => getLayouInfo()?.missionEntries);
 
     const periodProps = {
         displayMode,
@@ -77,64 +64,56 @@ export const LcViewer = memo((props) => {
         fluxColName: missionEntries?.[LC.META_FLUX_CNAME]
     };
 
-    const MainView = () => {
-        if (error) {
-            return (
-                <div style={{display: 'flex', width: '100%', marginTop: 20, justifyContent: 'center', alignItems: 'baseline'}}>
-                    <div style={{display: 'inline-flex', border: '1px solid #a3aeb9', padding:20, fontSize:'150%'}}>
-                        <div>{error}</div>
-                        <div style={{marginLeft: 10}}>
-                            <HelpIcon helpId={'loadingTSV'}/>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-        return displayMode?.startsWith('period') ? <LcPeriodPlotly {...periodProps}/> : <LcResult/>;
-    };
+    const subTitleStr= displayMode?.startsWith('period') ? '(Period Finder)' : '(Viewer)';
+    const title = makeBannerTitle(appTitle || DEFAULT_TITLE, subTitleStr);
 
-    const subTitleStr= displayMode ? (displayMode.startsWith('period')) ? '(Period Finder)' : '(Viewer)' : '';
-    const title = (
-        <div style={topStyle}>
-            <div>{appTitle || DEFAULT_TITLE}</div>
-            <div style={subStyle}>{subTitleStr}</div>
-        </div>);
+    const mSlotProps = cloneDeep(slotProps || {});
+    setIfUndefined(mSlotProps,'drawer.allowMenuHide', false);
+    setIfUndefined(mSlotProps,'banner.title', title);
 
-    const {visible, view, initArgs} = dropDown || {};
     return (
-        <div id='App' className='rootStyle' style={style}>
-            <header>
-                <BannerSection {...{menu, appTitle : title, appIcon, altAppIcon,
-                    additionalTitleStyle:additionalTitleStylePlus, bannerLeftStyle,
-                    bannerMiddleStyle:bannerMiddleStylePlus, showTitleOnBanner:true}}/>
-                <div id={warningDivId} data-decor='full' className='warning-div center'/>
-                <DropDownContainer key='dropdown' footer={footer} visible={!!visible}
-                                   selected={view} initArgs={initArgs}
-                                   dropdownPanels={[...dropdownPanels, <UploadPanel {...{fileLocation}}/>]} />
-            </header>
-            <main>
-                <MainView/>
-            </main>
-        </div>
+        <App slotProps={mSlotProps}
+             dropdownPanels={[...dropdownPanels, <UploadPanel {...{fileLocation, name:'LCUpload'}}/>]}
+             appTitle={appTitle}  {...appProps}
+        >
+            <MainView {...{error, displayMode, periodProps}}/>
+        </App>
     );
 });
 
 /**
  * menu is an array of menu items {label, action, icon, desc, type}.
  * dropdownPanels is an array of additional react elements which are mapped to a menu item's action.
- * @type {{title: *, menu: *, appTitle: *, appIcon: *, altAppIcon: *, additionalTitleStyle: *, dropdownPanels: *, views: *}}
+ * @type {{title: *, menu: *, appTitle: *, appIcon: *, additionalTitleStyle: *, dropdownPanels: *, views: *}}
  */
 LcViewer.propTypes = {
     title: PropTypes.string,
     menu: PropTypes.arrayOf(PropTypes.object),
     appTitle: PropTypes.string,
     additionalTitleStyle: PropTypes.object,
-    appIcon: PropTypes.string,
-    altAppIcon: PropTypes.string,
+    appIcon: PropTypes.element,
     footer: PropTypes.element,
     dropdownPanels: PropTypes.arrayOf(PropTypes.element),
     style: PropTypes.object
 };
+
+
+const MainView = ({error, displayMode, periodProps}) => {
+    if (error) {
+        return (
+            <div style={{display: 'flex', width: '100%', marginTop: 20, justifyContent: 'center', alignItems: 'baseline'}}>
+                <div style={{display: 'inline-flex', border: '1px solid #a3aeb9', padding:20, fontSize:'150%'}}>
+                    <div>{error}</div>
+                    <div style={{marginLeft: 10}}>
+                        <HelpIcon helpId={'loadingTSV'}/>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    return displayMode?.startsWith('period') ? <LcPeriodPlotly {...periodProps}/> : <LcResult/>;
+};
+
 
 
 function onReady({menu}) {
@@ -146,25 +125,17 @@ function onReady({menu}) {
         const goto = getActionFromUrl() || {type: SHOW_DROPDOWN};
         if (goto) flux.process(goto);
     }
-    dispatchAllowDataTag([DL_DATA_TAG]);
     dispatchNotifyRemoteAppReady();
 }
 
 
-const BannerSection= ({menu,...rest}) => (
-        <Banner key='banner' menu={<Menu menu={menu} /> }
-            {...rest}
-        />
-    );
-
-const labelW = 150;
 
 const executeOnce= makeSearchOnce(); // setup options to immediately execute the search the first time
-const validateAutoSearch= (initArgs) => !isEmpty(initArgs);
+const validateAutoSearch= (initArgs) => !isEmpty(initArgs?.urlApi);
 
 async function callAutoSearch(initArgs) {
-    const {cacheKey}= await upload(initArgs.url);
-    onSearchSubmit({ mission: initArgs.dataset, rawTblSource: cacheKey});
+    const {cacheKey}= await upload(initArgs?.urlApi?.url);
+    onSearchSubmit({ mission: initArgs.urlApi?.dataset, rawTblSource: cacheKey});
 }
 
 
@@ -181,43 +152,40 @@ function getUploadPanelState(oldState) {
 }
 
 
-export const UploadPanel = ({initArgs}) =>{
-    const [{missionOptions,fileLocation}]= useStoreConnector(getUploadPanelState );
+export const UploadPanel = ({initArgs,name= 'LCUpload'}) =>{
+    const {missionOptions, fileLocation} = useStoreConnector(getUploadPanelState );
+    const [,setUploadContainer]= useFieldGroupValue('uploadContainer', vFileKey);
+    const externalDropEvent= initArgs?.searchParams?.dropEvent;
 
+    const [dropEvent, setDropEvent] = useState(externalDropEvent);
     useEffect( () => {
         executeOnce( () => validateAutoSearch(initArgs), () => callAutoSearch(initArgs));
     },[initArgs]);
 
-    const wrapperStyle = {color: 'inherit', margin: '5px 0'};
+    const wrapperStyle = {color: 'inherit', mx:1/2};
     const instruction = 'Plot time series data, view associated images, find period, and phase fold.';
     const options = missionOptions.map((id) => ({label: getMissionName(id) || capitalize(id), value: id}) );
 
-    const showUploadLocation = () => {
-        const options = [
-            {'id': 0, label: 'Local File', 'value': 'isLocal'},
-            {'id': 1, label: 'Workspace', 'value': 'isWs'}
-        ];
-        return (
-            <div>
-                <RadioGroupInputField
-                    fieldKey={'uploadContainer'}
-                    initialState={{value: options[0].value, label: 'Choose Upload from:',
-                        labelWidth: (labelW-4)}}
-                    alignment={'horizontal'}
-                    options={options}
-                />
-            </div>
-        );
-    };
+    const uploadLocationChoice = (
+                <RadioGroupInputField {...{
+                    fieldKey:'uploadContainer',
+                    orientation:'horizontal',
+                    initialState:{value: 'isLocal'},
+                    options: [
+                                {id: 0, label: 'Upload Local File', value: 'isLocal'},
+                                {id: 1, label: 'Use Workspace', value: 'isWs'}
+                            ]
+                }} /> );
 
-    const showFileUploadButton = () => (
-            <div style={{padding:5, display:'flex', alignItems:'center', minWidth: 450, height: 50}}>
-                <div style={{display:'flex', flexDirection:'column', width: labelW}}>
-                    <div> {'Upload time series table:'} </div>
-                    <HelpText helpId={'loadingTSV'} linkText={'(See requirements)'}/>
-                </div>
+    const showFileUploadButton = (setDropEvent,dropEvent) => (
+            <Stack {...{minWidth: 450}}>
+                <Stack {...{direction:'row', spacing:2}}>
+                    <Typography>Upload time series table</Typography>
+                    <HelpLink helpId={'loadingTSV'} linkText={'(See requirements)'}/>
+                </Stack>
                 { fileLocation === 'isLocal' ?
-                        <FileUpload wrapperStyle={wrapperStyle} fieldKey='rawTblSource'
+                        <FileUpload fieldKey='rawTblSource'
+                                    setDropEvent={setDropEvent} dropEvent={dropEvent} canDragDrop={true}
                             initialState={{ tooltip: 'Select a Time Series Table file to upload',
                                 label: ''}}
                         />
@@ -226,49 +194,51 @@ export const UploadPanel = ({initArgs}) =>{
                             initialState={{ tooltip: 'Select a Time Series Table file from workspace to upload'}}
                         />
                 }
-            </div>
+            </Stack>
         );
 
     return (
-        <div style={{padding: 10, marginBottom:15}}>
-            <div style={{margin: '0px 5px 5px'}}>{instruction}</div>
-            <FormPanel
-                groupKey={vFileKey} onSubmit={(request) => onSearchSubmit(request)} onCancel={dispatchHideDropDown}
-                submitText={'Upload'} help_id={'loadingTSV'}>
-                <FieldGroup groupKey={vFileKey} keepState={true}>
-                    <div style={{padding:5 }}>
-                        <div style={{padding:5 }}>
-                            {showUploadLocation()}
-                        </div>
-                        {showFileUploadButton()}
-                        <div style={{padding:5,display:'flex', alignItems:'center' }}>
-                            <div style={{display:'flex', flexDirection:'column', width: labelW}}>
-                                <div>{'Choose mission'}</div>
-                                <div>{'to view associated images:'}</div>
-                            </div>
-                            <ListBoxInputField fieldKey='mission' wrapperStyle={wrapperStyle} options={options}
-                                               initialState={{
-                                                   value: 'wise',
-                                                   tooltip: 'Choose mission to view associated images',
-                                                   label : '',
-                                                   labelWidth : 0
-                                               }} />
-                        </div>
-                    </div>
-                </FieldGroup>
+            <FormPanel groupKey={vFileKey}
+                       onSuccess={onSearchSubmit}
+                       onCancel={dispatchHideDropDown}
+                       help_id={'loadingTSV'}
+                       completeText='Upload'>
+                <FileDropZone {...{
+                    dropEvent, setDropEvent,
+                    setLoadingOp: () => {
+                        setUploadContainer('isLocal');
+                        const newEv = {type: 'drop', dataTransfer: {files: Array.from(dropEvent.dataTransfer.files)}};
+                        setDropEvent(newEv);
+                    },
+                }}>
+                    <Stack {...{width:1, alignItems:'center'}}>
+                        <Stack {...{ml:0, mt:4, spacing:3}}>
+                            <Typography level='body-lg'>{instruction}</Typography>
+                            <FieldGroup groupKey={vFileKey} keepState={true}>
+                                <Stack {...{spacing:2}}>
+                                    {uploadLocationChoice}
+                                    {showFileUploadButton(setDropEvent,dropEvent)}
+                                    <Stack>
+                                        <Typography> Choose mission to view associated images </Typography>
+                                        <ListBoxInputField fieldKey='mission' wrapperStyle={wrapperStyle} options={options}
+                                                           initialState={{
+                                                               value: 'wise',
+                                                               tooltip: 'Choose mission to view associated images',
+                                                               label : '',
+                                                           }} />
+                                    </Stack>
+                                </Stack>
+                            </FieldGroup>
+                        </Stack>
+                    </Stack>
+                </FileDropZone>
             </FormPanel>
-        </div>
     );
 };
 
-
 UploadPanel.propTypes = {
-    name: PropTypes.oneOf(['LCUpload']),
+    name: PropTypes.string,
     initArgs: PropTypes.object
-};
-
-UploadPanel.defaultProps = {
-    name: 'LCUpload'
 };
 
 function onSearchSubmit(request) {
@@ -278,9 +248,19 @@ function onSearchSubmit(request) {
     const fields = FieldGroupUtils.getGroupFields(vFileKey);
     const displayName = fields.rawTblSource.displayValue && fields.rawTblSource.displayValue.split('\\');
     const uploadedFileName = displayName ? displayName[displayName.length-1] : 'Loaded Table';
-    const treq = converter.rawTableRequest(converter, request.rawTblSource,uploadedFileName);
+    if (isFunction(request.rawTblSource)) {
+        request.rawTblSource().then(
+            (ul)  => loadFileAndHide(converter,ul.value,uploadedFileName,request.uploadContainer) );
+    }
+    else {
+        loadFileAndHide(converter,request.rawTblSource,uploadedFileName,request.uploadContainer);
+    }
+    
+}
 
-    if (request.uploadContainer===ServerParams.IS_WS) treq[ServerParams.SOURCE_FROM]= ServerParams.IS_WS;
+function loadFileAndHide(converter,uploadPath,uploadedFileName, uploadContainer) {
+    const treq = converter.rawTableRequest(converter, uploadPath,uploadedFileName);
+    if (uploadContainer===ServerParams.IS_WS) treq[ServerParams.SOURCE_FROM]= ServerParams.IS_WS;
     dispatchTableSearch(treq, {removable: true});
     dispatchHideDropDown();
 }

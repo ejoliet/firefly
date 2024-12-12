@@ -2,7 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React from 'react';
+import React, {useContext, useEffect} from 'react';
 import PropTypes from 'prop-types';
 import {TargetPanel} from './TargetPanel.jsx';
 import {InputGroup} from './InputGroup.jsx';
@@ -14,7 +14,7 @@ import {ListBoxInputField} from './ListBoxInputField.jsx';
 import {SuggestBoxInputField} from './SuggestBoxInputField.jsx';
 import {PlotlyWrapper} from '../charts/ui/PlotlyWrapper.jsx';
 import CompleteButton from './CompleteButton.jsx';
-import {FieldGroup} from './FieldGroup.jsx';
+import {FieldGroup, FieldGroupCtx} from './FieldGroup.jsx';
 import {dispatchMultiValueChange, dispatchRestoreDefaults, VALUE_CHANGE} from '../fieldGroup/FieldGroupCntlr.js';
 import DialogRootContainer from './DialogRootContainer.jsx';
 import {PopupPanel} from './PopupPanel.jsx';
@@ -26,8 +26,10 @@ import {StatefulTabs, Tab,FieldGroupTabs} from './panel/TabPanel.jsx';
 import {dispatchShowDialog} from '../core/ComponentCntlr.js';
 import {NaifidPanel} from './NaifidPanel.jsx';
 import {useBindFieldGroupToStore} from 'firefly/ui/SimpleComponent.jsx';
-import {getGroupFields} from 'firefly/fieldGroup/FieldGroupUtils.js';
-
+import {getGroupFields} from '../fieldGroup/FieldGroupUtils.js';
+import {CoordinateSys, makeWorldPt, WebPlotRequest} from '../api/ApiUtilImage.jsx';
+import {TargetHiPSPanel, VisualTargetPanel} from '../visualize/ui/TargetHiPSPanel.jsx';
+import {SizeInputFields} from 'firefly/ui/SizeInputField.jsx';
 
 
 function getDialogBuilder() {
@@ -86,7 +88,7 @@ const defValues= {
     },
     radioGrpFld: {
         fieldKey: 'radioGrpFld',
-        alignment: 'horizontal',
+        orientation: 'horizontal',
         tooltip: 'Please select an option',
         label: 'Radio Group:',
         options: [
@@ -144,7 +146,7 @@ function masterDependentReducer(inFields, action) {
         return {
             master: {
                 fieldKey: 'master',
-                alignment: 'horizontal',
+                orientation: 'horizontal',
                 tooltip: 'Please select an option',
                 label: 'Master:',
                 labelWidth: 40,
@@ -199,7 +201,7 @@ function FieldGroupWithMasterDependent() {
 const AllTest= () => (
         <div style={{padding:'5px', minWidth: 480}}>
             <div>
-                <StatefulTabs componentKey='exampleOuterTabs' defaultSelected={0} useFlex={true}>
+                <StatefulTabs componentKey='exampleOuterTabs' useFlex={true}>
                     <Tab name='First'>
                         <FieldGroupTest />
                     </Tab>
@@ -210,9 +212,19 @@ const AllTest= () => (
                             </CollapsiblePanel>
                         </div>
                     </Tab>
-                    <Tab name='Third'>
+                    <Tab name='Dependent'>
                         <div style={{minWidth: 300, minHeight: 150}}>
                             <FieldGroupWithMasterDependent />
+                        </div>
+                    </Tab>
+                    <Tab name='HiPS/Target'>
+                        <div style={{minWidth: 500, minHeight: 400}}>
+                            <CreateHiPSTargetExample/>
+                        </div>
+                    </Tab>
+                    <Tab name='HiPS/Target - popup'>
+                        <div style={{minWidth: 500, minHeight: 400}}>
+                            <CreateHiPSTargetPopupExample/>
                         </div>
                     </Tab>
                 </StatefulTabs>
@@ -307,8 +319,7 @@ function FieldGroupTestView ({fields={}}) {
         {label: 'Green Beans', value: 'G'},
         {label: 'Peas', value: 'P'}
     ];
-    if (fields.fieldInTabX3?.value > 30 ) tabX3CheckBoxOps.push({label: 'Tomatoes', value: 'T'});
-    else if (fields.fieldInTabX3?.value < 23 ) tabX3CheckBoxOps[0].label='Carrots!!!!';
+    if (fields.fieldInTabX3?.value > 30 ) tabX3CheckBoxOps[0].label='Carrots!!!!';
 
 
 
@@ -414,7 +425,7 @@ function FieldGroupTestView ({fields={}}) {
                                 {label: 'Grapes', value: 'G'}
                             ]}
                             fieldKey='checkBoxGrpFld'
-                            alignment='vertical'
+                            orientation='vertical'
                         />
                     </Tab>
                     <Tab name='X 2' id='x2'>
@@ -429,19 +440,7 @@ function FieldGroupTestView ({fields={}}) {
                                          }} />
                     </Tab>
                     <Tab name='X 3' id='x3'>
-                        <div>
-                            <ValidationField fieldKey='fieldInTabX3'
-                                             tooltip= 'more tipping' label= 'tab test field:' labelWidth ={100}
-                                             validator= {Validate.intRange.bind(null, 11, 55, 'Tab Test Field 11-55')}
-                                             initialState= {{ value: 25}}
-                            />
-                            <div style={{padding: '10px 0 5px 0', fontSize:'smaller'}}>
-                                if you enter a number over 30 you will get another checkbox, also try less than 23</div>
-                            <CheckboxGroupInputField fieldKey='checkBoxGrpFldAgain'
-                                                     tooltip= 'Please select some boxes' label='Checkbox Group:'
-                                                     options={tabX3CheckBoxOps}
-                                                     initialState= {{value: 'C,S,P'}} />
-                        </div>
+                        <X3Stuff {...{tabX3CheckBoxOps}} />
                     </Tab>
                 </FieldGroupTabs>
 
@@ -455,8 +454,6 @@ function FieldGroupTestView ({fields={}}) {
                 </button>
                 <button type='button' className='button std hl'  onClick={() => resetDefaults()}>
                     <b>Reset All Defaults</b>
-                </button>
-                <button type='button' className='button std hl' onClick={()=>showModal(sampleModal())}>
                     Display Modal Dialog
                 </button>
 
@@ -476,6 +473,33 @@ FieldGroupTestView.propTypes= {
     fields: PropTypes.object
 };
 
+
+function X3Stuff({tabX3CheckBoxOps}) {
+    const {register, unregister}= useContext(FieldGroupCtx);
+    
+    useEffect( () => {
+        register('tabX3Data',() => tabX3CheckBoxOps.map( ({label}) => label).join('---'));
+        return () => unregister('tabX3Data');
+    },[tabX3CheckBoxOps]);
+
+
+    return (
+        <div>
+            <ValidationField fieldKey='fieldInTabX3'
+                             tooltip= 'more tipping' label= 'tab test field:' labelWidth ={100}
+                             validator= {Validate.intRange.bind(null, 11, 55, 'Tab Test Field 11-55')}
+                             initialState= {{ value: 25}}
+            />
+            <div style={{padding: '10px 0 5px 0', fontSize:'smaller'}}>
+                if you enter a number over 30 you will get another checkbox, also try less than 23</div>
+            <CheckboxGroupInputField fieldKey='checkBoxGrpFldAgain'
+                                     tooltip= 'Please select some boxes' label='Checkbox Group:'
+                                     options={tabX3CheckBoxOps}
+                                     initialState= {{value: 'C,S,P'}} />
+        </div>
+
+    );
+}
 
 function resetSomeDefaults() {
     const defValueAry= Object.keys(defValues).map( (k) => defValues[k]);
@@ -554,6 +578,58 @@ function makeField1(hide) {
     return hide ? hidden : f1;
 }
 
+
+function CreateHiPSTargetExample() {
+    const someMocUrls= [
+        'https://irsa.ipac.caltech.edu/data/hips/CDS/GALEX/GR6-03-2014/AIS-Color/Moc.fits', // 79%
+        'https://irsa.ipac.caltech.edu/data/hips/CDS/SPITZER/IRAC1/Moc.fits', // 1.37%
+        'http://alasky.cds.unistra.fr/DES/CDS_P_DES-DR1_Y/Moc.fits', //   12.7% , center  22,34, fov 120
+        'http://alasky.cds.unistra.fr/VISTA/VVV_DR4/VISTA-VVV-DR4-J/Moc.fits' // 1.38%  center 246,49, fov 85
+    ];
+    return (
+        <FieldGroup style= {{padding:5}} groupKey={'HiPS_TARGET'}>
+            <div>
+                <TargetHiPSPanel centerPt={makeWorldPt(246,-49)} hipsUrl='ivo://CDS/P/DSS2/color'
+                                 style={{height:600}}
+                                 hipsFOVInDeg={86} searchAreaInDeg={1.5}
+                                 coordinateSys={ CoordinateSys.GALACTIC}
+                                 mocList={[
+                                     {
+                                         mocUrl: 'http://alasky.cds.unistra.fr/VISTA/VVV_DR4/VISTA-VVV-DR4-J/Moc.fits',
+                                         title: 'Vista Coverage'
+                                     }
+                                 ]}
+                />
+            </div>
+        </FieldGroup>
+    );
+}
+
+function CreateHiPSTargetPopupExample() {
+    return (
+        <FieldGroup style= {{padding:5}} groupKey='HiPS_TARGET_POPUP'>
+            <div>
+                <div style={{display:'flex', flexDirection:'column', marginLeft:10, marginTop: 20}}>
+                    <VisualTargetPanel style={{paddingTop: 10}} labelWidth={100}
+                                       hipsUrl='ivo://CDS/P/2MASS/color'
+                                       centerPt={makeWorldPt(246,-49)}
+                                       sizeKey='HiPSPanelRadius'
+                                       hipsFOVInDeg={86} searchAreaInDeg={1.5}
+                                       mocList={[
+                                           {
+                                               mocUrl: 'http://alasky.cds.unistra.fr/VISTA/VVV_DR4/VISTA-VVV-DR4-J/Moc.fits',
+                                               title: 'Vista Coverage'
+                                           }
+                                       ]}
+                    />
+                    <SizeInputFields fieldKey='HiPSPanelRadius' showFeedback={true} labelWidth= {100}  nullAllowed={false}
+                                     label={'Search Area'}
+                                     initialState={{ unit: 'arcsec', value: 1.5+'', min: 1 / 3600, max: 100 }} />
+                </div>
+            </div>
+        </FieldGroup>
+    );
+}
 
 
 //export default ExampleDialog;

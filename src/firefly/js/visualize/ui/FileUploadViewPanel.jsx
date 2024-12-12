@@ -2,113 +2,134 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {useEffect, useState} from 'react';
+import {Box, Chip, Stack, Typography} from '@mui/joy';
+import React, {useContext, useEffect, useState} from 'react';
 import shallowequal from 'shallowequal';
 import SplitPane from 'react-split-pane';
-import {get} from 'lodash';
 
-
-import {FieldGroup} from '../../ui/FieldGroup.jsx';
+import {FieldGroupCtx} from '../../ui/FieldGroup.jsx';
 import {FileUpload} from '../../ui/FileUpload.jsx';
-import {getFieldVal, getField} from '../../fieldGroup/FieldGroupUtils';
+import {getField} from '../../fieldGroup/FieldGroupUtils';
 import {TablePanel} from '../../tables/ui/TablePanel.jsx';
-import {getCellValue, getTblById, uniqueTblId, getSelectedDataSync} from '../../tables/TableUtil.js';
-import {dispatchTableSearch, dispatchTableFetch, dispatchTableAddLocal} from '../../tables/TablesCntlr.js';
+import {getCellValue, getTblById} from '../../tables/TableUtil.js';
+import {dispatchTableAddLocal, dispatchTableRemove} from '../../tables/TablesCntlr.js';
+
+import {isAnalysisTableDatalink} from '../../voAnalyzer/VoDataLinkServDef.js';
 import {getSizeAsString} from '../../util/WebUtil.js';
 
-
-import {makeFileRequest} from '../../tables/TableRequestUtil.js';
 import {SelectInfo} from '../../tables/SelectInfo.js';
-import {getAViewFromMultiView, getMultiViewRoot, IMAGE} from '../MultiViewCntlr.js';
-import WebPlotRequest from '../WebPlotRequest.js';
-import ImagePlotCntlr, {dispatchPlotImage, visRoot} from '../ImagePlotCntlr.js';
+import ImagePlotCntlr from '../ImagePlotCntlr.js';
 import {RadioGroupInputField} from '../../ui/RadioGroupInputField.jsx';
 import {showInfoPopup} from '../../ui/PopupUtil.jsx';
 import {WorkspaceUpload} from '../../ui/WorkspaceViewer.jsx';
 import {isAccessWorkspace, getWorkspaceConfig} from '../WorkspaceCntlr.js';
-import {getAppHiPSForMoc} from '../HiPSMocUtil.js';
-import {primePlot, getDrawLayersByType, getPlotViewAry} from '../PlotViewUtil.js';
-import {getDlAry, dispatchCreateImageLineBasedFootprintLayer, dispatchCreateRegionLayer} from '../DrawLayerCntlr.js';
-import LSSTFootprint from '../../drawingLayers/ImageLineBasedFootprint.js';
 import {isMOCFitsFromUploadAnalsysis} from '../HiPSMocUtil.js';
 import {isLsstFootprintTable} from '../task/LSSTFootprintTask.js';
-import {getComponentState, dispatchComponentStateChange} from '../../core/ComponentCntlr.js';
 
-import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
-import {PlotAttribute} from '../PlotAttribute.js';
-import {MetaConst} from '../../data/MetaConst.js';
+import {useFieldGroupMetaState, useFieldGroupValue, useStoreConnector} from '../../ui/SimpleComponent.jsx';
 
-import './FileUploadViewPanel.css';
-import {getIntHeader} from '../../metaConvert/PartAnalyzer';
-import {FileAnalysisType, Format} from '../../data/FileAnalysis';
+import {getIntHeaderFromAnalysis} from '../../metaConvert/PartAnalyzer';
+import {FileAnalysisType} from '../../data/FileAnalysis';
+import {Format} from '../../data/FileAnalysis';
 import {dispatchValueChange} from 'firefly/fieldGroup/FieldGroupCntlr.js';
-import {CompleteButton,NONE} from 'firefly/ui/CompleteButton.jsx';
-import {createNewRegionLayerId} from 'firefly/drawingLayers/RegionPlot.js';
-import {getAppOptions} from 'firefly/core/AppDataCntlr.js';
 import {dispatchAddActionWatcher, dispatchCancelActionWatcher} from 'firefly/core/MasterSaga.js';
-
-
-export const panelKey = 'FileUploadAnalysis';
-const  FILE_ID = 'fileUpload';
-const  URL_ID = 'urlUpload';
+import {CheckboxGroupInputField} from 'firefly/ui/CheckboxGroupInputField.jsx';
+import {
+    findSingleAxisImages, getFileFormat, getFirstPartType, getSelectedRows, isRegion, isUWS
+} from 'firefly/ui/FileUploadProcessor';
+import {
+    acceptAnyTables, acceptDataLinkTables, acceptImages, acceptMocTables, acceptNonDataLinkTables,
+    acceptNonMocTables, acceptOnlyTables, acceptRegions, acceptTableOrSpectrum, acceptUWS, DATA_LINK_TABLES,
+    IMAGES, REGIONS, SPECTRUM_TABLES, TABLES, UWS
+} from 'firefly/ui/FileUploadUtil';
+import {UwsJobInfo} from 'firefly/core/background/JobInfo';
+import {uwsJobInfo} from 'firefly/rpc/SearchServicesJson';
+export const  FILE_ID = 'fileUpload';
+export const  URL_ID = 'urlUpload';
 const  WS_ID = 'wsUpload';
+const SINGLE_ROW_AS_TABLE= 'singleRowImageAsTable';
 
-const SUMMARY_TBL_ID = 'AnalysisTable';
-const DETAILS_TBL_ID = 'AnalysisTable-Details';
-const UNKNOWN_FORMAT = 'UNKNOWN';
-const summaryUiId = SUMMARY_TBL_ID + '-UI';
-const detailsUiId = DETAILS_TBL_ID + '-UI';
+const TABLE_MSG = 'Custom catalog or table in IPAC, CSV, TSV, VOTABLE, Parquet, or FITS table format';
+const REGION_MSG = 'A ds9 region file';
+const IMAGE_MSG = 'Images in FITS format, including multi-extension FITS files with images, tables, or a mixture of both';
+const MOC_MSG = 'A Multi-Order Coverage Map (MOC) in FITS format';
+const DL_MSG = 'A Data Link Table file';
+const UWS_MSG = 'A UWS job file';
+
 
 const SUPPORTED_TYPES=[
     FileAnalysisType.REGION,
     FileAnalysisType.Image,
     FileAnalysisType.Table,
     FileAnalysisType.Spectrum,
-    FileAnalysisType.REGION,
+    FileAnalysisType.UWS
 ];
 
 const TABLES_ONLY_SUPPORTED_TYPES=[
     FileAnalysisType.Table,
 ];
 
-
-const isTablesOnly= () => getAppOptions()?.uploadPanelLimit==='tablesOnly';
-
-
 const uploadOptions = 'uploadOptions';
 
-let currentAnalysisResult, currentReport, currentSummaryModel, currentDetailsModel;
 const FILE_UPLOAD_KEY= 'file-upload-key-';
 let keyCnt=0;
 
-export function FileUploadViewPanel() {
+export function FileUploadViewPanel({setSubmitText, acceptList, acceptOneItem, externalDropEvent}) {
 
-    const [{isLoading,statusKey}, isWsUpdating, uploadSrc, {message, analysisResult, report, summaryModel, detailsModel}] =
-        useStoreConnector.bind({comparator: shallowequal}) (
-            () => getComponentState(panelKey, {isLoading:false,statusKey:''}),
-            () => isAccessWorkspace(),
-            () => getFieldVal(panelKey, uploadOptions),
-            (oldState) => getNextState(oldState)
-        );
+    const {groupKey, keepState}= useContext(FieldGroupCtx);
+
+    const isWsUpdating          = useStoreConnector(() => isAccessWorkspace());
+    const [getLoadingOp, setLoadingOp]= useFieldGroupValue(uploadOptions);
+    const singleAxisImageAsTable= useFieldGroupValue(SINGLE_ROW_AS_TABLE)[0]()==='singleAxisImage';
+
+    //dropEvent is used for files being dragged and drooped for uploads
+    const [dropEvent, setDropEvent] = useState(() => externalDropEvent);
+
+    const summaryTblId = groupKey;
+    const detailsTblId = groupKey + '-Details';
+    const UNKNOWN_FORMAT = 'UNKNOWN';
+
+    const [getUploadMetaInfo, setUploadMetaInfo]= useFieldGroupMetaState({message:undefined, analysisResult: undefined,
+        report: undefined, summaryModel: undefined, detailsModel: undefined, prevAnalysisResult: undefined}, groupKey);
+
+    const {message, analysisResult, report, summaryModel, detailsModel, prevAnalysisResult, selectInfo} =
+        useStoreConnector(() => {
+            const loadingOp= getLoadingOp();
+            const {analysisResult, message}= getField(groupKey, loadingOp) || {};
+            const summaryTbl= getTblById(summaryTblId);
+            return getNextState(summaryTblId, summaryTbl, detailsTblId, analysisResult, message,
+                getUploadMetaInfo(), acceptList, acceptOneItem);
+        });
+
+    const {isLoading,statusKey} = getUploadMetaInfo();
 
     const [loadingMsg,setLoadingMsg]= useState(() => '');
     const [uploadKey,setUploadKey]= useState(() => FILE_UPLOAD_KEY+keyCnt);
 
     useEffect(() => {
-        if (message || (analysisResult && analysisResult !== currentAnalysisResult)) {
-            if (currentAnalysisResult !== analysisResult) {
-                currentAnalysisResult = analysisResult;
-            }
-            dispatchComponentStateChange(panelKey, {isLoading: false});
+        if (message || analysisResult) {
+            setUploadMetaInfo({...getUploadMetaInfo(), prevAnalysisResult, report, summaryModel,
+                detailsModel, analysisResult, message, selectInfo});
         }
-    });
+    }, [message, analysisResult, report, summaryModel, detailsModel, prevAnalysisResult,selectInfo]);
+
     useEffect(() => {
         dispatchTableAddLocal(summaryModel, undefined, false);
+        return (() => {
+            if (!keepState) dispatchTableRemove(summaryTblId);
+        });
     }, [summaryModel]);
 
     useEffect(() => {
         dispatchTableAddLocal(detailsModel, undefined, false);
+        return (() => {
+            if (!keepState) dispatchTableRemove(detailsTblId);
+        });
     }, [detailsModel]);
+
+    useEffect(() => {
+        setSubmitText?.(getLoadButtonText(summaryTblId,report,detailsModel,summaryModel,acceptList,singleAxisImageAsTable));
+    },[report,setSubmitText, summaryModel, detailsModel,selectInfo,singleAxisImageAsTable]);
 
     let aWStatusKey;
     useEffect(() => {
@@ -131,56 +152,102 @@ export function FileUploadViewPanel() {
         return (() => {
             aWStatusKey && dispatchCancelActionWatcher(aWStatusKey);
         });
-        }, [isLoading, statusKey] );
-
-    const tablesOnly= isTablesOnly();
+    }, [isLoading, statusKey] );
 
     const workspace = getWorkspaceConfig();
     const uploadMethod = [{value: FILE_ID, label: 'Upload file'},
         {value: URL_ID, label: 'Upload from URL'}
     ].concat(workspace ? [{value: WS_ID, label: 'Upload from workspace'}] : []);
 
-
     const clearReport= () => {
-        currentReport= undefined;
-        dispatchValueChange({fieldKey:getLoadingFieldName(), groupKey:panelKey, value:'', displayValue:'', analysisResult:undefined});
+        dispatchValueChange({fieldKey:getLoadingOp(), groupKey, value:'', displayValue:'', analysisResult:undefined});
+    };
+
+    const isMoc=  isMOCFitsFromUploadAnalsysis(report)?.valid;
+    const isDatalink=  isAnalysisTableDatalink(report);
+
+    return (
+        <Stack {...{flexGrow:1, position: 'relative', height:1, alignItems: 'stretch'}}>
+            <FileDropZone {...{dropEvent, setDropEvent, setLoadingOp}}>
+                <Stack sx={{height:1, px:1,flexGrow:1}}>
+                    <Box className='ff-FileUploadViewPanel-file' sx={{mt:1, ml:25}}>
+                        <RadioGroupInputField
+                            initialState={{value: uploadMethod[0].value}}
+                            slotProps={{radio:{size:'md'}}}
+                            fieldKey={uploadOptions}
+                            orientation='horizontal'
+                            options={uploadMethod} />
+                        <Stack {...{pt: 1, direction:'row', justifyContent:'space-between'}}>
+                            <UploadOptions {...{uploadSrc: dropEvent ? FILE_ID : getLoadingOp(), isLoading, isWsUpdating,  uploadKey, dropEvent, setDropEvent}}/>
+                            <Stack>
+                                {report && <Chip sx={{whiteSpace:'nowrap', ml:1}}
+                                                 onClick={() =>{
+                                                     clearReport();
+                                                     keyCnt++;
+                                                     setUploadKey(FILE_UPLOAD_KEY+keyCnt);
+                                                 }}>
+                                    Clear File
+                                </Chip>
+                                }
+                            </Stack>
+                        </Stack>
+                    </Box>
+                    <FileAnalysis {...{report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT, acceptList,
+                        isDatalink, acceptOneItem, summaryTblId}}/>
+                    <ImageDisplayOption {...{summaryTblId, currentReport:report, currentSummaryModel:summaryModel, acceptList}}/>
+                    <TableDisplayOption {...{isMoc, isDatalink, summaryTblId,
+                        currentReport:report, currentSummaryModel:summaryModel, currentDetailsModel:detailsModel,
+                        acceptList, acceptOneItem}}/>
+                </Stack>
+            </FileDropZone>
+            {(isLoading) && <LoadingMessage message={loadingMsg}/>}
+        </Stack>
+    );
+}
+
+export function FileDropZone({dropEvent, setDropEvent, setLoadingOp, sx, children}) {
+    const [isDragging, setIsDragging] = useState(false);
+
+    useEffect(() => {
+        if (dropEvent) {
+             setLoadingOp('fileUpload');
+        }
+    }, [dropEvent]);
+
+    // Prevent the default behavior for drag events to allow dropping files
+    const handleDragEnter = (e) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = () => {
+        setIsDragging(false);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setDropEvent(e);
+        setIsDragging(false);
     };
 
     return (
-        <div style={{position: 'relative', height: '100%', display: 'flex', alignItems: 'stretch',
-            flexDirection: 'column' }}>
-            <FieldGroup groupKey={panelKey} keepState={true} style={{height:'100%',
-                display: 'flex', alignItems: 'stretch', flexDirection: 'column'}}>
-                <div className='FileUpload'>
-                    <div className='FileUpload__input'>
-                        <RadioGroupInputField
-                            initialState={{value: uploadMethod[0].value}}
-                            fieldKey={uploadOptions}
-                            alignment={'horizontal'}
-                            options={uploadMethod}
-                            wrapperStyle={{fontWeight: 'bold', fontSize: 12}}/>
-                            <div style={{paddingTop: '10px', display:'flex', flexDirection:'row', justifyContent:'space-between'}}>
-                                <UploadOptions {...{uploadSrc, isLoading, isWsUpdating,  uploadKey:uploadKey}}/>
-                                {report && <CompleteButton text='Clear File' groupKey={NONE}
-                                                           onSuccess={() =>{
-                                                               clearReport();
-                                                               keyCnt++;
-                                                               setUploadKey(FILE_UPLOAD_KEY+keyCnt);
-                                                           }}/> }
-                            </div>
-                    </div>
-                    <FileAnalysis {...{report, summaryModel, detailsModel,tablesOnly}}/>
-                    <ImageDisplayOption/>
-                </div>
-                {(isLoading) && <LoadingMessage message={loadingMsg}/>}
-            </FieldGroup>
-        </div>
+        <Stack
+            direction='row'
+            className={`file-drop-zone ${isDragging ? 'dragging' : ''}`}
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            sx={{flexGrow:1, height:1, width: 1,...sx}}>
+            {children}
+        </Stack>
     );
 }
 
 const LoadingMessage= ({message}) => (
     <div style={{
         position: 'absolute',
+        zIndex:20,
         display:'flex',
         flexDirection: 'column',
         justifyContent:'center',
@@ -197,132 +264,97 @@ const LoadingMessage= ({message}) => (
     </div>
 );
 
+function getLoadButtonText(summaryTblId,currentReport,currentDetailsModel,currentSummaryModel,acceptList,singleAxisImageAsTable) {
+    const tblCnt = getSelectedRows(FileAnalysisType.Table, summaryTblId, currentReport, currentSummaryModel, singleAxisImageAsTable)?.length ?? 0;
+    if (tblCnt && isMOCFitsFromUploadAnalsysis(currentReport).valid && acceptMocTables(acceptList)) return 'Load MOC';
+    if (isRegion(currentSummaryModel) && acceptRegions(acceptList)) return 'Load Region';
+
+    const imgCnt = getSelectedRows(FileAnalysisType.Image, summaryTblId, currentReport, currentSummaryModel, singleAxisImageAsTable)?.length ?? 0;
+
+    if (isLsstFootprintTable(currentDetailsModel) ) return 'Load Footprint';
+    if ((tblCnt && !imgCnt && acceptAnyTables(acceptList)) || (tblCnt && imgCnt && !acceptImages(acceptList))) return tblCnt>1 ? `Load ${tblCnt} Tables` : 'Load Table';
+    if ((!tblCnt && imgCnt && acceptImages(acceptList)) || (tblCnt && imgCnt && !acceptAnyTables(acceptList))) return imgCnt>1 ? `Load ${imgCnt} Images` : 'Load Image';
+    if (tblCnt && imgCnt) {
+        return `Load ${imgCnt > 1 ? imgCnt + ' ' : ''}Image${imgCnt > 1 ? 's' : ''} and ${tblCnt > 1 ? tblCnt + ' ' : ''}Table${tblCnt > 1 ? 's' : ''}`;
+    }
+    return  'Load';
+}
+
+
 export function resultFail() {
     showInfoPopup('One or more fields are invalid', 'Validation Error');
 }
 
-const getPartCnt= () => currentReport?.parts?.length ?? 1;
-const getFirstPartType= () => currentSummaryModel?.tableData.data[0]?.[1];
-const getFileFormat= () => currentReport?.fileFormat;
-const isRegion= () => getFirstPartType()===FileAnalysisType.REGION;
 
-function isSinglePartFileSupported() {
-    const supportedTypes= isTablesOnly() ? TABLES_ONLY_SUPPORTED_TYPES : SUPPORTED_TYPES;
-    return getFirstPartType() && (supportedTypes.includes(getFirstPartType()));
-}
-
-function isFileSupported() {
-    return getFirstPartType() && (SUPPORTED_TYPES.includes(getFirstPartType()) || getFileFormat()===Format.FITS);
+function isSinglePartFileSupported(currentSummaryModel, acceptList) {
+    const supportedTypes = (acceptOnlyTables(acceptList)) ? TABLES_ONLY_SUPPORTED_TYPES : SUPPORTED_TYPES;
+    return getFirstPartType(currentSummaryModel) && (supportedTypes.includes(getFirstPartType(currentSummaryModel)));
 }
 
 
-function getFirstExtWithData(parts) {
-    return isTablesOnly() ?
-        parts.findIndex((p) => p.type.includes(FileAnalysisType.Table)) :
-        parts.findIndex((p) => !p.type.includes(FileAnalysisType.HeaderOnly));
-}
-
-
-
-function tablesOnlyResultSuccess() {
-    const tableIndices = getSelectedRows(FileAnalysisType.Table);
-    const imageIndices = getSelectedRows(FileAnalysisType.Image);
-
-    if (tableIndices.length>0) {
-        imageIndices.length>0 && showInfoPopup('Only loading the tables, ignoring the images.');
-        sendTableRequest(tableIndices, getFileCacheKey());
-        return true;
+function getFirstExtWithData(parts, acceptList, summaryModel) {
+    if (!parts || !summaryModel) return 0;
+    if (acceptOnlyTables(acceptList)) {
+        return summaryModel.tableData.data.findIndex((p) => p[1].includes(FileAnalysisType.Table));
     }
-    else {
-        showInfoPopup('You may only upload tables.');
-        return false;
+    if (!acceptImages(acceptList)) {
+        return summaryModel.tableData.data.findIndex((p) => (!p[1].includes(FileAnalysisType.Image) && !p[1].includes(FileAnalysisType.HeaderOnly)));
     }
-}
-
-
-export function resultSuccess(request) {
-    if (isTablesOnly()) return tablesOnlyResultSuccess();
-    const fileCacheKey = getFileCacheKey();
-
-    const tableIndices = getSelectedRows(FileAnalysisType.Table);
-    const imageIndices = getSelectedRows(FileAnalysisType.Image);
-
-    if (!isFileSupported()) {
-        showInfoPopup(`File type of ${getFirstPartType()} is not supported.`);
-        return false;
+    if (!acceptAnyTables(acceptList)) {
+        return summaryModel.tableData.data.findIndex((p) => (!p[1].includes(FileAnalysisType.Table) && !p[1].includes(FileAnalysisType.HeaderOnly)));
     }
-
-    if (!isRegion() && tableIndices.length + imageIndices.length === 0) {
-        if (getSelectedRows('HeaderOnly')?.length) {
-            showInfoPopup('FITS HDU type of HeaderOnly is not supported. A header-only HDU contains no additional data.', 'Validation Error');
-        }
-        else {
-            showInfoPopup('No extension is selected', 'Validation Error');
-        }
-        return false;
-    }
-
-    const isMocFits =  isMOCFitsFromUploadAnalsysis(currentReport);
-    if (isRegion()) {
-        sendRegionRequest(fileCacheKey);
-    }
-    else if (isMocFits.valid) {
-        sendTableRequest(tableIndices, fileCacheKey, {[MetaConst.PREFERRED_HIPS]: getAppHiPSForMoc()}, false);
-    } else if ( isLsstFootprintTable(currentDetailsModel) ) {
-        sendLSSTFootprintRequest(fileCacheKey, request.fileName, tableIndices[0]);
-    } else {
-        sendTableRequest(tableIndices, fileCacheKey);
-        sendImageRequest(imageIndices, request, fileCacheKey);
-    }
+    return summaryModel.tableData.data.findIndex((p) => !p[1].includes(FileAnalysisType.HeaderOnly));
 }
 
 /*-----------------------------------------------------------------------------------------*/
 
-const getLoadingFieldName= () => getFieldVal(panelKey, uploadOptions) || FILE_ID;
+function getNextState(summaryTblId, summaryTbl, detailsTblId, analysisResult, message, oldState, acceptList, acceptOneItem) {
+    // because this value is stored in different fields, so we have to check on what options were selected to determine the active value
+    let currentReport, currentSummaryModel;
 
-function getNextState(oldState) {
+    const prevAnalysisResult = oldState?.analysisResult;
+    currentReport = oldState?.report;
+    currentSummaryModel = oldState.summaryModel;
+    const currentDetailsModel = oldState?.detailsModel;
 
-    // because this value is stored in different fields.. so we have to check on what options were selected to determine the active value
-    const fieldState = getField(panelKey, getLoadingFieldName()) || {};
-    const {analysisResult, message} = fieldState;
-    let modelToUseForDetails= getTblById(SUMMARY_TBL_ID)?? currentSummaryModel;
+    if (!analysisResult) { //clearReport sets analysisResult:undefined, so set currentReport=undefined to clear the file
+        currentReport = undefined;
+    }
+    let summaryModelToUseForDetails= summaryTbl ?? currentSummaryModel;
 
     if (message) {
-        return {message, report:undefined, summaryModel:undefined, detailsModel:undefined};
-    } else  if (analysisResult) {
-        if (analysisResult && analysisResult !== currentAnalysisResult) {
+        return {message, report:undefined, summaryModel:undefined, detailsModel:undefined, selectInfo: undefined};
+    } else if (analysisResult) {
+        if (analysisResult !== prevAnalysisResult) {
             currentReport = JSON.parse(analysisResult);
+            if (currentReport.fileFormat === Format.UNKNOWN) {
+                return {message:'Unrecognized file type', report:undefined, summaryModel:undefined, detailsModel:undefined, selectInfo: undefined};
+            }
 
-            currentSummaryModel= makeSummaryModel(currentReport);
-            modelToUseForDetails= currentSummaryModel;
+            currentSummaryModel= makeSummaryModel(currentReport, summaryTblId, acceptList);
+            summaryModelToUseForDetails= currentSummaryModel;
 
-            const firstExtWithData= getFirstExtWithData(currentReport .parts);
+            const firstExtWithData= getFirstExtWithData(currentReport.parts, acceptList, currentSummaryModel);
             if (firstExtWithData >= 0) {
                 const selectInfo = SelectInfo.newInstance({rowCount: currentSummaryModel.tableData.data.length});
-                selectInfo.setRowSelect(firstExtWithData, true);        // default select first extension/part with data
-                currentSummaryModel.selectInfo = selectInfo.data;
-                modelToUseForDetails.highlightedRow= firstExtWithData;
+                !acceptOneItem && selectInfo.setRowSelect(firstExtWithData, true);        // default select first extension/part with data
+                !acceptOneItem && (currentSummaryModel.selectInfo = selectInfo.data);
+                summaryModelToUseForDetails.highlightedRow= firstExtWithData;
             }
 
         }
     }
-    let detailsModel = getDetailsModel( modelToUseForDetails,currentReport);
-    if (shallowequal(detailsModel, currentDetailsModel)) {
-        detailsModel = currentDetailsModel;
-    }
-    currentDetailsModel = detailsModel;
 
-    const newState= {message, analysisResult, report:currentReport, summaryModel:currentSummaryModel, detailsModel};
-    if (statesEqual(oldState,newState)) {
-        return oldState;
+    const detailsModel = getDetailsModel(summaryModelToUseForDetails, currentReport, detailsTblId, Format.UNKNOWN);
+    if (currentSummaryModel) {
+        currentSummaryModel.highlightedRow= summaryModelToUseForDetails?.totalRows===currentSummaryModel.totalRows
+            ? summaryModelToUseForDetails.highlightedRow
+            : getFirstExtWithData(currentReport?.parts, acceptList, currentSummaryModel);
     }
-    else {
-        // event if we have a new state, test to see if we have to replace the summaryModel.
-        return oldState &&
-        summaryModelEqual(newState.summaryModel,oldState.summaryModel) &&
-        oldState.analysisResult!==oldState.analysisResult ?
-            {...newState,summaryModel:oldState.summaryModel} : newState;
-    }
+
+    const newState= {message, analysisResult, report:currentReport, summaryModel:currentSummaryModel, detailsModel,
+                    prevAnalysisResult: oldState?.analysisResult, selectInfo:summaryModelToUseForDetails?.selectInfo};
+    return statesEqual(oldState, newState) ? oldState : newState;
 }
 
 function statesEqual(s1,s2) {
@@ -331,18 +363,29 @@ function statesEqual(s1,s2) {
     if (s1.analysisResult!==s2.analysisResult) return false;
     const r1= s1.report;
     const r2= s2.report;
-    if (r1!==r2) {
-        if (r1.fileName!==r2.fileName ||   r1.fileFormat!==r2.fileFormat ||
-            r1.fileSize!==r2.fileSize || r1.parts?.length !== r2.parts?.length) return false;
+    if (r1 && r2) {
+        if (r1 !== r2) {
+            if (r1.fileName !== r2.fileName || r1.fileFormat !== r2.fileFormat ||
+                r1.fileSize !== r2.fileSize || r1.parts?.length !== r2.parts?.length) return false;
+        }
+    }
+    if ((r1 && !r2) || (!r1 && r2)) {
+        return false;
     }
 
+    if (!shallowequal(s1.selectInfo,s2.selectInfo)) return false;
     if (!summaryModelEqual(s1.summaryModel, s2.summaryModel)) return false;
 
     const d1= s1.detailsModel;
     const d2= s2.detailsModel;
-    if (d1!==d2 &&
-        ( d1?.totalRows!==d2?.totalRows ||
-        d1?.tableData.data?.find( (d,idx) => d?.[2]!==d2?.tableData.data[idx][2]))) return false;
+    if (d1 && d2) {
+        if (d1 !== d2 &&
+            (d1?.totalRows !== d2?.totalRows ||
+                d1?.tableData.data?.find((d, idx) => d?.[2] !== d2?.tableData.data[idx][2]))) return false;
+    }
+    if ((d1 && !d2) || (!d1 && d2)) {
+        return false;
+    }
     return true;
 
 }
@@ -353,19 +396,40 @@ function summaryModelEqual(sm1,sm2) {
         sm1?.selectInfo !== sm2?.selectInfo);
 }
 
-function makeSummaryModel(report) {
+function makeSummaryModel(report, summaryTblId, acceptList) {
     const columns = [
         {name: 'Index', type: 'int', desc: 'Extension Index'},
         {name: 'Type', type: 'char', desc: 'Data Type'},
-        {name: 'Description', type: 'char', desc: 'Extension Description'}
+        {name: 'Description', type: 'char', desc: 'Extension Description', width: 30},
+        {name: 'AllowedType', type: 'boolean', desc: 'Type in AcceptList', visibility: 'hidden'}
     ];
     const {parts=[]} = report;
     const data = parts.map( (p) => {
-        const naxis= getIntHeader('NAXIS',p,0);
-        return [p.index, (naxis===1 && p.type===FileAnalysisType.Image)?FileAnalysisType.Table :p.type, p.desc];
+        const naxis= getIntHeaderFromAnalysis('NAXIS',p,0);
+        const entryType = (naxis===1 && p.type===FileAnalysisType.Image)?FileAnalysisType.Table :p.type;
+        const isMoc=  isMOCFitsFromUploadAnalsysis(report)?.valid;
+        const isDatalink=  isAnalysisTableDatalink(report);
+        let isImageAllowed = true;
+        let isTableAllowed = true;
+        if (!acceptImages(acceptList)) {
+            isImageAllowed = false;
+        }
+        if (!acceptTableOrSpectrum(acceptList)) {
+            //edge case: could still be a MOC/DL table file - which only has table entries - don't pink those out
+            isMoc || isDatalink? isTableAllowed= true: isTableAllowed= false;
+        }
+        let allowedType = true;
+        if (entryType === FileAnalysisType.Table || entryType === FileAnalysisType.Image) {
+            allowedType = entryType === FileAnalysisType.Table? isTableAllowed: isImageAllowed;
+        }
+        return [p.index, entryType , p.desc, allowedType];
     });
+
     const summaryModel = {
-        tbl_id: SUMMARY_TBL_ID,
+        tbl_id: summaryTblId,
+        tableMeta: {
+            DATARIGHTS_COL: 'AllowedType'
+        },
         title: 'File Summary',
         totalRows: data.length,
         tableData: {columns, data}
@@ -373,68 +437,138 @@ function makeSummaryModel(report) {
     return summaryModel;
 }
 
-function getDetailsModel(tableModel, report) {
+function getDetailsModel(tableModel, report, detailsTblId, UNKNOWN_FORMAT) {
     if (!tableModel) return;
     const {highlightedRow=0} = tableModel;
     const partNum = getCellValue(tableModel, highlightedRow, 'Index');
     const type = getCellValue(tableModel, highlightedRow, 'Type');
     if (type===UNKNOWN_FORMAT) return undefined;
     const details = report?.parts?.[partNum]?.details;
-    if (details) details.tbl_id = DETAILS_TBL_ID;
+    const rowCnt= report?.parts?.[partNum]?.totalTableRows ?? 0;
+    if (details) {
+        details.tbl_id = detailsTblId;
+        details.tableMeta= {...details?.tableMeta, TOTAL_TABLE_ROWS:rowCnt};
+    }
     return details;
 }
 
-function getFileCacheKey() {
-    // because this value is stored in different fields.. so we have to check on what options were selected to determine the active value
-    const uploadSrc = getFieldVal(panelKey, uploadOptions) || FILE_ID;
-    return getFieldVal(panelKey, uploadSrc);
-}
+function TableDisplayOption({isMoc, isDatalink, summaryTblId, currentReport, currentSummaryModel,
+                                currentDetailsModel, acceptList, acceptOneItem}) {
 
-function ImageDisplayOption() {
+    const highlightedRowIdx = currentSummaryModel?.highlightedRow;
+    const highlightedRow = currentSummaryModel?.tableData?.data?.[highlightedRowIdx];
+    //this is to make sure we show TableDisplayOptions even if only one table entry is selected when acceptOneItem === true
+    const entryType = highlightedRow?
+        highlightedRow[1]: currentSummaryModel?.tableData?.data?.[0]?.[1];
 
-    const [selectedImages] = useStoreConnector(() => getSelectedRows('Image'));
-    if ( selectedImages.length < 2) return null;
+    const selectedTables = getFileFormat(currentReport) ?
+        getSelectedRows('Table', summaryTblId, currentReport, currentSummaryModel) : [];
 
-    const imgOptions = [{value: 'oneWindow', label: 'All images in one window'},
-        {value: 'mulWindow', label: 'One extension image per window'}];
+    if ( selectedTables.length < 1 && !acceptOneItem) return null;
+    if (!currentReport || (acceptOneItem && (!highlightedRowIdx || entryType !== FileAnalysisType.Table))) return null;
+
+    //Possibly from the Upload Panel in the HiPS/MOC 'Add MOC Layer' tab
+    if (isMoc && acceptMocTables(acceptList) && !(acceptTableOrSpectrum(acceptList))) {
+        return null;
+    }
+    else if (isMoc && acceptTableOrSpectrum(acceptList)) {
+        const options= [{label:'Load as MOC Overlay', value:'moc'}, {label:'Load as Table', value:'table'}];
+        return (
+            <RadioGroupInputField {...{ options, sx:{pt:1/2}, orientation:'horizontal',
+                                  initialState: {value: 'moc'}, fieldKey:'mocOp' }}/>
+        );
+    }
+    else if (isDatalink && acceptList.includes(DATA_LINK_TABLES)) {
+        const options= [{label:'Load as Datalink Search UI', value:'datalinkUI'}, {label:'Load as Table', value:'table'}];
+        let defaultValue= 'table';
+        if (currentDetailsModel?.resources.some( ({utype=''}) => utype.toLowerCase().startsWith('cisx'))) {
+            defaultValue= 'datalinkOp';
+        }
+        return (
+            <RadioGroupInputField {...{sx: {py:1/2}, options, alignment:'horizontal',
+                initialState: {value: defaultValue}, fieldKey:'datalinkOp' }} />
+        );
+    }
+
     return (
         <div style={{marginTop: 3}}>
-            <RadioGroupInputField
-                tooltip='display image extensions in one window or multiple windows'
-                fieldKey='imageDisplay'
-                options={imgOptions}
-            />
+                {acceptList.includes(SPECTRUM_TABLES) && <CheckboxGroupInputField
+                    sx={{mx:1}}
+                    options={[{value: 'spectrum',
+                        title:'If possible - interpret table columns names to fit into a spectrum data model',
+                        label:'Attempt to interpret tables as spectra'}]}
+                    fieldKey='tablesAsSpectrum'
+                />}
         </div>
     );
 }
 
-function UploadOptions({uploadSrc=FILE_ID, isloading, isWsUpdating, uploadKey}) {
+function ImageDisplayOption({summaryTblId, currentReport, currentSummaryModel, acceptList}) {
+    const selectedImages = getSelectedRows('Image', summaryTblId, currentReport, currentSummaryModel);
 
+    const singleAxis= findSingleAxisImages(currentReport);
+
+    if ( selectedImages.length < 2 && !singleAxis.length) return null;
+
+    const imgOptions = [{value: 'oneWindow', label: 'All images in one window'},
+        {value: 'mulWindow', label: 'One extension image per window'}];
+    if (acceptList.includes(IMAGES)) {
+        return (
+            <Stack mt={1/2} mx={1} spacing={1}>
+                {(selectedImages.length > 1) && <RadioGroupInputField
+                    orientation='horizontal'
+                    tooltip='display image extensions in one window or multiple windows'
+                    fieldKey='imageDisplay'
+                    options={imgOptions}
+                />}
+                {singleAxis.length > 0 &&
+                    <CheckboxGroupInputField
+                                        options={[{value: 'singleAxisImage',
+                                            title:'Show Nx1 images as table and chart',
+                                            label:'Show Nx1 images as table and chart',
+                                            }]}
+                                        initialState={{value: 'singleAxisImage'}}
+                                        fieldKey={SINGLE_ROW_AS_TABLE}
+                                    />}
+
+            </Stack>
+        );
+    }
+    else { //could still be a FITS file, but acceptList only accepts Tables & not Images
+        return null;
+    }
+}
+
+function UploadOptions({uploadSrc, isLoading, isWsUpdating, uploadKey, dropEvent, setDropEvent}) {
+
+    const [getUploadMetaInfo, setUploadMetaInfo]= useFieldGroupMetaState({isLoading:undefined, statusKey: undefined });
     const onLoading = (loading, statusKey) => {
-        dispatchComponentStateChange(panelKey, {isLoading: loading, statusKey:loading?statusKey:''});
+        setUploadMetaInfo({...getUploadMetaInfo(), isLoading:loading, statusKey: loading?statusKey:''});
+        setDropEvent(null);
     };
 
     if (uploadSrc === FILE_ID) {
         return (
             <FileUpload
                 key={uploadKey}
-                innerStyle={{width: 90}}
-                fileNameStyle={{marginLeft: 5, fontSize: 12}}
                 fieldKey={FILE_ID}
                 fileAnalysis={onLoading}
                 tooltip='Select a file with FITS, VOTABLE, CSV, TSV, or IPAC format'
+                dropEvent={dropEvent}
+                canDragDrop={true}
             />
         );
     } else if (uploadSrc === URL_ID) {
         return (
             <FileUpload
                 key={uploadKey}
-                innerStyle={{width: 300}}
                 fieldKey={URL_ID}
                 fileAnalysis={onLoading}
                 isFromURL={true}
-                label='Enter URL of a file:'
+                label='Enter URL of a file'
                 tooltip='Select a URL with file in FITS, VOTABLE, CSV, TSV, or IPAC format'
+                dropEvent={dropEvent}
+                canDragDrop={true}
             />
         );
     } else if (uploadSrc === WS_ID) {
@@ -444,7 +578,7 @@ function UploadOptions({uploadSrc=FILE_ID, isloading, isWsUpdating, uploadKey}) 
                 wrapperStyle={{marginRight: 32}}
                 preloadWsFile={true}
                 fieldKey={WS_ID}
-                isLoading={isloading || isWsUpdating}
+                isLoading={isLoading || isWsUpdating}
                 fileAnalysis={onLoading}
                 tooltip='Select a file in FITS, VOTABLE, CSV, TSV, or IPAC format from workspace'
             />
@@ -453,221 +587,303 @@ function UploadOptions({uploadSrc=FILE_ID, isloading, isWsUpdating, uploadKey}) 
     return null;
 }
 
-function AnalysisInfo({report,supported=true}) {
+function AnalysisInfo({report,supported=true,UNKNOWN_FORMAT}) {
     const partDesc = report.fileFormat === 'FITS' ? 'Extensions:' :
-                     report.fileFormat === UNKNOWN_FORMAT ? '' : 'Parts:';
+        report.fileFormat === UNKNOWN_FORMAT ? '' : 'Parts:';
     const partCnt= report?.parts?.length ?? 1;
     return (
-        <div className='FileUpload__headers'>
-            <div className='keyword-label'>Format:</div>  <div className='keyword-value'>{report.fileFormat}</div>
-            <div className='keyword-label'>Size:</div>  <div className='keyword-value'>{getSizeAsString(report.fileSize)}</div>
-            {partCnt>1 && <div className='keyword-label'>{partDesc}</div>}
-            {partCnt>1 &&<div className='keyword-value'>{partCnt}</div> }
-            {!supported && <div style={{color:'red', fontSize:'larger'}}>{`File type of ${getFirstPartType()} is not supported`}</div>}
-        </div>
+        <Stack {...{direction:'row', spacing:2}}>
+            <Stack spacing={1/2} direction='row'>
+                <Typography>Format:</Typography>
+                <Typography color='warning'>{report.fileFormat}</Typography>
+            </Stack>
+            <Stack spacing={1/2} direction='row'>
+                <Typography>Size:</Typography>
+                <Typography color='warning'>{getSizeAsString(report.fileSize)}</Typography>
+            </Stack>
+            <Stack spacing={1/2} direction='row'>
+                <Typography color='warning'>{report.fileName}</Typography>
+            </Stack>
+            <Stack spacing={1/2} direction='row'>
+                {partCnt>1 && <Typography>{partDesc}</Typography>}
+                {partCnt>1 && <Typography color='warning'>{partCnt}</Typography> }
+            </Stack>
+            {!supported && <div style={{color:'red', fontSize:'larger'}}>
+                {getFirstPartType() ? `File type of ${getFirstPartType()} is not supported` : 'Could not recognize the file type'}</div>}
+        </Stack>
     );
 }
 
-const tblOptions = {showToolbar:false, border:false, showOptionButton: false, showFilters: true};
+const tblOptions = {showToolbar:false, border:false, showOptionButton:false, showFilters:true};
 
-function AnalysisTable({summaryModel, detailsModel, report}) {
+function AnalysisTable({summaryModel, detailsModel, report, isMoc, UNKNOWN_FORMAT, acceptList, acceptOneItem}) {
     if (!summaryModel) return null;
 
-    // Details table need to render first to create a stub to collect data when Summary table is loaded.
+    // Details table needs to render first to create a stub to collect data when Summary table is loaded.
     return (
-        <div className='FileUpload__summary'>
+        <Stack {...{direction:'row', flexGrow:1, position:'relative', minHeight:'1rem'}}>
             {(summaryModel.tableData.data.length>1) ?
-                <MultiDataSet summaryModel={summaryModel} detailsModel={detailsModel}/> :
+                <MultiDataSet summaryModel={summaryModel} detailsModel={detailsModel} isMoc={isMoc}
+                              acceptOneItem={acceptOneItem}/> :
                 <SingleDataSet type={summaryModel.tableData.data[0][1]} desc={summaryModel.tableData.data[0][2]}
-                               detailsModel={detailsModel} report={report}/>
+                               detailsModel={detailsModel} report={report} UNKNOWN_FORMAT={UNKNOWN_FORMAT}
+                               currentSummaryModel={summaryModel} acceptList={acceptList}
+                />
             }
-        </div>
+        </Stack>
     );
 }
 
-function SingleDataSet({type, desc, detailsModel, report, supported=isSinglePartFileSupported()}) {
+function SingleDataSet({type, desc, detailsModel, report, UNKNOWN_FORMAT, currentSummaryModel, acceptList}) {
+    const supported = isSinglePartFileSupported(currentSummaryModel, acceptList);
     const showDetails= supported && detailsModel;
+    const isUWSJobFile = isUWS(report);
+    const jobUrl = report.parts[0].url;
     return (
-        <div style={{display:'flex', flex:'1 1 auto', justifyContent: showDetails?'start':'center'}}>
-            <div style={{padding:'30px 20px 0 0'}}>
-                <div style={{whiteSpace:'nowrap', fontSize:'larger', fontWeight:'bold', paddingBottom:40}}>
-                    {type}{desc ? ` - ${desc}` : ''}
-                </div>
-                <AnalysisInfo report={report} supported={supported} />
-                <div style={{paddingTop:15}}>No other detail about this file</div>
-            </div>
-            {  showDetails && <Details detailsModel={detailsModel}/>}
-        </div>
+        <Stack spacing={2} {...{direction:'row', flex:'1 1 auto', justifyContent: showDetails || isUWSJobFile?'start':'center', position:'relative'}}>
+            <Stack spacing={1} sx={{ml: isUWSJobFile?4:0, flexShrink:0}}>
+                <Typography level='title-lg' sx={{whiteSpace:'nowrap', pb:5}}>
+                    {type}{desc ? `: ${desc}` : ''}
+                </Typography>
+                <AnalysisInfo {...{report, supported, UNKNOWN_FORMAT}} />
+                {isUWSJobFile && <UWSInfo {...{jobUrl}}/>}
+                <Typography sx={{pt:2}}>No other detail about this file</Typography>
+            </Stack>
+            {
+                showDetails &&
+                <Stack spacing={1} sx={{flexGrow:1, position:'relative'}}>
+                    <Details detailsModel={detailsModel}/>
+                </Stack>
+            }
+        </Stack>
     );
 }
 
-function MultiDataSet({summaryModel, detailsModel}) {
+function MultiDataSet({summaryModel, detailsModel, isMoc, acceptOneItem}) {
     return (
-        <SplitPane split='vertical' maxSize={-20} minSize={20} defaultSize={350}>
-            <TablePanel showTypes={false} title='File Summary' tableModel={summaryModel} tbl_ui_id={summaryUiId} {...tblOptions} />
-            <Details detailsModel={detailsModel}/>
-        </SplitPane>
+        <Stack {...{width: 1}}>
+            {
+                isMoc &&
+                <Typography level='title=lg' sx={{height: '3rem', alignSelf: 'center'}}>
+                    This table is a MOC and can be overlaid on a HiPS Survey
+                </Typography>
+            }
+            <Box sx={{height:1, position:'relative'}}>
+                <SplitPane split='vertical' maxSize={-20} minSize={20} defaultSize={350}>
+                    {acceptOneItem && <TablePanel {...{showTypes:false, title:'File Summary', tableModel:summaryModel,
+                        ...tblOptions, selectable:false, }} />}
+                    {!acceptOneItem && <TablePanel {...{sx:{mr:1}, showTypes:false, title:'File Summary', tableModel:summaryModel,
+                        ...tblOptions}} />}
+                    <Details detailsModel={detailsModel}/>
+                </SplitPane>
+            </Box>
+        </Stack>
     );
 }
 
 
 function Details({detailsModel}) {
-    if (!detailsModel) return <div className='FileUpload__noDetails'>Details not available</div>;
+    if (!detailsModel) {
+        return (
+            <Typography level='body-lg' sx={{w:1, textAlign:'center',mt:2}}>
+                Details not available
+            </Typography>
+        );
+    }
 
     return (
         <TablePanel showTypes={false}  title='File Details'
-                    tableModel={detailsModel} tbl_ui_id={detailsUiId}
+                    tableModel={detailsModel}
+                    sx={{ml:1, position:'relative', inset:0}}
                     {...tblOptions} showMetaInfo={true} selectable={false}/>
     );
 
 }
 
 
-function getTableArea(report, summaryModel, detailsModel) {
+function getTableArea(report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT, acceptList, acceptOneItem) {
     if (report?.fileFormat === UNKNOWN_FORMAT) {
         return (
-            <div style={{flexGrow: 1, marginTop: 40, textAlign:'center', fontSize: 'larger', color: 'red'}}>
+            <Typography color='danger' level='body-lg' sx={{flexGrow: 1, mt: 4, textAlign:'center'}}>
                 Error: Unrecognized Format
-            </div>
+            </Typography>
         );
     }
-    return <AnalysisTable {...{summaryModel, detailsModel, report}} />;
+    return <AnalysisTable {...{summaryModel, detailsModel, report, isMoc, UNKNOWN_FORMAT, acceptList, acceptOneItem}} />;
 }
 
+function buildAllowedTypes(acceptList) {
+    const allowedTypes = [];
+    acceptTableOrSpectrum(acceptList) && allowedTypes.push(TABLE_MSG);
+    acceptRegions(acceptList) && allowedTypes.push(REGION_MSG);
+    acceptImages(acceptList) && allowedTypes.push(IMAGE_MSG);
+    acceptMocTables(acceptList) && allowedTypes.push(MOC_MSG);
+    acceptDataLinkTables(acceptList) && allowedTypes.push(DL_MSG);
+    acceptUWS(acceptList) && allowedTypes.push(UWS_MSG);
+    return allowedTypes;
+}
 
-const FileAnalysis = ({report, summaryModel, detailsModel, tablesOnly}) => {
-    if (report) {
-        return (
-            <div className='FileUpload__report'>
-                {summaryModel.tableData.data.length>1 && <AnalysisInfo report={report} />}
-                {getTableArea(report, summaryModel, detailsModel)}
-            </div>
-        );
+const AcceptedList = (props) => {
+    const {list} = props;
+    const allowedTypes = buildAllowedTypes(list);
+    const liStyle= {listStyleType:'circle'};
+    return (
+        <Box className='ff-FileUploadViewPanel-acceptList' sx={{ml:25, mt:2}}>
+            <Typography component='div'>
+                You can load any of the following types of files:
+                <ul>
+                    {allowedTypes.map((fileType, index) => {
+                        return <li key={index} style={liStyle}>{fileType}</li>;
+                    })}
+                </ul>
+            </Typography>
+        </Box>);
+};
+
+const NotAccepted = (props) => {
+    const  {types} = props;
+    const liStyle= {listStyleType:'circle'};
+    return (
+        <Box className='ff-FileUploadViewPanel-acceptList' sx={{ml:25, mt:2}}>
+            <Typography component='div'>
+                Warning: You cannot upload the following file type(s) from here:
+                <ul>
+                    {types.map((fileType, index) => {
+                        return <li key={index} style={liStyle}>{fileType}</li>;
+                    })}
+                </ul>
+            </Typography>
+        </Box>);
+};
+
+const determineAccepted = (acceptList, uniqueTypes, isMoc, isDL) => {
+    const notAcceptedTypes = [];
+    let accepted;
+    if (uniqueTypes.includes(REGIONS)) {
+        if (!acceptRegions(acceptList)) {
+            notAcceptedTypes.push('Region');
+        }
+    }
+    else if (uniqueTypes.includes(UWS)) {
+        if (!acceptUWS(acceptList)) {
+            notAcceptedTypes.push('UWS');
+        }
+    }
+    else if (uniqueTypes.includes(IMAGES) && uniqueTypes.includes(TABLES)) { //possibly FITs
+        if (!acceptImages(acceptList) && !acceptTableOrSpectrum(acceptList)) {
+            notAcceptedTypes.push('Images', 'Tables');
+        }
+    }
+    else if (uniqueTypes.includes(IMAGES)) { //but not table
+        if (!acceptImages(acceptList)) {
+            notAcceptedTypes.push('Images');
+        }
+    }
+    else if (uniqueTypes.includes(TABLES)) { //but not image - could be moc fits, vot, tsv, etc.
+        //even if one of these is in the acceptList, we can assume tables are allowed, but if not - throw a warning
+        if (!acceptAnyTables(acceptList)) {
+            notAcceptedTypes.push('Tables');
+        }
+        //assuming if acceptList = 1, in this case we only accept MOC fits files and nothing else
+        if (acceptMocTables((acceptList)) && !isMoc &&
+            (acceptList.length===1 || !acceptNonMocTables(acceptList))) {
+            notAcceptedTypes.push('Any non MOC FITS files');
+        }
+        if (acceptDataLinkTables(acceptList) && !isDL &&
+            (acceptList.length===1 || !acceptNonDataLinkTables(acceptList))) {
+            notAcceptedTypes.push('Any non Datalink Tables');
+        }
+    }
+
+    notAcceptedTypes.length === 0? accepted=true: accepted=false;
+    return {accepted, notAcceptedTypes};
+};
+
+const warningMessage = (acceptList, uniqueTypes) => {
+    //if this is a file with both table and image entries, but either table or image is not in acceptList, there will be some pinked out entries (tables or images)
+    if (uniqueTypes.includes('Table') && uniqueTypes.includes('Image') && (!acceptImages((acceptList)) || !acceptTableOrSpectrum(acceptList))) {
+        return (<Typography level='title-md' color='warning' sx={{m: '20px 0 0 0'}}>
+            Note: Any selected entries with highlighted pink lines will not be loaded.
+        </Typography>);
     }
     else {
-        const liStyle= {listStyleType:'circle'};
-        return (<div style={{color:'gray', margin:'20px 0 0 200px', fontSize:'larger', lineHeight:'1.3em'}}>
-            You can load any of the following types of files:
-            <ul>
-                <li style={liStyle}>Custom catalog in IPAC, CSV, TSV, VOTABLE, or FITS table format</li>
-                {!tablesOnly && <li style={liStyle}>Any FITS file with tables or images (including multiple HDUs)</li>}
-                {!tablesOnly && <li style={liStyle}>A Region file</li> }
-                {!tablesOnly && <li style={liStyle}>A MOC FITS file</li> }
-            </ul>
-        </div>);
-
+        return null;
     }
 };
 
-
-
-
-
-function getSelectedRows(type) {
-    if (getPartCnt()===1) {
-        if (type===getFirstPartType()) {
-            return [0];
-        }
-        return [];
-    }
-    const {totalRows=0, tableData} = getSelectedDataSync(SUMMARY_TBL_ID, ['Index', 'Type']);
-    if (totalRows === 0) return [];
-    const selectedRows = tableData.data;
-    return selectedRows.filter((row) => row[1] === type)            // take only rows with the right type
-        .map((row) => row[0]);                       // returns only the index
-}
-
-
-
-function sendRegionRequest(fileCacheKey) {
-    const drawLayerId = createNewRegionLayerId();
-    const title= currentReport.fileName ?? 'Region File';
-    dispatchCreateRegionLayer(drawLayerId, title, fileCacheKey, null);
-    if (!getPlotViewAry(visRoot())?.length) {
-        showInfoPopup('The region file is loaded but you will not be able to see it until you load an image (FITS or HiPS)', 'Warning');
-    }
-}
-
-function sendTableRequest(tableIndices, fileCacheKey, metaData, loadToUI= true) {
-    const {fileName, parts=[]} = currentReport;
-
-    tableIndices.forEach((idx) => {
-        const {index} = parts[idx];
-        const title = parts.length > 1 ? `${fileName}-${index}` : fileName;
-        const options=  metaData && { META_INFO: metaData};
-        const tblReq = makeFileRequest(title, fileCacheKey, null, options);
-        tblReq.tbl_index = index;
-        loadToUI ? dispatchTableSearch(tblReq) : dispatchTableFetch(tblReq);
-
-    });
-}
-
-/**
- * send request to get the data of image unit, the extension index is mapped to be that at
- * the server side
- * @param imageIndices
- * @param request
- * @param fileCacheKey
- */
-function sendImageRequest(imageIndices, request, fileCacheKey) {
-
-    if (imageIndices.length === 0) return;
-
-    const {fileName, parts=[]} = currentReport;
-
-    const wpRequest = WebPlotRequest.makeFilePlotRequest(fileCacheKey);
-    const {viewerId=''} = getAViewFromMultiView(getMultiViewRoot(), IMAGE) || {};
-
-    if (viewerId) {
-        wpRequest.setPlotGroupId(viewerId);
-
-        if (request.imageDisplay === 'mulWindow') {
-            // plot each image separately
-
-            imageIndices.forEach( (idx) => {
-                const plotId = `${fileName}-${idx}`;
-                const {index} = parts[idx];
-
-                // if (index !== -1)  wpRequest.setPostTitle(`- ext. ${idx}`); // not primary
-                if (index !== -1)  wpRequest.setAttributes({[PlotAttribute.POST_TITLE]:`- ext. ${idx}`}); // not primary
-
-                wpRequest.setMultiImageExts(`${index}`);
-                dispatchPlotImage({plotId, wpRequest, viewerId});
+function UWSInfo ({jobUrl}) {
+    const [jobInfo, setJobInfo] = useState('');
+    const [errMsg, setErrMsg] = useState(null);
+    useEffect(  () => {
+        uwsJobInfo(jobUrl).then((info) => {
+            setJobInfo(info);
+        })
+            .catch(() => {
+                setErrMsg('Error: Please upload UWS files via the \'Upload from URL\' option');
             });
-        } else {
-            const extList = imageIndices.map((idx) => get(parts, [idx, 'index'])).join();
+    },[jobUrl]);
 
-            wpRequest.setMultiImageExts(extList);
-            if (!extList.includes('-1')) wpRequest.setAttributes({[PlotAttribute.POST_TITLE]:`- ext. ${extList}`});
+    if (!jobUrl) { //user uploaded a UWS file from 'Upload file' option (instead of 'Upload from URL')
+        return (
+            <Stack>
+                {errMsg && <Typography level='body-lg' color='danger' sx={{mt:2}}> {errMsg} </Typography>}
+            </Stack>
+        );
+    }
 
-            const plotId = `${fileName.replace('.', '_')}-${imageIndices.join('_')}`;
-            dispatchPlotImage({plotId, wpRequest, viewerId});
+    return (
+        <Stack {...{
+            width: 1, minHeight: 100, minWidth: 250, maxWidth: 1000, resize: 'both', overflow: 'hidden'}}>
+            <UwsJobInfo jobInfo={jobInfo} isOpen={true}/>
+        </Stack>
+    );
+}
+
+
+const FileAnalysis = ({report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT, acceptList,
+                          isDL, acceptOneItem}) => {
+    //getting FieldGroup context and adding required params to the request object (used in resultSuccess in FileUploadProcessor)
+    const {groupKey, register, unregister}= useContext(FieldGroupCtx);
+
+    const types= summaryModel?.tableData?.data.map( (d) => d[1]) ?? [];
+
+    //types will have repeated 'Image', 'Table', etc. - getting only unique values from types
+    const uniqueTypes = types.filter((value, index, self) => self.indexOf(value) === index);
+
+    const additionalReqObjs = {summaryModel, report, detailsModel, groupKey, acceptList, uniqueTypes, acceptOneItem};
+    useEffect(() => {
+        register('additionalParams', () => additionalReqObjs);
+        return () => unregister('additionalParams');
+    }, [report]);
+
+    if (report) {
+
+        const {accepted, notAcceptedTypes}= determineAccepted(acceptList, uniqueTypes, isMoc, isDL);
+
+        if  (accepted) { //no errors/warnings: show the AnalysisInfo
+            return (
+                <Stack flexGrow={1} spacing={2} mt={1}>
+                    {summaryModel.tableData.data.length>1 && <AnalysisInfo {...{report}} />}
+                    {warningMessage(acceptList, uniqueTypes)}
+                    {getTableArea(report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT, acceptList, acceptOneItem)}
+                </Stack>
+            );
         }
+        else {
+            return  (<NotAccepted types={notAcceptedTypes}/>);
+        }
+
     }
-}
 
-
-function sendLSSTFootprintRequest(uploadPath, displayValue, tblIdx) {
-    const dl_id = getLSSTFootprintId();
-    const pv = primePlot(visRoot());
-    const pIds = pv ? [pv.plotId]: [];
-
-    dispatchCreateImageLineBasedFootprintLayer(dl_id, displayValue,
-        null, pIds,
-        uploadPath, null, tblIdx);
-}
-
-
-function getLSSTFootprintId() {
-    const dlId = uniqueTblId();
-    let   idx = 1;
-    let   fpLayerId = dlId;
-    const dls = getDrawLayersByType(getDlAry(), LSSTFootprint.TYPE_ID);
-
-    while (true) {
-        const dl = dls.find((oneLayer) => oneLayer.drawLayerId === fpLayerId);
-
-        if (!dl) return dlId;
-        fpLayerId = dlId + `${idx++}`;
+    else {
+        return (
+            <>
+            <AcceptedList list={acceptList}/>
+                <Typography level='h2' component='div' color='warning' sx={{minHeight:'5rem', flex:'1 1 auto', mt:'4rem', textAlign: 'center'}}>
+                    Drag & drop your files here
+                </Typography>
+            </>
+        );
     }
-}
+};
+

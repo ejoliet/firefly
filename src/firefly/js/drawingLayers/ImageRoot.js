@@ -2,6 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {Stack, Typography} from '@mui/joy';
 import React from 'react';
 import {sprintf} from '../externalSource/sprintf';
 import {makeDrawingDef} from '../visualize/draw/DrawingDef.js';
@@ -79,27 +80,28 @@ function getTitle(pv, plot, drawLayer) {
     const showSize= Boolean(r.getSizeInDeg() && isImage(plot) );
     const titleEmLen= Math.min(plot.title.length+2,24);
     const minWidth= showSize || !drawLayer.isPointData ? (titleEmLen+6)+'em' : titleEmLen+'em';
+    const maxWidth=450;
     const {blank=false}= plot;
-    const hipsStr= blank ? '': 'HiPS';
+    const hipsStr= blank ? '': 'Image (HiPS)';
     return () => {
        return  (
-            <div style={{
-                display: 'inline-flex',
+            <Stack {...{
+                direction: 'row',
                 alignItems: 'center',
-                width: 100,
+                spacing:1,
+                maxWidth,
                 minWidth,
                 overflow: 'hidden',
-                textOverflow: 'ellipsis'
-            } }
-                 title={plot.title}>
-                <div>{plot.title}</div>
-                <div style={{paddingLeft: 10, fontSize:'80%'}}>{`${isHiPS(plot) ? hipsStr : 'Image'}${showSize?',':''}`}</div>
-                {showSize &&
-                <div  style={{paddingLeft: 5, fontSize:'80%'}}>
-                    {`Search Size: ${sprintf('%.4f',r.getSizeInDeg())}${String.fromCharCode(176)}`}
-                </div>
-                }
-            </div>
+                textOverflow: 'ellipsis',
+                title:plot.title,
+            } } >
+                 <Typography>{`${isHiPS(plot) ? hipsStr : 'Image (FITS)'}${showSize?',':''}`}</Typography>
+                 {showSize &&
+                 <Typography {...{level:'body-xs'}}>
+                   {`Search Size: ${sprintf('%.4f',r.getSizeInDeg())}${String.fromCharCode(176)}`}
+                 </Typography>
+                 }
+            </Stack>
         );
     };
 }

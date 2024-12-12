@@ -8,12 +8,31 @@ const tapPanelOverview= {
         'open tap panel'
     ],
     parameters: {
-        service: {desc:'tap service url', isRequired:true},
+        service: {desc:'tap service url'},
         schema : 'tap schema',
         table : 'tap table to search',
         WorldPt : 'coordinates of the image (semi-colon separated) - example-   10.68479;41.26906;EQ_J2000',
         MAXREC : 'max number of rows to return',
         adql: 'the ADQL select statement',
+        selectBy: 'The way to select by',
+        exposureLengthMin : 'Minimum duration of exposure (in seconds)',
+        exposureLengthMax : 'Maximum duration of exposure (in seconds)',
+        exposureMin : 'Time when exposures must end by (requires `exposureRangeType=range`, optionally specify `exposureTimeMode=mjd` if in mjd)',
+        exposureMax : 'Time when exposures must start by (requires `exposureRangeType=range`, optionally specify `exposureTimeMode=mjd` if in mjd)',
+        exposureTimeMode : 'Time mode (iso, mjd) that `exposureMin` and `exposureMax` are specified in',
+        exposureRangeType : '`range` or `since` (`since` if not specified)',
+        exposureSinceValue : 'The quantity of time (n) when looking for completed observations',
+        exposureSinceOptions : 'The unit of time for when looking for completed observations: `minutes`, `hours`, `days`, or `years`. Requires `exposureRangeType=since`',
+        obsCoreCalibrationLevel : 'List of ObsCore calibration levels, from 0-4 (e.g. `obsCoreCalibrationLevel=3,4`)',
+        obsCoreTypeSelection : 'List of options of ObsCore Data Product types (`image`, `cube`,  `spectrum`, `sed`, `timeseries`, `visibility`, `event`, `measurements`)',
+        obsCoreInstrumentName : 'Name of ObsCore instrument',
+        obsCoreCollection : 'ObsCore collection',
+        obsCoreSubType : 'ObsCore subtype. Only considered if the table contains the appropriate column.',
+        obsCoreWavelengthRangeType : 'Type of Wavelength search for Observations. `contains` or `overlaps`',
+        obsCoreWavelengthContains : 'Wavelength value when selecting `obsCoreWavelengthRangeType=contains`',
+        obsCoreWavelengthMinRange : 'Upper limit of an observation\'s wavelength coverage. Requires `obsCoreWavelengthRangeType=overlaps`',
+        obsCoreWavelengthMaxRange : 'Lower limit of an observation\'s wavelength coverage. Requires `obsCoreWavelengthRangeType=overlaps`',
+        obsCoreWavelengthUnits : 'Units for wavelength coverage (`angstrom`, `nm`, `um`)',
         [ReservedParams.POSITION.name]: ['coordinates of the search',...ReservedParams.POSITION.desc],
         [ReservedParams.SR.name]: ['radius of search  (optional)',...ReservedParams.SR.desc],
         execute: 'true or false - if true execute the tap search'
@@ -67,9 +86,29 @@ const tapPanelExamples= [
         }
     },
     {
+        desc:'Open tap panel- setup  gia search for data release 2',
+        params:{
+            service: 'https://gea.esac.esa.int/tap-server/tap',
+            schema:'gaiadr2',
+            table:'gaiadr2.gaia_source',
+            WorldPt: '83.63321237;22.01446012;EQ_J2000',
+            sr: '20s',
+        }
+    },
+    {
+        desc:'Execute adql gia search on sources for data release 2',
+        params:{
+            service: 'https://gea.esac.esa.int/tap-server/tap',
+            adql: ` SELECT * 
+FROM gaiadr2.gaia_source 
+WHERE CONTAINS(POINT('ICRS', ra, dec),CIRCLE('ICRS', 83.63321237, 22.01446012, 0.027777777777777776))=1 `,
+            execute: 'true'
+        }
+    },
+    {
         desc:'Show tap tables for CADC',
         params:{
-            service: 'https://www.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/tap',
+            service: 'https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/argus/',
             schema:'tap_schema',
             table:'tap_schema.tables',
             execute: 'true'
@@ -80,7 +119,7 @@ const tapPanelExamples= [
         params:{
             service: 'https://irsa.ipac.caltech.edu/TAP',
             adql:
-`SELECT ra,dec,sigra,sigdec,sigradec,w1mpro,w1sigmpro,w1snr,w1rchi2,w1mpro_allwise,w1sigmpro_allwise,,w4mpro_allwise,w4sigmpro_allwise \
+`SELECT ra,dec,sigra,sigdec,sigradec,w1mpro,w1sigmpro,w1snr,w1rchi2,w1mpro_allwise,w1sigmpro_allwise,w4mpro_allwise,w4sigmpro_allwise \
 FROM neowiser_p1bs_psd WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE(\'ICRS\', 10.68479, 41.26906, 0.013))=1`,
         }
     },
@@ -108,11 +147,17 @@ function showTapPanel(cmd,inParams) {
         params.radiusInArcSec= params[ReservedParams.SR.name] * 3600;
         Reflect.deleteProperty(params, ReservedParams.SR.name);
     }
-    const view= getAppOptions()?.multiTableSearchCmdOptions?.find( ({id}) => id==='tap') ? 'MultiTableSearchCmd' : 'TAPSearch';
-    dispatchShowDropDown({view, initArgs:{...params, defaultSelectedId:'tap'}});
+    const view= params.view ?? 'TAPSearch';
+
+    dispatchShowDropDown({view, initArgs:{defaultSelectedId:'tap', urlApi:{...params}}});
 }
 
-export function getTapCommands() {
+export function getTapCommands(tapPanelList) {
+    if (tapPanelList?.length) {
+        tapPanelOverview.parameters.view=
+            'a constrained tap panel, may be: ' + tapPanelList.map( ({name}) => name).join(', ');
+    }
+
     return [
         {
             cmd : 'tap',

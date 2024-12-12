@@ -24,11 +24,19 @@ import {uniqueChartId} from '../charts/ChartUtil.js';
 import {getWsChannel, getWsConnId, getConnectionCount, makeViewerChannel,
     REINIT_APP, WS_CONN_UPDATED, GRAB_WINDOW_FOCUS, NOTIFY_REMOTE_APP_READY} from '../core/AppDataCntlr.js';
 import {dispatchAddCell, dispatchEnableSpecialViewer, LO_VIEW} from '../core/LayoutCntlr.js';
-import {DEFAULT_FITS_VIEWER_ID, DEFAULT_PLOT2D_VIEWER_ID} from '../visualize/MultiViewCntlr.js';
+import {DEFAULT_FITS_VIEWER_ID, DEFAULT_PLOT2D_VIEWER_ID, PINNED_CHART_VIEWER_ID} from '../visualize/MultiViewCntlr.js';
 import {dispatchAddActionWatcher} from '../core/MasterSaga.js';
+import {WEB_API_CMD} from './WebApi.js';
 
 const logger = Logger('ApiViewer');
 
+/**
+ * @typedef ViewerType
+ * one of
+ * @prop TriView
+ * @prop Grid
+ * @type {Enum}
+ */
 export const ViewerType= new Enum([
     'TriView',  // use what it in the title
     'Grid' // use the plot description key
@@ -36,6 +44,7 @@ export const ViewerType= new Enum([
 
 let defaultViewerFile='';
 let defaultViewerType=ViewerType.TriView;
+const activeViewers = {};     // a map of active viewer windows keyed by channel
 
 /**
  * @returns {{getViewer: function, getExternalViewer: function}}
@@ -79,7 +88,7 @@ export function getViewer(channel, file=defaultViewerFile, scriptUrl) {
         return getViewer && getViewer(channel, file);
     } else {
         // return currently loaded app's Viewer
-        channel = makeViewerChannel(channel || getWsChannel());
+        channel = makeViewerChannel(channel || getWsChannel(), file);
         const dispatch= (action) => dispatchRemoteAction(channel,action);
         const reinitViewer= () => dispatch({ type: REINIT_APP, payload: {}});
 
@@ -92,7 +101,9 @@ export function getViewer(channel, file=defaultViewerFile, scriptUrl) {
             ...buildImagePart(channel,file,dispatch),
             ...buildTablePart(channel,file,dispatch),
             ...buildChartPart(channel,file,dispatch),
-            ...buildUtilPart(channel,file)
+            ...buildUrlApiLaunchPart(channel,file, dispatch),
+            ...buildUtilPart(channel,file),
+            addCell: () => undefined //noop
         };
 
 
@@ -198,13 +209,23 @@ function buildSlateControl(channel,file,dispatcher) {
     return {addCell, showCoverage, showImageMetaDataViewer};
 }
 
+function buildUrlApiLaunchPart(channel,file, dispatch) {
+    const urlApiLaunch= (paramStr='') => {
+        const viewOp= makeViewerOp(channel,file);
+        viewOp('launching url api', () => {
+            dispatch({type:WEB_API_CMD, payload:{paramStr}});
+        });
+    };
+    return {urlApiLaunch};
+}
+
 
 function buildImagePart(channel,file,dispatch) {
     const viewOp= makeViewerOp(channel,file);
     let defP= {};
 
     /**
-     * @summary set the default params the will be add to image plot request
+     * @summary set the default params that will be added to image plot request
      * @param params
      * @memberof firefly.ApiViewer
      * @public
@@ -214,7 +235,7 @@ function buildImagePart(channel,file,dispatch) {
     /**
      * @summary show a image in the firefly viewer in another tab
      * @param {WebPlotParams|WebPlotRequest|Array.<WebPlotParams>} request The object contains parameters for web plot request
-     * @param {String} viewerId
+     * @param {string} viewerId - ignored in triview mode
      * @memberof firefly.ApiViewer
      * @public
      */
@@ -226,7 +247,7 @@ function buildImagePart(channel,file,dispatch) {
     /**
      * @summary show a HiPS in the firefly viewer in another tab
      * @param {WebPlotParams|WebPlotRequest} request The object contains parameters for web plot request on HiPS type
-     * @param {String} viewerId
+     * @param {string} viewerId - ignored in triview mode
      * @memberof firefly.ApiViewer
      * @public
      */
@@ -268,7 +289,7 @@ function buildChartPart(channel,file,dispatch) {
     /**
      * @summary Show a chart
      * @param {{chartId: string, data: array.object, layout: object}} options
-     * @param {string} viewerId
+     * @param {string} viewerId - ignored in triview mode
      * @memberof firefly.ApiViewer
      * @public
      */
@@ -277,7 +298,7 @@ function buildChartPart(channel,file,dispatch) {
     /**
      * @summary Show XY Plot
      * @param {XYPlotOptions} xyPlotOptions
-     * @param {string} viewerId
+     * @param {string} viewerId - ignored in triview mode
      * @memberof firefly.ApiViewer
      * @public
      */
@@ -286,7 +307,7 @@ function buildChartPart(channel,file,dispatch) {
     /**
      * @summary Show Histogram
      * @param {HistogramOptions} histogramOptions
-     * @param {string} viewerId
+     * @param {string} viewerId - ignored in triview mode
      * @memberof firefly.ApiViewer
      * @public
      */
@@ -297,20 +318,21 @@ function buildChartPart(channel,file,dispatch) {
 }
 
 const doViewerOperation= (() => {
-    let viewerWindow;
     return (channel,file,initMsg, f) => {
         const cnt = getConnectionCount(channel);
         if (cnt > 0) {
-            viewerWindow ? viewerWindow.focus() : dispatchRemoteAction(channel, {type:GRAB_WINDOW_FOCUS});
+            activeViewers[channel] ? activeViewers[channel]?.focus() : dispatchRemoteAction(channel, {type:GRAB_WINDOW_FOCUS});
             f?.();
         } else {
             dispatchAddActionWatcher({
                 callback:windowReadyWatcher, actions:[WS_CONN_UPDATED, NOTIFY_REMOTE_APP_READY], params:{channel,f}
             });
             const url= `${modifyURLToFull(file,getRootURL())}?${WSCH}=${channel}`;
-            viewerWindow = window.open(url, channel);
-            set(viewerWindow, 'firefly.options.RequireWebSocketUptime', true);
-            initMsg && set(viewerWindow, 'firefly.options.initLoadingMessage', initMsg);
+            const win = window.open(url, channel);
+            activeViewers[channel] =  win;
+            win.onclose = () => Reflect.deleteProperty(activeViewers, channel);
+            set(win, 'firefly.options.RequireWebSocketUptime', true);
+            initMsg && set(win, 'firefly.options.initLoadingMessage', initMsg);
         }
     };
 })();
@@ -351,13 +373,13 @@ export function windowReadyWatcher(action, cancelSelf, {channel, f, isLoaded= fa
 
 /**
  * @param {{chartId: string, data: array.object, layout: object}} params - chart parameters
- * @param {string} viewerId
+ * @param {string} viewerId - ignored in triview mode
  * @param {Function} dispatch - dispatch function
  */
-function plotRemoteChart(params, viewerId, dispatch) {
+function plotRemoteChart(params, viewerId=DEFAULT_PLOT2D_VIEWER_ID, dispatch) {
     dispatchChartAdd( {
-                groupId: viewerId || 'default',
-                viewerId:viewerId || DEFAULT_PLOT2D_VIEWER_ID,
+                groupId: defaultViewerType===ViewerType.TriView ? PINNED_CHART_VIEWER_ID : viewerId || 'default',
+                viewerId: defaultViewerType===ViewerType.TriView ? PINNED_CHART_VIEWER_ID : viewerId || DEFAULT_PLOT2D_VIEWER_ID,
                 chartId: params.chartId || uniqueChartId(),
                 chartType: 'plot.ly',
                 deletable: true,
@@ -369,7 +391,7 @@ function plotRemoteChart(params, viewerId, dispatch) {
 
 /**
  * @param {XYPlotOptions} params - XY plot parameters
- * @param {string} viewerId
+ * @param {string} viewerId - ignored in triview mode
  * @param {Function} dispatch - dispatch function
  */
 function plotRemoteXYPlot(params, viewerId, dispatch) {
@@ -393,8 +415,8 @@ function plotRemoteXYPlot(params, viewerId, dispatch) {
     }
     // SCATTER
     dispatchChartAdd({
-        groupId: viewerId || 'default',
-        viewerId:viewerId || DEFAULT_PLOT2D_VIEWER_ID,
+        groupId: defaultViewerType===ViewerType.TriView ? PINNED_CHART_VIEWER_ID : viewerId || 'default',
+        viewerId: defaultViewerType===ViewerType.TriView ? PINNED_CHART_VIEWER_ID : viewerId || DEFAULT_PLOT2D_VIEWER_ID,
         chartId: params.chartId || uniqueChartId(),
         chartType: 'scatter',
         params,
@@ -404,7 +426,7 @@ function plotRemoteXYPlot(params, viewerId, dispatch) {
 
 /**
  * @param {HistogramOptions} params - histogram parameters
- * @param {string} viewerId
+ * @param {string} viewerId - ignored in triview mode
  * @param {Function} dispatch - dispatch function
  */
 function plotRemoteHistogram(params, viewerId, dispatch) {
@@ -428,8 +450,8 @@ function plotRemoteHistogram(params, viewerId, dispatch) {
     }
     // HISTOGRAM
     dispatchChartAdd({
-        groupId: viewerId || 'default',
-        viewerId:viewerId || DEFAULT_PLOT2D_VIEWER_ID,
+        groupId: defaultViewerType===ViewerType.TriView ? PINNED_CHART_VIEWER_ID : 'default',
+        viewerId: defaultViewerType===ViewerType.TriView ? PINNED_CHART_VIEWER_ID : viewerId,
         chartId: params.chartId || uniqueChartId(),
         chartType: 'histogram',
         params,
@@ -449,7 +471,9 @@ function plotRemoteImage(request, viewerId, dispatch) {
     });
 
     request= confirmPlotRequest(request,{},'remoteGroup',makePlotId);
-    dispatchPlotImage({wpRequest:request, viewerId:viewerId || DEFAULT_FITS_VIEWER_ID, dispatcher:dispatch});
+    dispatchPlotImage({wpRequest:request,
+        viewerId:defaultViewerType===ViewerType.TriView ? DEFAULT_FITS_VIEWER_ID : viewerId || DEFAULT_FITS_VIEWER_ID,
+        dispatcher:dispatch});
 }
 
 
@@ -459,8 +483,11 @@ function plotRemoteHiPS(request, viewerId, dispatch) {
     if (badList.length) debug(`HiPS request has the following bad keys: ${badList}`);
 
     request= confirmPlotRequest(request,{Type:'HiPS'},'remoteGroup',makePlotId);
-    dispatchPlotHiPS({plotId:request.plotId, wpRequest:request,
-                      viewerId:viewerId || DEFAULT_FITS_VIEWER_ID, dispatcher:dispatch});
+    dispatchPlotHiPS({
+        plotId:request.plotId,
+        wpRequest:request,
+        viewerId:defaultViewerType===ViewerType.TriView ? DEFAULT_FITS_VIEWER_ID : viewerId || DEFAULT_FITS_VIEWER_ID,
+        dispatcher:dispatch});
 }
 
 const makePlotId = (() => {

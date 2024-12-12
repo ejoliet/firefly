@@ -19,6 +19,7 @@ import {applyDefaults, flattenAnnotations, formatColExpr, getPointIdx, getRowIdx
 import {FilterInfo} from '../tables/FilterInfo.js';
 import {SelectInfo} from '../tables/SelectInfo.js';
 import {REINIT_APP, getAppOptions} from '../core/AppDataCntlr.js';
+import {showInfoPopup} from '../ui/PopupUtil.jsx';
 import {makeHistogramParams, makeXYPlotParams, getDefaultChartProps} from './ChartUtil.js';
 import {adjustColorbars, hasFireflyColorbar} from './dataTypes/FireflyHeatmap.js';
 
@@ -191,8 +192,8 @@ export function dispatchSetActiveTrace({chartId, activeTrace, dispatcher=flux.pr
  * @param {string} p.expandedViewerId- chart id
  * @param {Function} [p.dispatcher=flux.process] - only for special dispatching uses such as remote
  */
-export function dispatchChartExpanded({chartId, expandedViewerId, dispatcher=flux.process}) {
-    dispatcher( {type: CHART_UI_EXPANDED, payload: {chartId, expandedViewerId}});
+export function dispatchChartExpanded({dispatcher=flux.process, ...rest}) {
+    dispatcher( {type: CHART_UI_EXPANDED, payload: rest});
 }
 
 
@@ -292,7 +293,7 @@ function chartRemove(action) {
         const viewerId = get(getChartData(chartId), 'viewerId');
         if (viewerId) {
             dispatchRemoveViewerItems(viewerId, [chartId]);
-            if (getViewer(getMultiViewRoot(), viewerId).customData.activeItemId === chartId) {
+            if (getViewer(getMultiViewRoot(), viewerId)?.customData?.activeItemId === chartId) {
                 dispatchUpdateCustom(viewerId, {activeItemId: undefined});
             }
         }
@@ -321,6 +322,8 @@ function chartTraceRemove(action) {
 function chartUpdate(action) {
     return (dispatch) => {
         const {chartId, changes} = action.payload;
+        // when selection  is undefined, selections layer must be removed
+        if (changes.hasOwnProperty('selection') && !changes.selection) changes['layout.selections'] = [];
         // remove any table's mappings from changes because it will be applied by the connectors.
         const changesWithoutTblMappings = omitBy(changes, (v) => isString(v) && v.match(TBL_SRC_PATTERN));
         set(action, 'payload.changes', changesWithoutTblMappings);
@@ -392,18 +395,19 @@ function chartSelect(action) {
         // disable chart select in this case
         if (get(data, `${activeTrace}.hoverinfo`) === 'skip') { return; }
 
-        let selected = undefined;
-        if (!isEmpty(tablesources)) {
-            const {tbl_id} = tablesources[activeTrace] || {};
-            const {totalRows} = getTblById(tbl_id);
-            const selectInfoCls = SelectInfo.newInstance({rowCount: totalRows});
-
-            selIndexes.forEach(([ptIdx, traceIdx]) => selectInfoCls.setRowSelect(getRowIdx(data[traceIdx], ptIdx), true));
-            TablesCntlr.dispatchTableSelect(tbl_id, selectInfoCls.data);
-        }
         // avoid updating chart twice
         // don't update before table select
-        if (!chartTrigger) {
+        if (chartTrigger) {
+            if (!isEmpty(tablesources)) {
+                const {tbl_id} = tablesources[activeTrace] || {};
+                const {totalRows} = getTblById(tbl_id);
+                const selectInfoCls = SelectInfo.newInstance({rowCount: totalRows});
+
+                selIndexes.forEach(([ptIdx, traceIdx]) => selectInfoCls.setRowSelect(getRowIdx(data[traceIdx], ptIdx), true));
+                TablesCntlr.dispatchTableSelect(tbl_id, selectInfoCls.data);
+            }
+        } else {
+            let selected = undefined;
             const hasSelected = !isEmpty(selIndexes);
             if (isSpectralOrder(chartId)) {
                 selected = combineAllTraceFrom(chartId, selIndexes, SELECTED_PROPS);
@@ -437,6 +441,11 @@ function chartFilterSelection(action) {
                 y = `ifnull(${y},${lowerLimit})`;
             }
 
+            const multiArea = get(selection, 'multiArea')
+            if (multiArea) {
+                showInfoPopup('Filtering is only supported for one selection area.', 'Warning');
+                return;
+            }
             const [xMin, xMax] = get(selection, 'range.x', []);
             const [yMin, yMax] = get(selection, 'range.y', []);
             const {request} = getTblById(tbl_id);
@@ -641,6 +650,7 @@ function reduceData(state={}, action={}) {
             }
             state = updateSet(state, chartId,
                 omitBy({
+                    chartId,
                     chartType,
                     mounted: nMounted,
                     ...rest
@@ -681,11 +691,9 @@ function reduceData(state={}, action={}) {
         case (CHART_MOUNTED) :
         {
             const {chartId} = action.payload;
-            if (has(state, chartId)) {
-                const n = get(state, [chartId,'mounted'], 0);
-                state = updateSet(state, [chartId,'mounted'], Number(n) + 1);
-                logger.info(`CHART_MOUNTED ${chartId} #mounted ${state[chartId].mounted}`);
-            }
+            const n = get(state, [chartId,'mounted'], 0);
+            state = updateSet(state, [chartId,'mounted'], Number(n) + 1);
+            logger.info(`CHART_MOUNTED ${chartId} #mounted ${state[chartId].mounted}`);
 
             return state;
         }
@@ -747,8 +755,7 @@ export function getTraceSymbol(data, fireflyData, traceNum) {
 function reduceUI(state={}, action={}) {
     switch (action.type) {
         case (CHART_UI_EXPANDED) :
-            const {chartId, expandedViewerId}  = action.payload;
-            return updateSet(state, 'expanded', {chartId,expandedViewerId});
+            return updateSet(state, 'expanded', action.payload);
         case (CHART_REMOVE) :
             if (get(action.payload, 'chartId') === get(getExpandedChartProps(), 'chartId')) {
                 return omit(state, 'expanded');
@@ -877,7 +884,7 @@ export function dispatchError(chartId, traceNum, reason) {
 
     const {data=[]} = getChartData(chartId);
     let forTrace = '';
-    if (data.length == 1) {
+    if (data.length === 1) {
         const name = get(data, `${traceNum}.name`);
         // if a trace is user named, mention the name
         forTrace = name && !name.toLowerCase().startsWith('trace') ? `: ${name} data` : '';
@@ -907,7 +914,7 @@ export function dispatchError(chartId, traceNum, reason) {
         reasonStr = '';
     } else {
         logger.error(`${message}: ${reason}`);
-        reasonStr = '';
+        reasonStr = reason;
     }
     const changes = {};
     changes[`fireflyData.${traceNum}.error`] = {message, reason: reasonStr};
@@ -916,10 +923,20 @@ export function dispatchError(chartId, traceNum, reason) {
 }
 
 export function getExpandedChartProps() {
-    const {chartId, expandedViewerId} = flux.getState()[CHART_SPACE_PATH]?.ui?.expanded ?? {};
-    return {chartId, expandedViewerId};
+    return  flux.getState()[CHART_SPACE_PATH]?.ui?.expanded ?? {};
 }
 
+
+export function getChartIdsForTable(tbl_id) {
+    const chartIds = [];
+    const state = get(flux.getState(), [CHART_SPACE_PATH, 'data']);
+    Object.keys(state).forEach((cid) => {
+        if (state[cid].tbl_id === tbl_id) {
+            chartIds.push(cid);
+        }
+    });
+    return chartIds;
+}
 
 export function getChartIdsInGroup(groupId) {
     const chartIds = [];

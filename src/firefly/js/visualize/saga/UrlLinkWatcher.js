@@ -2,8 +2,9 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {once} from 'lodash';
 import {TABLE_LOADED} from '../../tables/TablesCntlr.js';
-import {findTableAccessURLColumn} from '../../util/VOAnalyzer.js';
+import {findTableAccessURLColumn} from '../../voAnalyzer/TableAnalysis.js';
 import {getTblById} from '../../tables/TableUtil.js';
 import {dispatchTableUpdate} from '../../tables/TablesCntlr.js';
 import {clone} from '../../util/WebUtil.js';
@@ -11,13 +12,13 @@ import {clone} from '../../util/WebUtil.js';
 
 //TODO: for testTable, more logic could be added if the API of setting table meta for any link-like column is supported
 /** @type {TableWatcherDef} */
-export const urlLinkWatcherDef = {
+export const getUrlLinkWatcherDef= once(() =>  ({
     id : 'URLLinkWatcher',
     watcher : watchURLLinkColumns,
     testTable : (table) => findTableAccessURLColumn(table),
     allowMultiples: false,
     actions: [TABLE_LOADED]
-};
+}));
 
 
 

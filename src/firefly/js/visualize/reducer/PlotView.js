@@ -3,15 +3,14 @@
  */
 
 import update from 'immutability-helper';
-import Enum from 'enum';
+import {getCenterPtOfPlot} from '../WebPlotAnalysis';
 import {PlotAttribute} from '../PlotAttribute';
-import {isImage, isHiPS} from '../WebPlot.js';
+import {isImage, isHiPS, changeHiPSProjectionCenter} from '../WebPlot.js';
 import {WPConst} from '../WebPlotRequest';
 import {makeScreenPt, makeDevicePt, makeImagePt, makeWorldPt} from '../Point';
 import {getActiveTarget} from '../../core/AppDataCntlr.js';
-import { getCenterPtOfPlot, getLatDist, getLonDist } from '../VisUtil.js';
-import {getPlotViewById, matchPlotViewByPositionGroup, primePlot, findCurrentCenterPoint} from '../PlotViewUtil.js';
-import {changeProjectionCenter} from '../HiPSUtil.js';
+import {getLatDist, getLonDist} from '../VisUtil.js';
+import {findCurrentCenterPoint, getPlotViewById, hasWCSProjection, matchPlotViewByPositionGroup, primePlot} from '../PlotViewUtil.js';
 import {UserZoomTypes} from '../ZoomUtil.js';
 import {ZoomType} from '../ZoomType.js';
 import {PlotPref} from '../PlotPref.js';
@@ -21,7 +20,7 @@ import {getDefMenuItemKeys} from '../MenuItemKeys.js';
 import {ExpandType, WcsMatchType} from '../ImagePlotCntlr.js';
 import {updateTransform, makeTransform} from '../PlotTransformUtils.js';
 
-export const ServerCallStatus= new Enum(['success', 'working', 'fail'], { ignoreCase: true });
+// export const ServerCallStatus= new Enum(['success', 'working', 'fail'], { ignoreCase: true });
 
 /**
  * @global
@@ -36,39 +35,27 @@ export const ServerCallStatus= new Enum(['success', 'working', 'fail'], { ignore
  * array of WebPlots. The array length will only be one for normals fits files and n for multi image fits and cube fits
  * files. plots[primeIdx] refers to the plot currently showing in the plot view.
  *
- * @prop {String} plotId, immutable
- * @prop {String} plotGroupId, immutable
- * @prop {String} drawingSubGroupId, immutable
- * @peop {boolean} visible true when we draw the base image
+ * @prop {String} plotId - immutable
+ * @prop {String} plotGroupId - immutable
+ * @prop {String} drawingSubGroupId - immutable
+ * @prop {WebPlotRequest} request
+ * @prop {boolean} visible true when we draw the base image
+ * @prop {boolean} subHighlight true when plot should be subHighlighted
  * @prop {Array.<WebPlot>} plots all the plots that this plotView can show, usually the image in the fits file
- * @prop {String} plottingStatusMsg, end user description of the what is doing on
- * @prop {String} serverCall, one of 'success', 'working', 'fail'
- * @prop {number} primeIdx, which of the plots array is active
+ * @prop {String} plottingStatusMsg - end user description of the what is doing on
+ * @prop {String} serverCall - one of 'success', 'working', 'fail'
+ * @prop {number} primeIdx -  which of the plots array is active
  * @prop {number} scrollX scroll position X
  * @prop {number} scrollY scroll position Y
  * @prop {{width:number, height:number}} viewDim  size of viewable area  (div size: offsetWidth & offsetHeight)
- * @prop {Object} menuItemKeys - which toolbar button are enables for this plotView
  * @prop {Object} overlayPlotViews
  * @prop {Object} options
  * @prop {number} rotation if > 0 then the plot is rotated by this many degrees
- * @prop {boolean} flipY if true, the the plot is flipped on the Y axis
- * @prop {boolean} flipX - *not implemented*, if true, the the plot is flipped on the X axis
+ * @prop {boolean} flipY if true, the plot is flipped on the Y axis
+ * @prop {boolean} flipX - *not implemented*, if true, the plot is flipped on the X axis
  * @prop {PlotViewContextData} plotViewCtx
  */
 
-/**
- * @global
- * @public
- * @typedef {Object} PlotViewContextData
- * Various properties about this PlotView
- *
- * @prop {boolean} userCanDeletePlots true if this plotView can be deleted by the user
- * @prop {boolean} zoomLockingEnabled the plot will automaticly adjust the zoom when resized
- * @prop {UserZoomTypes} zoomLockingType the type of zoom lockeing
- * @prop {number} lastCollapsedZoomLevel used for returning from expanded mode, keeps recode of the level before expanded
- * @prop {HipsImageConversionSettings} hipsImageConversion -  if defined, then plotview can convert between hips and image
- * @prop {number} plotCounter index of how many plots, used for making next ID
- */
 
 /**
  * @global
@@ -76,10 +63,10 @@ export const ServerCallStatus= new Enum(['success', 'working', 'fail'], { ignore
  * @typedef {Object} HipsImageConversionSettings
  * @summary Parameters to do conversion between hips and images
  *
- * @prop {WebPlotParams|WebPlotRequest} hipsRequestRoot a request object that contains the base parameter to display a HiPS
- * @prop {WebPlotParams|WebPlotRequest} imageRequestRoot a request object that contains the base parameter to display an image. It must be a service type.
- * @prop {number} fovDegFallOver The field of view size to determine when to move between and HiPS and an image
- * @prop {number} fovMaxFitsSize how big this fits image can be
+ * @prop {WebPlotParams|WebPlotRequest} [hipsRequestRoot] a request object that contains the base parameter to display a HiPS
+ * @prop {WebPlotParams|WebPlotRequest} [imageRequestRoot] a request object that contains the base parameter to display an image. It must be a service type.
+ * @prop {number} [fovDegFallOver] The field of view size to determine when to move between and HiPS and an image
+ * @prop {number} [fovMaxFitsSize] how big this fits image can be
  * @prop {boolean} autoConvertOnZoom do auto convert on zoom
  */
 
@@ -91,9 +78,41 @@ export const ServerCallStatus= new Enum(['success', 'working', 'fail'], { ignore
  *
  * @prop {HipsImageConversionSettings} [hipsImageConversion] If object is defined and populated correctly then
  * the PlotView will convert between HiPS and Image
- * @prop {Object} [menuItemKeys] - defines which menu items shows on the toolbar
- * @prop {boolean} [userCanDeletePlots] - default to true, defines if a PlotView can be deleted by the user
+ * @prop {Object} [menuItemKeys= getDefaultMenuItemKeys()] - defines which menu items shows on the toolbar
+ * @prop {boolean} [userCanDeletePlots=true] - default to true, defines if a PlotView can be deleted by the user
+ * @prop {boolean} [useForSearchResults=true] - this plotview is used to show some sort of result, defaults to true the normal case
+ * @prop {boolean} [displayFixedTarget=true] - overlay the search position if it exist
+ * @prop {boolean} [canBeExpanded=true] true if this pv can be expanded, defaults to true the normal case
  * @prop {boolean} [visible] - default to true, defines if a PlotView image layer is visible after it is created
+ * @prop {boolean} [rotateNorthLock]
+ * @prop {boolean} [flipYLock]
+ * @prop {boolean} [useSticky]
+ * @prop {boolean} [embedMainToolbar] default to false - if true then create the main toolbar within the plot
+ * @prop {boolean} [highlightFeedback]
+ * @prop {boolean} [useForCoverage=false]
+ * @prop {boolean} [subHighlight=false]
+ */
+
+/**
+ * @global
+ * @public
+ * @typedef {Object} PlotViewContextData
+ * Various properties about this PlotView
+ *
+ * @prop {Object} menuItemKeys - defines which menu items shows on the toolbar
+ * @prop {boolean} userCanDeletePlots true if this plotView can be deleted by the user
+ * @prop {boolean} zoomLockingEnabled the plot will automaticly adjust the zoom when resized
+ * @prop {boolean} useForSearchResults - marker that this plotview is used to show some sort of result, defaults to true the normal case
+ * @prop {boolean} useForCoverage - marker that is plot is being used to show overage data
+ * @prop {boolean} canBeExpanded true if this pv can be expanded, defaults to true the normal case
+ * @prop {UserZoomTypes} zoomLockingType the type of zoom locking
+ * @prop {number} lastCollapsedZoomLevel used for returning from expanded mode, keeps recode of the level before expanded
+ * @prop {HipsImageConversionSettings} hipsImageConversion -  if defined, then plotview can convert between hips and image
+ * @prop {number} plotCounter index of how many plots, used for making next ID
+ * @prop {boolean} multiHdu true if there is more than one HDUs
+ * @prop {number} cubeCnt - total number of cube in PlotView
+ * @prop {boolean} [highlightFeedback]
+ * @prop {Array.<number>} hduPlotStartIndexes: start indexes of each hdu
  */
 
 
@@ -104,12 +123,14 @@ export const ServerCallStatus= new Enum(['success', 'working', 'fail'], { ignore
  * @return  {PlotView}
  */
 export function makePlotView(plotId, req, pvOptions= {}) {
+    const {flipYLock,useSticky}= pvOptions;
     const pv= {
         plotId, // immutable
         plotGroupId: req.getPlotGroupId(), //immutable
         drawingSubGroupId: req.getDrawingSubGroupId(), //immutable - todo, string, this is an id, should never change
         plots:[],
         visible: pvOptions.visible ?? true,
+        subHighlight: Boolean(pvOptions.subHighlight ?? false),
         request: req && req.makeCopy(),
         plottingStatusMsg:'Plotting...',
         serverCall:'success', // one of 'success', 'working', 'fail'
@@ -119,10 +140,9 @@ export function makePlotView(plotId, req, pvOptions= {}) {
         affTrans: null,
         viewDim : {width:0, height:0}, // size of viewable area  (i.e. div size: offsetWidth & offsetHeight)
         overlayPlotViews: [],
-        menuItemKeys: makeMenuItemKeys(req,pvOptions,getDefMenuItemKeys()), // normally will not change
         plotViewCtx: createPlotViewContextData(req, pvOptions),
         rotation: 0,
-        flipY: false,
+        flipY: Boolean(flipYLock && useSticky),
         flipX: false,
     };
     return pv;
@@ -139,33 +159,33 @@ export function makePlotView(plotId, req, pvOptions= {}) {
 function createPlotViewContextData(req, pvOptions={}) {
     const attributes= req.getAttributes();
     const plotViewCtx= {
+        menuItemKeys: {...getDefMenuItemKeys(), ...pvOptions.menuItemKeys},
         userCanDeletePlots: pvOptions?.userCanDeletePlots ?? true,
-        annotationOps : req.getAnnotationOps(), // how titles are drawn
-        rotateNorthLock : false,
-        zoomLockingEnabled : false,
-        zoomLockingType: UserZoomTypes.FIT, // can be FIT or FILL
+        rotateNorthLock : Boolean(pvOptions.rotateNorthLock && pvOptions.useSticky),
+        useForCoverage: Boolean(pvOptions.useForCoverage),  // marker boolean - plot used for coverage
+        useForSearchResults: pvOptions.useForSearchResults ?? true,  // marker boolean - plot used for some result
+        canBeExpanded: pvOptions.canBeExpanded ?? true, // image can
         displayFixedTarget: pvOptions?.displayFixedTarget ?? true,
+        annotationOps : req.getAnnotationOps(), // how titles are drawn - inline on inline_brief
+        zoomLockingEnabled : false,
+        embedMainToolbar: pvOptions.embedMainToolbar ?? false,
+        zoomLockingType: UserZoomTypes.FIT, // can be FIT or FILL
         lastCollapsedZoomLevel: 0,
+        highlightFeedback: pvOptions.highlightFeedback ?? true,
         preferenceColorKey: attributes[PlotAttribute.PREFERENCE_COLOR_KEY],
-        defThumbnailSize: DEFAULT_THUMBNAIL_SIZE,
-        plotCounter:0 // index of how many plots, used for making next ID
+        defThumbnailSize: DEFAULT_THUMBNAIL_SIZE,  // todo - this option might need some cleanup
+        plotCounter:0, // index of how many plots, used for making next ID
+        multiHdu:false, // this is updated when plots are added
+        cubeCnt: 0,     // this is updated when plots are added
+        hduPlotStartIndexes: [0], // this is updated when plots are added
     };
 
     const {hipsImageConversion:hi}= pvOptions;
-    if (hi && hi.hipsRequestRoot && hi.imageRequestRoot && hi.fovDegFallOver) {  // confirm all three parameters are there
-        const defaults= {autoConvertOnZoom: false};
-        plotViewCtx.hipsImageConversion= {...defaults, ...hi};
+    if (hi?.hipsRequestRoot && hi?.imageRequestRoot && hi?.fovDegFallOver) {  // confirm all three parameters are there
+        plotViewCtx.hipsImageConversion= {autoConvertOnZoom: false, ...hi};
         if (!hi.fovMaxFitsSize ) hi.fovMaxFitsSize= hi.fovDegFallOver;
     }
     return plotViewCtx;
-}
-
-
-
-//todo - this function should determine which menuItem are visible and which are hidden
-// for now just return the default
-function makeMenuItemKeys(req,pvOptions,defMenuItemKeys) {
-    return {...defMenuItemKeys, ...pvOptions.menuItemKeys};
 }
 
 /**
@@ -181,11 +201,16 @@ export function initScrollCenterPoint(pv)  {
         const plot= primePlot(pv);
         if (!plot || !plot.attributes[PlotAttribute.FIXED_TARGET]) return pv;
         const wp= CCUtil.getWorldCoords(plot, plot.attributes[PlotAttribute.FIXED_TARGET]);
-        return replacePrimaryPlot(pv, changeProjectionCenter(plot,wp));
+        return replacePrimaryPlot(pv, changeHiPSProjectionCenter(plot,wp));
     }
 }
 
-
+/**
+ *
+ * @param {plotView} pv
+ * @param nextIdx
+ * @return {PlotView}
+ */
 export function changePrimePlot(pv, nextIdx) {
     const {plots}= pv;
     if (!plots[nextIdx]) return pv;
@@ -243,7 +268,7 @@ export function replacePlots(pv, plotAry, overlayPlotViews, expandedMode, newPlo
     pv.plottingStatusMsg='';
     pv.serverCall='success';
 
-    PlotPref.putCacheColorPref(pv.plotViewCtx.preferenceColorKey, pv.plots[pv.primeIdx].plotState);
+    PlotPref.putCacheColorPref(pv.plotViewCtx.preferenceColorKey, pv.plots[pv.primeIdx].plotState, pv.plots[pv.primeIdx].colorTableId);
 
     if (expandedMode===ExpandType.COLLAPSE) {
         pv.plotViewCtx.lastCollapsedZoomLevel= pv.plots[pv.primeIdx].zoomFactor;
@@ -260,7 +285,7 @@ export function replacePlots(pv, plotAry, overlayPlotViews, expandedMode, newPlo
 /**
  * create a copy of the PlotView with a new scroll position and a new view port if necessary
  * The scroll position is the top left visible point.
- * @param {PlotView} plotView the current plotView
+ * @param {PlotView|undefined} plotView the current plotView
  * @param {Point} newScrollPt  the screen point of the scroll position
  * @return {PlotView} new copy of plotView
  */
@@ -290,8 +315,8 @@ export function replacePlotView(plotViewAry,newPlotView) {
 
 /**
  *
- * @param {PlotView} plotView
- * @param {WebPlot} primePlot
+ * @param {PlotView|undefined} plotView
+ * @param {WebPlot|undefined} primePlot
  * @return {PlotView} return the new PlotView object
  */
 export function replacePrimaryPlot(plotView,primePlot) {
@@ -320,13 +345,19 @@ export function updatePlotGroupScrollXY(visRoot, plotId,plotViewAry, plotGroupAr
  * This function all all the safety checks for undefined plotview or plots. It is
  * always safe to call.
  * @param {WcsMatchType} wcsMatchType
- * @param {PlotView} masterPv - master PlotView
- * @param {PlotView} matchToPv - match to PlotView
+ * @param {PlotView|undefined} masterPv - master PlotView
+ * @param {PlotView|undefined} matchToPv - match to PlotView
  * @return {PlotView} a new version of matchToPv with the scroll position matching
  */
 export function updateScrollToWcsMatch(wcsMatchType, masterPv, matchToPv) {
     if (!masterPv || !matchToPv || masterPv===matchToPv) return matchToPv;
     if (masterPv.plotId===matchToPv.plotId || !primePlot(masterPv)|| !primePlot(matchToPv)) return matchToPv;
+
+    // celestial WCS match should not affect non-celestial plots
+    if ((wcsMatchType === WcsMatchType.Standard || wcsMatchType === WcsMatchType.Target) &&
+        (!hasWCSProjection(primePlot(masterPv)) || !hasWCSProjection(primePlot(matchToPv)))) {
+        return matchToPv;
+    }
 
     const newScrollPoint= findWCSMatchScrollPosition(wcsMatchType, masterPv, matchToPv);
     return updatePlotViewScrollXY(matchToPv, newScrollPoint);
@@ -484,15 +515,15 @@ export const getScrollSize = (plotView) => computeScrollSizes(primePlot(plotView
 function findScrollPtForCenter(plotView) {
     const {width,height}= plotView.viewDim;
     const {width:scrW,height:scrH}= primePlot(plotView).screenSize;
-    const x= scrW/2- width/2;
+    const x= (scrW/2- width/2) * (plotView.flipY ? -1 : 1);
     const y= scrH/2- height/2;
     return makeScreenPt(x,y);
 }
 
 /**
  * find the scroll screen pt to put the image centered on the passed ImagePt
- * @param {PlotView} plotView
- * @param {ImagePt} ipt - if this is not an image point it will be converted to one
+ * @param {PlotView|undefined} plotView
+ * @param {ImagePt|undefined} ipt - if this is not an image point it will be converted to one
  * @return {ScreenPt} the screen point to use as the scroll position
  */
 export function findScrollPtToCenterImagePt(plotView, ipt) {
@@ -505,8 +536,8 @@ export function findScrollPtToCenterImagePt(plotView, ipt) {
  * Return the scroll point for a PlotView that will place the given image point on the given device point.
  * or another way to say it:
  * Given a device point and an image point, return the scroll point the would make the two line up.
- * @param {PlotView} pv
- * @param {ImagePt} ipt - if this is not an image point it will be converted to one
+ * @param {PlotView|undefined} pv
+ * @param {ImagePt|undefined} ipt - if this is not an image point it will be converted to one
  * @param {DevicePt} targetDevPtPos - the point on the device that the image
  * @return {ScreenPt} the scroll position the places the image point on to the device point
  */
@@ -529,56 +560,12 @@ export function findScrollPtToPlaceOnDevPt(pv, ipt, targetDevPtPos) {
     return makeScreenPt(pv.flipY ? -x : x,pv.flipX ? -y : y);
 }
 
-
-export function findHipsCenProjToPlaceWptOnDevPt(pv, wpt, targetDevPtPos) {
-    const plot= primePlot(pv);
-    const cc= CysConverter.make(plot);
-    const {viewDim:{width,height}}= plot;
-    const offX= targetDevPtPos.x-width/2;
-    const offY= targetDevPtPos.y-height/2;
-    const tarAsDevPt= cc.getDeviceCoords(wpt);
-    return cc.getWorldCoords(makeDevicePt(tarAsDevPt.x-offX, tarAsDevPt.y-offY));
-}
-export function findHipsCenProjToPlaceWptOnDevPtNEW(pv, wpt, targetDevPtPos) {
-    const plot= primePlot(pv);
-    const cc= CysConverter.make(plot);
-    const {viewDim:{width,height}}= plot;
-    const offX= targetDevPtPos.x-width/2;
-    const offY= targetDevPtPos.y-height/2;
-    // const tarAsDevPt= cc.getDeviceCoords(wpt);
-    const centerDevPt= makeDevicePt(targetDevPtPos.x-offX, targetDevPtPos.y-offY);
-
-    const wp1= cc.getWorldCoords(targetDevPtPos);
-    const wp2= cc.getWorldCoords(centerDevPt);
-    if (!wp1 || !wp2) return undefined;
-    const lonDist= getLonDist(wp1.x,wp2.x);
-    const latDist= getLatDist(wp1.y,wp2.y);
-    const newCenterWp= makeWorldPt(wpt.x+lonDist,wpt.y+latDist, wpt.cSys);
-    // const newCenterWp= calculatePosition(wpt, lonDist, latDist);
-    return newCenterWp;
-}
-
-// export function findHipsCenProjToPlaceWptOnDevPtNEW2(pv, wpt, targetDevPtPos) {
-//     const plot= primePlot(pv);
-//     const cc= CysConverter.make(plot);
-//     const {viewDim:{width,height}}= plot;
-//     const offX= targetDevPtPos.x-width/2;
-//     const offY= targetDevPtPos.y-height/2;
-//     // const tarAsDevPt= cc.getDeviceCoords(wpt);
-//     const centerDevPt= makeDevicePt(targetDevPtPos.x-offX, targetDevPtPos.y-offY);
-//
-//     const wp1= cc.getWorldCoords(targetDevPtPos);
-//     const wp2= cc.getWorldCoords(centerDevPt);
-//     if (!wp1 || !wp2) return undefined;
-//     // const lonDist= computeDistanceAngularDistance(wp1.x, wp1.y, wp2.x, wp1.y);
-//     // const latDist= computeDistanceAngularDistance(wp1.x, wp1.y, wp1.x, wp2.y);
-//     // const lonDist= getLonDist(wp1.x,wp2.x);
-//     // const latDist= getLatDist(wp1.y,wp2.y);
-//     const newCenterWp= makeWorldPt(wpt.x+lonDist,wpt.y+latDist, wpt.cSys);
-//     // const newCenterWp= calculatePosition(wpt, lonDist, latDist);
-//     return newCenterWp;
-// }
-
+/**
+ * @param {PlotView} pv
+ * @param {WorldPt} wpt
+ * @param targetDevPtPos
+ * @return {WorldPt}
+ */
 export function findHipsCenProjToPlaceWptOnDevPtByInteration(pv, wpt, targetDevPtPos) {
     const plot= primePlot(pv);
     const cc= CysConverter.make(plot);
@@ -590,23 +577,23 @@ export function findHipsCenProjToPlaceWptOnDevPtByInteration(pv, wpt, targetDevP
     if (!wp1 || !wp2) return undefined;
     const lonDist= getLonDist(wp1.x,wp2.x);
     const latDist= getLatDist(wp1.y,wp2.y);
-    let newCenterInterationWP= makeWorldPt(wpt.x+lonDist,wpt.y+latDist, wpt.cSys);
+    let newCenterIterationWP= makeWorldPt(wpt.x+lonDist,wpt.y+latDist, wpt.cSys);
 
     // part 2
 
     let tmpPlot= plot;
     for(let i=0; (i<10); i++) {
-        tmpPlot= changeProjectionCenter(tmpPlot, newCenterInterationWP);
+        tmpPlot= changeHiPSProjectionCenter(tmpPlot, newCenterIterationWP);
         const tmpCC= CysConverter.make(tmpPlot);
         const testDevPt= tmpCC.getDeviceCoords(wpt);
         const errX= targetDevPtPos.x-testDevPt.x;
         const errY= targetDevPtPos.y-testDevPt.y;
         if (Math.abs(errX)<1 && Math.abs(errY)<1) {
-            return newCenterInterationWP;
+            return newCenterIterationWP;
         }
         const nextCenter= tmpCC.getWorldCoords(makeDevicePt(centerDevPt.x-errX, centerDevPt.y-errY));
-        if (!nextCenter) return newCenterInterationWP;
-        newCenterInterationWP= nextCenter;
+        if (!nextCenter) return newCenterIterationWP;
+        newCenterIterationWP= nextCenter;
     }
-    return newCenterInterationWP;
+    return newCenterIterationWP;
 }

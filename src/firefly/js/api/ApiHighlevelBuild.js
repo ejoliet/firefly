@@ -145,9 +145,9 @@ function buildTablePart(llApi) {
      * @prop {number}  pageSize     the starting page size.  Will use the request's pageSize if not given.
      * @prop {boolean} removable    true if this table can be removed from view.  Defaults to true.
      * @prop {boolean} backgroundable    true if this search can be sent to background.  Defaults to false.
-     * @prop {boolean} showUnits    defaults to false
+     * @prop {boolean} showUnits    defaults to true if table contains unit info
      * @prop {boolean} showTypes    defaults to false
-     * @prop {boolean} showFilters  defaults to false
+     * @prop {boolean} showFilters  defaults to true for all tables except client tables
      * @prop {boolean} selectable   defaults to true
      * @prop {boolean} expandable   defaults to true
      * @prop {boolean} showToolbar  defaults to true
@@ -156,7 +156,7 @@ function buildTablePart(llApi) {
      * @prop {boolean} showSave     defaults to true
      * @prop {boolean} showOptionButton    defaults to true
      * @prop {boolean} showFilterButton    defaults to true
-     * @prop {boolean} showInfoButton     defaults to false
+     * @prop {boolean} showInfoButton      defaults to true
      * @prop {boolean} border       defaults to true
      * @prop {boolean} help_id      link to help if applicable
      * @prop {function[]}  leftButtons   an array of functions that returns a button-like component laid out on the left side of this table header.  Function will be called with table's state.
@@ -452,6 +452,7 @@ function buildImagePart(llApi) {
      * @param {number} fovDegFallOver the field of view size to determine when to move between a HiPS and an image
      * @param {WebPlotParams|WebPlotRequest} allSkyRequest a request object used to display allsky image.
      * @param {boolean} plotAllSkyFirst if plot allsky first
+     * @param {boolean} [userCanDeletePlots] if true the plot has an x so the user can delete it
      *
      * @memberof firefly
      * @public
@@ -473,9 +474,10 @@ function buildImagePart(llApi) {
      *
      *
      */
-    const showImageOrHiPS = (targetDiv, hipsRequest, imageRequest,  fovDegFallOver, allSkyRequest, plotAllSkyFirst) =>
+    const showImageOrHiPS = (targetDiv, hipsRequest, imageRequest,  fovDegFallOver,
+                             allSkyRequest, plotAllSkyFirst, userCanDeletePlots) =>
                         showImageOrHiPSInMultiViewer(llApi, targetDiv, hipsRequest, imageRequest,
-                                                     fovDegFallOver, allSkyRequest, plotAllSkyFirst);
+                                                     fovDegFallOver, allSkyRequest, plotAllSkyFirst, userCanDeletePlots);
 
     return {showImage, showHiPS, showImageOrHiPS, showImageFileOrUrl, setGlobalImageDef, showCoverage};
 }
@@ -541,7 +543,7 @@ function buildDeprecated(llApi) {
 
 function makePlotSimple(llApi, plotId) {
     return (request) => {
-        llApi.util.renderDOM(plotId, llApi.ui.ImageViewer, {plotId});
+        llApi.util.renderDOM(plotId, llApi.ui.ImageViewer, {plotId, toolbarVariant:'soft', });
         llApi.action.dispatchPlotImage({plotId, wpRequest:Object.assign({}, globalImageViewDefParams,request)});
     };
 }
@@ -570,7 +572,7 @@ function getPlotIdFromRequest(request) {
 }
 
 function showImageOrHiPSInMultiViewer(llApi, targetDiv, hipsRequest, imageRequest,
-                                                fovDegFallOver, allSkyRequest, plotAllSkyFirst) {
+                                                fovDegFallOver, allSkyRequest, plotAllSkyFirst, userCanDeletePlots=false) {
     const {dispatchPlotImageOrHiPS, dispatchAddViewer}= llApi.action;
     const {IMAGE, NewPlotMode}= llApi.util.image;
     const {MultiImageViewer, MultiViewStandardToolbar}= llApi.ui;
@@ -586,10 +588,12 @@ function showImageOrHiPSInMultiViewer(llApi, targetDiv, hipsRequest, imageReques
 
     const plotId= getPlotIdFromRequest(hipsRequest) || getPlotIdFromRequest(imageRequest);
     dispatchPlotImageOrHiPS({plotId, hipsRequest, viewerId: targetDiv,
-                             imageRequest, allSkyRequest, plotAllSkyFirst, fovDegFallOver});
+                             imageRequest, allSkyRequest, plotAllSkyFirst, fovDegFallOver,
+                             pvOptions: {userCanDeletePlots}});
 
     renderDOM(targetDiv, MultiImageViewer,
-        {viewerId:targetDiv, canReceiveNewPlots:NewPlotMode.create_replace.key, Toolbar:MultiViewStandardToolbar });
+        {viewerId:targetDiv, canReceiveNewPlots:NewPlotMode.create_replace.key, Toolbar:MultiViewStandardToolbar,
+            toolbarVariant:'soft' });
 
 }
 
@@ -642,11 +646,13 @@ function showImageInMultiViewer(llApi, targetDiv, request, isHiPS, hipsImageConv
 
     if (imageRenderType===STANDARD) {
         renderDOM(targetDiv, ApiToolbarImageDisplay,
-            {viewerId,  canReceiveNewPlots:NewPlotMode.create_replace.key, Toolbar:MultiViewStandardToolbar });
+            {viewerId, canReceiveNewPlots:NewPlotMode.create_replace.key,
+                Toolbar:MultiViewStandardToolbar });
     }
     else {
         renderDOM(targetDiv, ApiFullImageDisplay,
-            {viewerId, renderTreeId:viewerId, canReceiveNewPlots:NewPlotMode.create_replace.key, Toolbar:MultiViewStandardToolbar });
+            {viewerId, renderTreeId:viewerId,
+                canReceiveNewPlots:NewPlotMode.create_replace.key, Toolbar:MultiViewStandardToolbar });
     }
 
 }
@@ -666,7 +672,8 @@ function initCoverage(llApi, targetDiv,options= {}) {
 
 
     renderDOM(targetDiv, ApiToolbarImageDisplay,
-        {viewerId:targetDiv, canReceiveNewPlots, canDelete:false, Toolbar:MultiViewStandardToolbar });
+        {viewerId:targetDiv, canReceiveNewPlots, canDelete:false,
+            Toolbar:MultiViewStandardToolbar });
     options= Object.assign({},options, {viewerId:targetDiv});
     startCoverageWatcher(options);
 }
@@ -709,7 +716,7 @@ function doShowChart(llApi, targetDiv, params={}) {
     const {ChartsContainer}= llApi.ui;
 
     const tbl_group = params.tbl_group;
-    // when tbl_group parameter is set, show a default chart
+    // when tbl_group parameter is set, show a default ch
     // for an active table in this table group
     if (!tbl_group) {
         params = Object.assign({
@@ -727,7 +734,9 @@ function doShowChart(llApi, targetDiv, params={}) {
             tbl_group,
             addDefaultChart: Boolean(tbl_group),
             closeable: false,
+            useBorder: true,
             expandedMode: false,
+            toolbarVariant:'soft',
             noChartToolbar: params.noChartToolbar
         }
     );

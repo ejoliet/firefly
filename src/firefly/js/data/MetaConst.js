@@ -17,11 +17,54 @@ export const MetaConst = {
      */
     CENTER_COLUMN : 'CENTER_COLUMN',
 
+    /**
+     * Meta entry that defines how to compute the image point position
+     * This is used in the case where this table is tied to a single FITS file
+     * use with FITS_FILE_PATH
+     */
+    IMAGE_COLUMN: 'IMAGE_COLUMN',
 
     /**
      * For coverage or catalog, an overlay position to use for this table
      */
     OVERLAY_POSITION : 'OverlayPosition',
+
+    /**
+     * How this data was extracted from the FITS file, should be z-axis, line, or points
+     */
+    FITS_EXTRACTION_TYPE: 'FitsExtractionType',
+
+    /**
+     * An world point in a fits FILE that is associated with this table
+     */
+    FITS_WORLD_PT: 'FitsWorldPoint',
+
+    /**
+     * An image point in a fits FILE that is associated with this table
+     */
+    FITS_IM_PT: 'FitsImPoint',
+
+    /**
+     * A second image point in a fits FILE that is associated with this table
+     */
+    FITS_IM_PT2: 'FitsImPoint2',
+
+    /**
+     * Fits Image server file path, a path to a FITS file that is associated with this table
+     * It is used in extraction.  An extracted tables set the fits file path from the server.
+     * FITS_FILE_PATH in a table can match the plotState.getWorkingFitsFileStr() from a WebPlot
+     */
+    FITS_FILE_PATH: 'FitsFilePath',
+
+    /**
+     * Fits Image HDU, The HDU number of a FITS file that is associated with this table
+     */
+    FITS_IMAGE_HDU: 'FitsImageHDU',
+
+    /**
+     * Fits Image plane , The cube plane number
+     */
+    FITS_IMAGE_HDU_CUBE_PLANE: 'FitsImageHDUCubePlane',
 
 
     /**
@@ -48,8 +91,24 @@ export const MetaConst = {
     /** id string for types of image */
     IMAGE_SOURCE_ID : 'ImageSourceId',
 
-    /** default chart properties for this table */
+    /**
+     * default chart properties for this table
+     * Overrides DEFAULT_CHART_X_COL and DEFAULT_CHART_Y_COL
+     */
     DEFAULT_CHART_DEF : 'defaultChartDef',
+
+    /**
+     * default chart x column for this table - forces the chart to make the default chart with this x column
+     * not used with DEFAULT_CHART_DEF
+     */
+    DEFAULT_CHART_X_COL: 'defaultChartXCol',
+
+    /**
+     * default chart x column for this table - forces the chart to make the default chart with this x column
+     * not used with DEFAULT_CHART_DEF
+     * */
+    DEFAULT_CHART_Y_COL: 'defaultChartYCol',
+
 
     /** a string or html rgb/rgba color that can be set in metadata, use with catalog overlay */
     DEFAULT_COLOR : 'DEFAULT_COLOR',
@@ -92,6 +151,11 @@ export const MetaConst = {
      * comma separated names of the units to assign to the table when reading a fits image as a table.
      */
     IMAGE_AS_TABLE_UNITS: 'IMAGE_AS_TABLE_UNITS',
+
+    /*
+     * a string the default says what this data type might be such as 'spectrum', 'sed', 'timeseries', etc
+     */
+    DATA_TYPE_HINT: 'DATA_TYPE_HINT',
 
     /** the column name with the url or filename of the image data */
     DATA_SOURCE : 'DataSource',
@@ -150,6 +214,20 @@ export const MetaConst = {
      */
     ANALYZER_PARAMS : 'AnalyzerParams',
 
+    /** if defined and true and a table is a MOC then the table will not be loaded as a MOC layer, just as a table */
+    IGNORE_MOC : 'ignoreMOC',
+
+    LOAD_TO_DATALINK_UI : 'LoadToServiceDescriptorUI',
+
+    /**
+     * determine how a datalink obscore table trys to show the data layout, must be 'single', 'gridRelated', 'gridFull';
+     */
+    DATALINK_INITIAL_LAYOUT : 'DatalinkInitialLayout',
+
+    /**
+     * If defined and true, dispatchTableSearch will be called but prevent going to results view directly
+     */
+    UPLOAD_TABLE: 'UploadTable',
 
     /** @deprecated use CENTER_COLUMN */
     CATALOG_COORD_COLS : 'CatalogCoordColumns',

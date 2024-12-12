@@ -22,6 +22,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static edu.caltech.ipac.table.TableMeta.TBL_RELATED_COLS;
+
 /**
  * @author tatianag
  *         $Id: $
@@ -31,7 +33,7 @@ public class IBEUtils {
     public static IBE getIBE(String mission, Map<String,String> paramMap) throws IOException, DataAccessException {
         IbeDataSource ibeDataSource;
         if (StringUtils.isEmpty(mission)) {
-            throw new DataAccessException("Unspecified mission");
+            throw new DataAccessException("Unable to retrieve IBE data", new IllegalArgumentException("Unspecified mission"));
         }
         if (mission.equals(WiseIbeDataSource.WISE)) {
             ibeDataSource = new WiseIbeDataSource();
@@ -44,7 +46,7 @@ public class IBEUtils {
         } else if (mission.equals(AtlasIbeDataSource.ATLAS)){
             ibeDataSource = new AtlasIbeDataSource();
         }else{
-            throw new DataAccessException("Unsupported mission: "+mission);
+            throw new DataAccessException("Unsupported IBE mission: " + mission);
         }
         ibeDataSource.initialize(paramMap);
         return new IBE(ibeDataSource);
@@ -181,7 +183,7 @@ public class IBEUtils {
         }
 
         if (relatedCols != null) {
-            attribs.put("col.related", relatedCols);
+            attribs.put(TBL_RELATED_COLS, relatedCols);
         }
         return attribs;
     }

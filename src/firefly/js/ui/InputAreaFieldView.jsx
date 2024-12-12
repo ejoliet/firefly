@@ -1,123 +1,53 @@
-import React, {PureComponent} from 'react';
-import PropTypes from 'prop-types';
-import {PointerPopup} from '../ui/PointerPopup.jsx';
-import {InputFieldLabel} from './InputFieldLabel.jsx';
-import DialogRootContainer from './DialogRootContainer.jsx';
-import './InputAreaFieldView.css';
-import EXCLAMATION from 'html/images/exclamation16x16.gif';
+import React, {forwardRef, useContext} from 'react';
+import PropTypes, {bool, object, shape} from 'prop-types';
+import {ConnectionCtx} from './ConnectionCtx.js';
+import Textarea from '@mui/joy/Textarea';
+import {FormControl, FormLabel, Stack, Tooltip} from '@mui/joy';
+import {inputFieldTooltipProps, inputFieldValue} from 'firefly/ui/InputFieldView';
 
 
+export const InputAreaFieldView= forwardRef( ({ visible=true,label,tooltip,value,
+                                                  button, valid=true,onChange, onBlur,
+                                                  showWarning=true, connectedMarker=false,
+                                                 placeholderHighlight,
+                                                  message='', type, placeholder, sx, slotProps,
+                                                  orientation='vertical', minRows=2, maxRows}, ref ) => {
+    const connectContext= useContext(ConnectionCtx);
+    if (!visible) return null;
 
+    const tooltipProps = inputFieldTooltipProps({valid, message, showWarning, tooltip});
+    const connectedStyle= connectedMarker||connectContext.controlConnected ? {bgcolor:'yellow'} : {};
 
-function computeStyle(valid,hasFocus,additionalClasses) {
-    let extraClasses = " " + (additionalClasses || "");
-    if (!valid) {
-        return 'ff-inputfield-view-error' + extraClasses;
-    }
-    else {
-        return (hasFocus ? 'ff-inputfield-view-focus' : 'ff-inputfield-view-valid') + extraClasses;
-    }
-}
-
-
-function makeMessage(message) {
     return (
-        <div>
-            <img src={EXCLAMATION} style={{display:'inline-block', paddingRight:5}}/>
-            <div style={{display:'inline-block'}}> {message} </div>
-        </div>
+        <Stack {...{className:'ff-Input InputAreaFieldView', direction: 'row', spacing: 1, sx, ref}}>
+            <Tooltip {...{...tooltipProps, ...slotProps?.tooltip}}>
+                <FormControl {...{orientation, error:!valid, sx: {width: 1}, ...slotProps?.control}}>
+                    {label && <FormLabel {...slotProps?.label}>{label}</FormLabel>}
+                    <Textarea placeholder={placeholder}
+                              minRows={minRows}
+                              maxRows={maxRows}
+                              slotProps={{
+                                  textarea: {
+                                      spellCheck: false,
+                                      value: inputFieldValue(type, value),
+                                      onChange: (ev) => onChange?.(ev),
+                                      onBlur: (ev) => onBlur?.(ev),
+                                      sx: {
+                                          '--Textarea-placeholderColor': placeholderHighlight ?
+                                              'var(--joy-palette-warning-plainColor)' : 'inherit'
+                                      },
+                                      ...slotProps?.textArea
+                                  }
+                              }}
+                              sx={connectedStyle}
+                              {...slotProps?.input}
+                    />
+                </FormControl>
+            </Tooltip>
+            {Boolean(button) && button}
+        </Stack>
     );
-}
-
-const makeInfoPopup = (mess,x,y) => <PointerPopup x={x} y={y} message={makeMessage(mess)}/>;
-
-
-function computeWarningXY(warnIcon) {
-    var bodyRect = document.body.getBoundingClientRect();
-    var elemRect = warnIcon.getBoundingClientRect();
-    var warningOffsetX = (elemRect.left - bodyRect.left) + warnIcon.offsetWidth / 2;
-    var warningOffsetY = elemRect.top - bodyRect.top;
-    return {warningOffsetX, warningOffsetY};
-}
-
-const ICON_SPACE_STYLE= {
-    verticalAlign: 'middle',
-    paddingLeft: 3,
-    width: 16,
-    height: 16,
-    display:'inline-block'};
-
-
-export class InputAreaFieldView extends PureComponent {
-    constructor(props) {
-        super(props);
-        this.warnIcon = null;
-        this.state = { hasFocus: false, infoPopup: false };
-    }
-
-    componentDidUpdate() {
-        var {infoPopup}= this.state;
-        if (infoPopup) {
-            var {warningOffsetX, warningOffsetY}= computeWarningXY(this.warnIcon);
-            var {message}= this.props;
-            this.hider = DialogRootContainer.showTmpPopup(makeInfoPopup(message, warningOffsetX, warningOffsetY));
-        }
-        else {
-            if (this.hider) {
-                this.hider();
-                this.hider = null;
-            }
-        }
-    }
-
-    makeWarningArea(warn) {
-        if (warn) {
-            return (
-                <div style={ICON_SPACE_STYLE}
-                     onMouseOver={() => this.setState({infoPopup:true})}
-                     onMouseLeave={() => this.setState({infoPopup:false})}>
-                    <img src={EXCLAMATION} ref={(c) => this.warnIcon= c}/>
-                </div>
-            );
-        }
-        else {
-            return <div style={ICON_SPACE_STYLE}/>;
-        }
-    }
-
-    render() {
-        var {hasFocus}= this.state;
-        var {visible,label,tooltip,rows,cols,labelWidth,value,style,wrapperStyle,labelStyle,
-             valid,size,onChange, onBlur, onKeyPress, showWarning, message, type, placeholder, additionalClasses, idName}= this.props;
-        if (!visible) return null;
-        wrapperStyle = Object.assign({whiteSpace:'nowrap', display: this.props.inline?'inline-block':'block'}, wrapperStyle);
-        return (
-            <div style={wrapperStyle}>
-                {label && <InputFieldLabel labelStyle={labelStyle} label={label} tooltip={tooltip} labelWidth={labelWidth}/> }
-                <textarea style={Object.assign({display:'inline-block'}, style)}
-                          rows={rows}
-                          cols={cols}
-                          spellCheck={false}
-                          className={computeStyle(valid,hasFocus,additionalClasses)}
-                          id={idName}
-                       onChange={(ev) => onChange ? onChange(ev) : null}
-                       onFocus={ () => !hasFocus ? this.setState({hasFocus:true, infoPopup:false}) : ''}
-                       onBlur={ (ev) => {
-                                onBlur && onBlur(ev);
-                                this.setState({hasFocus:false, infoPopup:false});
-                            }}
-                       onKeyPress={(ev) => onKeyPress && onKeyPress(ev)}
-                       value={type==='file' ? undefined : value}
-                       title={ (!showWarning && !valid) ? message : tooltip}
-                       size={size}
-                       type={type}
-                       placeholder={placeholder}
-                />
-                {showWarning && this.makeWarningArea(!valid)}
-            </div>
-        );
-    }
-}
+});
 
 InputAreaFieldView.propTypes= {
     valid   : PropTypes.bool,
@@ -125,34 +55,25 @@ InputAreaFieldView.propTypes= {
     message : PropTypes.string,
     tooltip : PropTypes.string,
     label : PropTypes.string,
-    inline : PropTypes.bool,
-    labelWidth: PropTypes.number,
-    style: PropTypes.object,
-    labelStyle: PropTypes.object,
-    wrapperStyle: PropTypes.object,
+    sx: PropTypes.object,
     value   : PropTypes.string.isRequired,
-    size : PropTypes.number,
     onChange : PropTypes.func.isRequired,
     onBlur : PropTypes.func,
-    onKeyPress : PropTypes.func,
     showWarning : PropTypes.bool,
-    type: PropTypes.string,
-    rows: PropTypes.number,
-    cols: PropTypes.number,
+    minRows: PropTypes.number,
+    maxRows: PropTypes.number,
     placeholder: PropTypes.string,
-    additionalClasses: PropTypes.string,
-    idName: PropTypes.string
+    connectedMarker: bool,
+    placeholderHighlight: bool,
+    orientation: PropTypes.string,
+    slotProps: shape({
+        control: object,
+        input: object,
+        label: object,
+        textArea: object,
+        tooltip: object
+    })
 };
 
-InputAreaFieldView.defaultProps= {
-    showWarning : true,
-    valid : true,
-    visible : true,
-    message: '',
-    type: 'text',
-    rows:10,
-    cols:50,
-    idName: ''
-};
 
 export const propTypes = InputAreaFieldView.propTypes;

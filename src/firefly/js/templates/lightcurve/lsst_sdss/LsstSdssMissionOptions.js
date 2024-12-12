@@ -17,6 +17,13 @@ import {getTypeData} from './../LcUtil.jsx';
 
 const labelWidth = 100;
 
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// This is not longer supported on the backend
+// I am leaving it in as a template for future LSST time series code
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+
 export class LsstSdssSettingBox extends PureComponent {
     constructor(props) {
         super(props);
@@ -121,7 +128,7 @@ const lsstSdssReducer = (missionEntries, generalEntries) => {
                 {validator: fldValidator(LC.META_FLUX_NAMES)}),
             ['cutoutSize']: Object.assign(getTypeData('cutoutSize', '',
                 'image cutout size',
-                'Cutout Size (arcmin):', labelWidth)),
+                'Cutout Size (arcmin)', labelWidth)),
             [LC.META_ERR_CNAME]: Object.assign(getTypeData(LC.META_ERR_CNAME, '',
                 'flux error column name',
                 'Error Column:', labelWidth))

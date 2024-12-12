@@ -2,16 +2,15 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import { isEmpty} from 'lodash';
+import {isEmpty, isNil} from 'lodash';
 import Enum from 'enum';
 import {CoordinateSys} from '../visualize/CoordSys.js';
 import PointDataObj from '../visualize/draw/PointDataObj.js';
 import Point, {makeWorldPt, makeImagePt} from '../visualize/Point.js';
-import {convertAngle} from '../visualize/VisUtil.js';
+import {calculatePosition, convertAngle} from '../visualize/VisUtil.js';
 import ShapeDataObj from '../visualize/draw/ShapeDataObj.js';
-import VisUtil from '../visualize/VisUtil.js';
 
-const regionShape = new Enum(['circle', 'box', 'polygon', 'position']);
+const regionShape = new Enum(['circle', 'box', 'polygon', 'position', 'point']);
 const CoordSys = new Enum(['ECLIPTIC', 'FK4', 'FK5', 'J2000', 'GALACTIC', 'ICRS', 'UNKNOWNFRAME']);
 const RefPos = new Enum(['BARYCENTER', 'GEOCENTER', 'HELIOCENTER', 'LSR', 'TOPOCENTER', 'RELOCATABLE', 'UNKNOWNREFPOS']);
 const Flavor = new Enum(['CARTESIAN2', 'CARTESIAN3', 'SPHERICAL2']);
@@ -32,8 +31,12 @@ const errorMessage = {[ErrorRegion.notSupportCoordSys.key]: 'coordinate system i
 
 
 function getPairCoord(sAry, pairIdx) {
+    //if pairIdx included indices that should have returned, for instance, [149,0], then we would only get [149]
+    //The filter() function in JavaScript removes elements that are "falsy" values, and 0 is considered falsy.
+    //That's why 0 was being ignored when we did filter((n) => n)....making the change below in filter fixes this issue
     return pairIdx.map((coord) => (isNaN(sAry[coord]) ? null : Number(sAry[coord])))
-                  .filter((n) => n);
+        .filter((n) => !isNil(n));
+
 }
 
 const makeWpt = (pCoord, coordSys, unit) => {
@@ -71,10 +74,10 @@ function  getCornersByCenter(centerPt, w, h) {
             corners.push(makeImagePt(centerPt.x+ d[0], centerPt.x+d[1]));
         });
     } else {
-        const posLeft = VisUtil.calculatePosition(centerPt, +w, 0.0); // go east
-        const posRight = VisUtil.calculatePosition(centerPt, -w, 0.0); // go west
-        const posUp = VisUtil.calculatePosition(centerPt, 0.0, +h);   // go north
-        const posDown = VisUtil.calculatePosition(centerPt, 0.0, -h); // go south
+        const posLeft = calculatePosition(centerPt, +w, 0.0); // go east
+        const posRight = calculatePosition(centerPt, -w, 0.0); // go west
+        const posUp = calculatePosition(centerPt, 0.0, +h);   // go north
+        const posDown = calculatePosition(centerPt, 0.0, -h); // go south
 
         corners.push(makeWorldPt(posLeft.getLon(), posUp.getLat()));
         corners.push(makeWorldPt(posRight.getLon(), posUp.getLat()));
@@ -105,6 +108,7 @@ const resetPos = (count) => {
  * @returns {object}
  */
 export function parseObsCoreRegion(sRegionVal, unit='deg', isCorners=false) {
+    if (!sRegionVal) return {valid:false};
     let  shapeObj = null;
     let  valid = true;
     let  message = '';
@@ -129,7 +133,8 @@ export function parseObsCoreRegion(sRegionVal, unit='deg', isCorners=false) {
     let  pairCoord;
 
     switch(sAry[0].toLowerCase()) {
-        case regionShape.position.key:
+        case regionShape.position.key :
+        case regionShape.point.key :
             if (sAry.length === coord2 + 1) {
                 pairCoord = getPairCoord(sAry, [coord1, coord2]);
 
@@ -217,7 +222,7 @@ export function parseObsCoreRegion(sRegionVal, unit='deg', isCorners=false) {
 
         default:
             valid = false;
-            message = errorMessage[ErrorRegion.ErrorRegion.errorShape.key];
+            message = errorMessage[ErrorRegion.errorShape.key];
             break;
     }
 

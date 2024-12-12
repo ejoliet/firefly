@@ -2,119 +2,122 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-
+import {Sheet, Stack} from '@mui/joy';
+import {isEmpty, isEqual, omit} from 'lodash';
 import React from 'react';
 import PropTypes from 'prop-types';
-import {getPlotViewById, getAllDrawLayersForPlot} from '../PlotViewUtil.js';
-import {visRoot} from '../ImagePlotCntlr.js';
-import {dispatchChangeViewerLayout, getViewer, getMultiViewRoot,
-        GRID_FULL, GRID_RELATED, SINGLE, GRID} from '../MultiViewCntlr.js';
+import {SD_CUTOUT_KEY} from '../../metaConvert/vo/ServDescProducts';
+import {getTblInfo} from '../../tables/TableUtil.js';
+import {getComponentState} from '../../core/ComponentCntlr.js';
+import {showCutoutSizeDialog} from '../../ui/CutoutSizeDialog.jsx';
+import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
+import {getObsCoreOption} from '../../ui/tap/TableSearchHelpers';
+import {makeFoVString} from '../ZoomUtil.js';
+import {ToolbarButton, ToolbarHorizontalSeparator} from '../../ui/ToolbarButton.jsx';
+import {showInfoPopup} from '../../ui/PopupUtil.jsx';
+import {
+    dispatchChangeViewerLayout, getViewer, getMultiViewRoot,
+    GRID_FULL, GRID_RELATED, SINGLE, GRID, getLayoutDetails
+} from '../MultiViewCntlr.js';
+import {DisplayTypeButtonGroup, ThreeColor} from './Buttons.jsx';
 import {showColorBandChooserPopup} from './ColorBandChooserPopup.jsx';
 import {ImagePager} from './ImagePager.jsx';
 import {VisMiniToolbar} from 'firefly/visualize/ui/VisMiniToolbar.jsx';
 
-import {ToolbarButton} from '../../ui/ToolbarButton.jsx';
-import ONE from 'html/images/icons-2014/Images-One.png';
-import GRID_GROUP from 'html/images/icons-2014/Images-plus-related.png';
-import FULL_GRID from 'html/images/icons-2014/Images-Tiled-full.png';
-import THREE_COLOR from 'html/images/icons-2014/28x28_FITS_Modify3Image.png';
+import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded';
 
 
-
-
-const toolsStyle= {
-    display:'flex',
-    flexDirection:'row',
-    flexWrap:'nowrap',
-    alignItems: 'center',
-    justifyContent:'space-between',
-    height: 30,
-    marginTop: -2,
-    paddingBottom: 2
-};
-
-
-export function ImageMetaDataToolbarView({activePlotId, viewerId, viewerPlotIds=[], layoutType, dlAry,
+export function ImageMetaDataToolbarView({viewerId, viewerPlotIds=[], layoutType, factoryKey, serDef,
+                                             enableCutout, pixelBasedCutout,
                                           activeTable, makeDataProductsConverter, makeDropDown}) {
 
-    const converter= makeDataProductsConverter(activeTable) || {};
-    if (!converter) {
-        return <div/>;
+    const converter= makeDataProductsConverter(activeTable,factoryKey) || {};
+    const {canGrid, hasRelatedBands, converterId, maxPlots, threeColor, dataProductsComponentKey}= converter ?? {};
+    const cutoutValue= useStoreConnector( () => getComponentState(dataProductsComponentKey)[SD_CUTOUT_KEY]) ?? getObsCoreOption('cutoutDefSizeDeg') ?? .01;
+
+    if (!converter) return <div/>;
+    let cSize='';
+    if (dataProductsComponentKey&&enableCutout) {
+        if (pixelBasedCutout) {
+            cSize= cutoutValue+'';
+        }
+        else {
+            cSize= makeFoVString(Number(cutoutValue));
+        }
+
     }
-    const dataId= converter.converterId;
-    var nextIdx, prevIdx, leftImageStyle;
+
+
+    const layoutDetail= getLayoutDetails(getMultiViewRoot(), viewerId, activeTable?.tbl_id);
     const viewer= getViewer(getMultiViewRoot(), viewerId);
-    const vr= visRoot();
-    const pv= getPlotViewById(vr, activePlotId);
-    const pvDlAry= getAllDrawLayersForPlot(dlAry,activePlotId,true);
-    let   cIdx = viewerPlotIds.findIndex( (plotId) => plotId===activePlotId);
-    if (cIdx<0) cIdx= 0;
 
     // single mode stuff
-    if (layoutType===SINGLE) {
-        nextIdx= cIdx===viewerPlotIds.length-1 ? 0 : cIdx+1;
-        prevIdx= cIdx ? cIdx-1 : viewerPlotIds.length-1;
 
-        leftImageStyle= {
-            cursor:'pointer',
-            flex: '0 0 auto',
-            paddingLeft: 10,
-            visibility : viewerPlotIds.length===2 ? 'hidden' : 'visible'// hide left arrow when single mode and 2 images
-        };
+    const showThreeColorButton= threeColor && viewer?.layout===GRID &&
+        layoutDetail!==GRID_FULL && !(viewerPlotIds[0].includes(GRID_FULL.toLowerCase()));
+    const showPager= activeTable && canGrid && layoutType===GRID && layoutDetail===GRID_FULL;
+    const showMultiImageOps= canGrid || hasRelatedBands;
+
+
+    let metaControls= true;
+    if (!makeDropDown && !showMultiImageOps && !canGrid && !hasRelatedBands && !showThreeColorButton &&
+        !(layoutType===SINGLE && viewerPlotIds.length>1) && !showPager) {
+        metaControls= false;
     }
-    const showThreeColorButton= converter.threeColor && viewer.layoutDetail!==GRID_FULL && !(viewerPlotIds[0].includes(GRID_FULL.toLowerCase()));
-    const showPager= activeTable && converter.canGrid && layoutType===GRID && viewer.layoutDetail===GRID_FULL;
-    const showMultiImageOps= converter.canGrid || converter.hasRelatedBands;
 
+    const gridConfig=[];
+    const gridValue= layoutType===SINGLE ? 'one' : layoutType===GRID && layoutDetail!==GRID_RELATED ? 'gridFull' : 'gridRelated';
 
-    if (!makeDropDown && !showMultiImageOps && !converter.canGrid &&
-        !converter.hasRelatedBands && !showThreeColorButton && !(layoutType===SINGLE && viewerPlotIds.length>1) &&
-        !showPager) {
-        return <div/>;
+    if (showMultiImageOps) {
+        gridConfig.push(
+            { value:'one', title:'Show single image at full size',
+                onClick: () => dispatchChangeViewerLayout(viewerId,SINGLE, undefined, activeTable?.tbl_id)
+            }
+        );
+    }
+    if (canGrid) {
+        gridConfig.push(
+            { value:'gridFull', title:'Tile all images in the search result table',
+                onClick: () => dispatchChangeViewerLayout(viewerId,GRID,GRID_FULL,activeTable?.tbl_id)
+            }
+        );
+    }
+
+    if (hasRelatedBands) {
+        gridConfig.push(
+            { value:'gridRelated', title:'Tile all data products associated with the highlighted table row',
+                onClick: () =>
+                    dispatchChangeViewerLayout(viewerId,GRID,GRID_RELATED,activeTable?.tbl_id)
+            }
+        );
     }
 
 
     return (
-        <div style={toolsStyle}>
-            {makeDropDown && makeDropDown()}
-            <div style={{whiteSpace: 'nowrap'}}>
-                {showMultiImageOps && <ToolbarButton icon={ONE} tip={'Show single image at full size'}
-                               imageStyle={{width:24,height:24, flex: '0 0 auto'}}
-                               enabled={true} visible={true}
-                               horizontal={true}
-                               onClick={() => handleViewerLayout(viewerId,SINGLE)}/>}
-
-                {converter.canGrid && <ToolbarButton icon={FULL_GRID} tip={'Show full grid'}
-                               enabled={true} visible={true} horizontal={true}
-                               imageStyle={{width:24,height:24, flex: '0 0 auto'}}
-                               onClick={() => handleViewerLayout(viewerId,'grid',GRID_FULL)}/>}
-
-                {converter.hasRelatedBands  &&
-                            <ToolbarButton icon={GRID_GROUP} tip={'Show all as tiles'}
-                               enabled={true} visible={true} horizontal={true}
-                               imageStyle={{width:24,height:24, flex: '0 0 auto'}}
-                               style={{marginLeft: 20}}
-                               onClick={() => dispatchChangeViewerLayout(viewerId,'grid',GRID_RELATED)}/>
-                }
-                {showThreeColorButton &&
-                             <ToolbarButton icon={THREE_COLOR} tip={'Show three color image'}
-                                         enabled={true} visible={true} horizontal={true}
-                                         imageStyle={{width:24,height:24, flex: '0 0 auto'}}
-                                         onClick={() => showThreeColorOps(viewer,dataId)}/>
-                }
-                {/*{layoutType===SINGLE && viewerPlotIds.length>1 &&*/}
-                {/*            <img style={leftImageStyle} src={PAGE_LEFT}*/}
-                {/*                 onClick={() => dispatchChangeActivePlotView(viewerPlotIds[prevIdx])} />*/}
-                {/*}*/}
-                {/*{layoutType===SINGLE && viewerPlotIds.length>1 &&*/}
-                {/*            <img style={{cursor:'pointer', paddingLeft:5, flex: '0 0 auto'}}*/}
-                {/*                 src={PAGE_RIGHT}*/}
-                {/*                 onClick={() => dispatchChangeActivePlotView(viewerPlotIds[nextIdx])} />*/}
-                {/*}*/}
-            </div>
-            {showPager && <ImagePager pageSize={converter.maxPlots} tbl_id={activeTable.tbl_id} style={{marginLeft:10}}/>}
-            <VisMiniToolbar/>
-        </div>
+        <Sheet>
+            <Stack direction='row' alignItems='center'
+                   sx={{ flexWrap:'wrap', justifyContent:'space-between', minHeight: 32}}>
+                <Stack direction='row' alignItems='center' divider={<ToolbarHorizontalSeparator/>}
+                       sx={{ pl: 1/2, flexWrap:'wrap'}}>
+                    {makeDropDown ? makeDropDown() : false}
+                    {enableCutout &&
+                        <ToolbarButton
+                            icon={<ContentCutRoundedIcon/>}
+                            text={`${cSize}`} onClick={() => showCutoutSizeDialog(cutoutValue,pixelBasedCutout,dataProductsComponentKey)}/>
+                    }
+                    {metaControls &&
+                        <Stack direction='row' spacing={1} alignItems='center' whiteSpace='nowrap'>
+                            {showMultiImageOps && <DisplayTypeButtonGroup {...{value:gridValue, config:gridConfig }}/>}
+                            {showThreeColorButton &&
+                                <ThreeColor tip='Create three color image'
+                                            onClick={() => showThreeColorOps(viewerId,converter,activeTable,converterId)}/>
+                            }
+                        </Stack> }
+                    {showPager && <ImagePager pageSize={maxPlots} tbl_id={activeTable.tbl_id}/>}
+                </Stack>
+                <VisMiniToolbar viewerId={viewerId}/>
+            </Stack>
+        </Sheet>
     );
 }
 
@@ -126,18 +129,34 @@ ImageMetaDataToolbarView.propTypes= {
     viewerPlotIds : PropTypes.arrayOf(PropTypes.string).isRequired,
     activeTable: PropTypes.object,
     makeDataProductsConverter: PropTypes.func,
-    makeDropDown: PropTypes.func
+    makeDropDown: PropTypes.func,
+    serDef: PropTypes.object,
+    enableCutout: PropTypes.bool,
+    pixelBasedCutout: PropTypes.bool,
+    factoryKey: PropTypes.string
 };
 
-function handleViewerLayout(viewerId, grid, gridLayout) {
-    dispatchChangeViewerLayout(viewerId, grid, gridLayout);
-    // add the dispatchZoom in metaDataWatcher on ImagePlotCntlr.UPDATE_VIEW_SIZE per viewer size change
-}
 
-function showThreeColorOps(viewer,dataId) {
-    if (!viewer) return;
-    const newCustom= Object.assign({}, viewer.customData[dataId], {threeColorVisible:true});
-    showColorBandChooserPopup(viewer.viewerId,newCustom,dataId);
+async function showThreeColorOps(viewerId,converter, table, converterId) {
+    const viewer= getViewer(getMultiViewRoot(), viewerId);
+    if (!viewer && !converter) return;
+
+    const tableState= getTblInfo(table);
+    const {highlightedRow}= tableState;
+
+    const workingBandData= omit(viewer.customData[converterId],'threeColorVisible');
+    const originalBandData= await converter.describeThreeColor?.(table,highlightedRow,converter.options);
+
+    // if something has changed the go back to original data from describeThreeColor
+    // todo: we probably need to improve this test- by titles? by title and Length? only by title that are used?
+    const bandData= isEqual(Object.keys(workingBandData),Object.keys(originalBandData)) ?
+        workingBandData : originalBandData;
+
+    if (isEmpty(bandData)) {
+        showInfoPopup('Three color is not supported');
+        return;
+    }
+    showColorBandChooserPopup(viewer.viewerId,bandData,converterId);
 }
 
 

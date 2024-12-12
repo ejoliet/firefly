@@ -15,6 +15,7 @@ import {WorkspaceSave} from './WorkspaceViewer.jsx';
 import {useStoreConnector} from './SimpleComponent.jsx';
 import {dispatchWorkspaceUpdate, getWorkspaceErrorMsg} from '../visualize/WorkspaceCntlr.js';
 import {getWorkspaceConfig} from '../visualize/WorkspaceCntlr.js';
+import {Stack, Typography, Box, Skeleton} from '@mui/joy';
 
 export const LOCALFILE = 'isLocal';
 export const WORKSPACE = 'isWs';
@@ -42,8 +43,9 @@ export function WsSaveOptions (props) {
     saveAsProps = {label:'Save as:', labelWidth, wrapperStyle:{margin: '3px 0'}, size:30, ...saveAsProps};
     fileLocProps = {label:'File Location:', labelWidth, ...fileLocProps};
 
-    const [loc, wsSelect] = useStoreConnector(  () => getFieldVal(groupKey, 'fileLocation'),
-                                                () => getFieldVal(groupKey, 'wsSelect'));
+    const loc      = useStoreConnector(() => getFieldVal(groupKey, 'fileLocation'));
+    const wsSelect = useStoreConnector(() => getFieldVal(groupKey, 'wsSelect'));
+
     useEffect(() => {
         dispatchWorkspaceUpdate();
     }, [loc]);
@@ -51,12 +53,13 @@ export function WsSaveOptions (props) {
     const useWs = getWorkspaceConfig();
 
     return (
-        <div style={style}>
+        <Stack style={style} spacing={1}>
             <ValidationField fieldKey='BaseFileName' forceReinit={true} {...saveAsProps}/>
             { useWs &&
                 <RadioGroupInputField
                     fieldKey='fileLocation'
                     {...fileLocProps}
+                    orientation={'horizontal'}
                     options={[
                         {label: 'Local File', value: LOCALFILE},
                         {label: 'Workspace', value: WORKSPACE }
@@ -64,7 +67,7 @@ export function WsSaveOptions (props) {
                 />
             }
             { useWs && (loc === WORKSPACE) && <ShowWorkspace {...{wsSelect}}/> }
-        </div>
+        </Stack>
     );
 
 }
@@ -80,15 +83,15 @@ WsSaveOptions.propTypes = {
 
 function ShowWorkspace({wsSelect}) {
 
-    const [wsList, isUpdating] = useStoreConnector(getWorkspaceList, isAccessWorkspace);
-
-    const content = isUpdating ? <div className='loading-mask' style={{margin:-3}}/>
-                    : isEmpty(wsList) ? <div style={{color:'maroon', fontStyle:'italic', padding:10}}> {'Workspace access error: ' + getWorkspaceErrorMsg()} </div>
+    const wsList     = useStoreConnector(getWorkspaceList);
+    const isUpdating = useStoreConnector(isAccessWorkspace);
+    const content = isUpdating ? <Skeleton sx={{inset:0}}/>
+                    : isEmpty(wsList) ? <Typography color={'warning'} level='title-md' p={1}> {'Workspace access error: ' + getWorkspaceErrorMsg()} </Typography>
                     : <WorkspaceSave fieldKey='wsSelect' files={wsList} value={wsSelect} />;
 
     return (
-        <div style={{ border:'1px solid #eaeaea', padding:3, marginTop:5, position:'relative', overflow: 'auto', minHeight:60, maxHeight:400, minWidth:550}}>
+        <Box {...{padding:1/2, marginTop:2, position:'relative', overflow: 'auto', minHeight:60, maxHeight:400, minWidth:550}}>
             {content}
-        </div>
+        </Box>
     );
 }

@@ -2,10 +2,9 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import './ChartPanel.css';
-
 import React, {PureComponent} from 'react';
 import PropTypes from 'prop-types';
+import {Divider, Sheet, Stack} from '@mui/joy';
 import {isEmpty, isUndefined} from 'lodash';
 import {flux} from '../../core/ReduxFlux.js';
 
@@ -13,15 +12,17 @@ import {CloseButton} from '../../ui/CloseButton.jsx';
 import {ChartPanel} from './ChartPanel.jsx';
 import {MultiItemViewerView} from '../../visualize/ui/MultiItemViewerView.jsx';
 import {dispatchAddViewer, dispatchViewerUnmounted, dispatchUpdateCustom,
-        getMultiViewRoot, getViewer, getLayoutType,PLOT2D} from '../../visualize/MultiViewCntlr.js';
+        getMultiViewRoot, getViewer, getLayoutType, PLOT2D} from '../../visualize/MultiViewCntlr.js';
 import {getExpandedChartProps, getChartData} from '../ChartsCntlr.js';
 import {LO_VIEW, LO_MODE, dispatchSetLayoutMode} from '../../core/LayoutCntlr.js';
 
 import {MultiChartToolbarStandard, MultiChartToolbarExpanded} from './MultiChartToolbar.jsx';
 import {RenderTreeIdCtx} from '../../ui/RenderTreeIdCtx.jsx';
 
-export function getActiveViewerItemId(viewerId) {
-    return getViewer(getMultiViewRoot(), viewerId).customData.activeItemId;
+export function getActiveViewerItemId(viewerId, useDefault) {
+    const viewer= getViewer(getMultiViewRoot(),viewerId);
+    const activeItemId = viewer?.customData?.activeItemId;
+    return activeItemId || (useDefault ? viewer?.itemIdAry?.[0] : undefined);
 }
 
 
@@ -85,17 +86,18 @@ export class MultiChartViewer extends PureComponent {
     }
 
     render() {
-        const {viewerId, expandedMode, closeable, noChartToolbar} = this.props;
+        const {viewerId, expandedMode, closeable, noChartToolbar, label, showAddChart=false,
+            toolbarVariant, useBorder} = this.props;
         const {viewer}= this.state;
         const layoutType= getLayoutType(getMultiViewRoot(),viewerId);
         if (!viewer || isEmpty(viewer.itemIdAry)) {
             if (expandedMode && closeable) {
                 return (
-                    <div className='ChartPanel__container'>
-                        <div style={{position: 'relative', flexGrow: 1}}>
+                    <Stack flexGrow={1}>
+                        <Stack flexGrow={1}>
                         {expandedMode && closeable && <CloseButton style={{paddingLeft: 10, position: 'absolute', top: 0, left: 0}} onClick={() => dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none)}/>}
-                        </div>
-                    </div>
+                        </Stack>
+                    </Stack>
                 );
             } else {
                 return false;
@@ -118,20 +120,22 @@ export class MultiChartViewer extends PureComponent {
         const glass = Boolean(noChartToolbar);
 
         const makeItemViewer = (chartId) => (
-            <div className={chartId === activeItemId ? 'ChartPanel ChartPanel--active' : 'ChartPanel'}
-                 onClick={(ev)=>onChartSelect(ev,chartId)}
-                 onTouchStart={stopPropagation}
-                 onMouseDown={stopPropagation}>
+            <Sheet id='chart-item' sx={{height:1, width:1, display:'flex'}}
+                   variant='outlined'
+                   color={ chartId === activeItemId ? 'warning' : 'neutral'}
+                   onClick={(ev)=>onChartSelect(ev,chartId)}
+                   onTouchStart={stopPropagation}
+                   onMouseDown={stopPropagation}>
                 <ChartPanel key={chartId} showToolbar={false} chartId={chartId} deletable={deletable} glass={glass}/>
-            </div>
+            </Sheet>
         );
 
         const makeItemViewerFull = (chartId) => (
-            <div onClick={stopPropagation}
+            <Stack id='chart-itemFull' onClick={stopPropagation} sx={{height:1, width:1}}
                  onTouchStart={stopPropagation}
                  onMouseDown={stopPropagation}>
                 <ChartPanel key={chartId} showToolbar={false} chartId={chartId} deletable={deletable} glass={glass}/>
-            </div>
+            </Stack>
         );
 
         const newProps = {
@@ -139,35 +143,35 @@ export class MultiChartViewer extends PureComponent {
             activeItemId,
             layoutType,
             makeItemViewer,
-            makeItemViewerFull
+            makeItemViewerFull,
+            label
         };
 
         //console.log('Active chart ID: '+activeItemId);
 
+        const ToolBar = expandedMode ? MultiChartToolbarExpanded : MultiChartToolbarStandard;
         const showChartToolbar = !Boolean(noChartToolbar);
-        const hasToolbar = showChartToolbar || (viewer.itemIdAry.length > 1);
-        const chartAreaClass = `ChartPanel__chartarea${hasToolbar?'--withToolbar':''}`;
-        
+
+        const borderSettings= useBorder ?
+            {border: '1px solid', borderColor: 'divider', borderRadius: '5px'} : {};
         return (
-        <div className='ChartPanel__container'>
-            <div className='ChartPanel__wrapper'>
-                {expandedMode ? <MultiChartToolbarExpanded {...{closeable, viewerId, layoutType, activeItemId}}/> : <MultiChartToolbarStandard {...{viewerId, layoutType, activeItemId}}/>}
+            <Stack {...{id:'chart-multiviewer', width:1, height:1, position:'relative', ...borderSettings} }>
                 {showChartToolbar &&
-                <ChartPanel key={'toolbar-'+activeItemId}
-                            expandedMode={expandedMode}
-                            expandable={!expandedMode}
-                            showChart={false}
-                            chartId={activeItemId}
-                            deletable={deletable}/>
+                    <>
+                        <ToolBar chartId={activeItemId} expandable={!expandedMode} {...{
+                            expandedMode,
+                            closeable,
+                            viewerId,
+                            layoutType,
+                            activeItemId,
+                            toolbarVariant,
+                            showAddChart
+                        }}/>
+                        <Divider orientation='horizontal'/>
+                    </>
                 }
-
-                <div className={chartAreaClass}>
-                    <MultiItemViewerView {...this.props} {...newProps}/>
-                </div>
-                {expandedMode && closeable && <CloseButton style={{paddingLeft: 10, position: 'absolute', top: 0, left: 0}} onClick={() => dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none)}/>}
-            </div>
-        </div>
-
+                <MultiItemViewerView {...this.props} {...newProps}/>
+            </Stack>
         );
     }
 }
@@ -186,6 +190,8 @@ MultiChartViewer.propTypes= {
     insideFlex : PropTypes.bool,
     closeable : PropTypes.bool,
     expandedMode: PropTypes.bool,
-    noChartToolbar: PropTypes.bool
-
+    noChartToolbar: PropTypes.bool,
+    toolbarVariant : PropTypes.string,
+    label : PropTypes.string,
+    showAddChart: PropTypes.bool
 };

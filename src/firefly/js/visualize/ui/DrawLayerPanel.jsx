@@ -42,7 +42,7 @@ function makeState() {
         dlAry,
         activePv,
         hasLayers: (layersLength + imageOverlayLength)>0,
-        mouseOverMaskValue: lastMouseImageReadout()?.readoutItems?.imageOverlay?.value ?? 0,
+        mouseOverMaskValue: Number(lastMouseImageReadout()?.readoutItems?.imageOverlay?.valueBase10 || 0),
     };
 }
 
@@ -63,7 +63,7 @@ function DrawLayerPanel() {
 
 const defaultTitle = 'Layers- ';
 export function DrawLayerPanelTitle({}) {
-    const [plotTitle] = useStoreConnector(() => primePlot(visRoot())?.title );
+    const plotTitle = useStoreConnector(() => primePlot(visRoot())?.title );
     return (plotTitle ? `${defaultTitle}${plotTitle}` : defaultTitle);
 }
 
@@ -71,7 +71,7 @@ const dialogBuilder= getDialogBuilder();
 
 export function showDrawingLayerPopup(div) {
     dialogBuilder(div);
-    dispatchShowDialog(DRAW_LAYER_POPUP);
+    dispatchShowDialog(DRAW_LAYER_POPUP,div);
 }
 
 export function hideDrawingLayerPopup() { dispatchHideDialog(DRAW_LAYER_POPUP); }

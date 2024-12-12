@@ -9,10 +9,14 @@ import edu.caltech.ipac.firefly.data.ServerRequest;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
-import edu.caltech.ipac.firefly.server.query.IpacTablePartProcessor;
+import edu.caltech.ipac.firefly.server.query.EmbeddedDbProcessor;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.firefly.server.util.multipart.MultiPartPostBuilder;
+import edu.caltech.ipac.table.DataGroup;
+import edu.caltech.ipac.table.DataType;
+import edu.caltech.ipac.table.TableMeta;
+import edu.caltech.ipac.table.io.IpacTableReader;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.Assert;
 import edu.caltech.ipac.util.FileUtil;
@@ -29,6 +33,10 @@ import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.util.Arrays;
+import java.util.List;
+
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 
 
 /**
@@ -37,8 +45,7 @@ import java.net.URLEncoder;
  * @author Trey
  * @version $Id: BaseGator.java,v 1.28 2012/08/21 21:31:12 roby Exp $
  */
-public abstract class BaseGator extends IpacTablePartProcessor {
-
+public abstract class BaseGator extends EmbeddedDbProcessor {
 
     private static final int MAX_ERROR_LEN = 200;
 
@@ -56,9 +63,22 @@ public abstract class BaseGator extends IpacTablePartProcessor {
     private static final int MSG_IDX = 1;
 
 
-    protected File loadDataFile(TableServerRequest request) throws IOException, DataAccessException {
-        CatalogRequest req = QueryUtil.assureType(CatalogRequest.class, request);
+    public DataGroup fetchDataGroup(TableServerRequest req) throws DataAccessException {
+        try {
+            return IpacTableReader.read(loadDataFile(req));
+        } catch (IOException e) {
+            _log.error(e, e.toString());
+            throw new DataAccessException("Catalog Query Failed", e);
+        }
+    }
+
+    protected File loadDataFile(TableServerRequest request) throws DataAccessException {
+        CatalogRequest req = getCatalogRequest(request);
         return searchGator(req);
+    }
+
+    protected CatalogRequest getCatalogRequest(TableServerRequest request) throws DataAccessException {
+        return QueryUtil.assureType(CatalogRequest.class, request);
     }
 
     protected abstract String getDefService();
@@ -78,20 +98,22 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         return f;
     }
 
-    protected abstract String getFileBaseName(CatalogRequest req) throws EndUserException;
-
     protected boolean isPost(CatalogRequest req) {
         return false;
     }
 
-
-    private File searchGator(CatalogRequest req) throws IOException, DataAccessException {
+    private File searchGator(CatalogRequest req) throws DataAccessException {
         File outFile;
         try {
-            outFile = createFile(req);
+            outFile = createTempFile(req, ".tbl");
             validateRequest(req);
-            if (isPost(req)) {
-                URL url = createURL(req, true);
+
+            boolean isPost = isPost(req);
+            URL url = createURL(req, isPost);
+
+            applyIfNotEmpty(getJob(), v -> v.getJobInfo().setDataOrigin(url.toString()));
+
+            if (isPost) {
                 _postBuilder = new MultiPartPostBuilder(url.toString());
                 insertPostParams(req);
                 BufferedOutputStream writer = new BufferedOutputStream(new FileOutputStream(outFile), 10240);
@@ -99,7 +121,6 @@ public abstract class BaseGator extends IpacTablePartProcessor {
                 writer.close();
 
             } else {
-                URL url = createURL(req, false);
                 URLDownload.getDataToFile(url, outFile);
             }
 
@@ -108,24 +129,22 @@ public abstract class BaseGator extends IpacTablePartProcessor {
 
         } catch (MalformedURLException e) {
             _log.error(e, "Bad URL");
-            throw makeException(e, "Catalog Query Failed - bad url");
-        } catch (IOException e) {
+            throw new DataAccessException("Catalog Query Failed - bad url", e);
+        } catch (IOException | EndUserException e) {
             _log.error(e, e.toString());
-            throw makeException(e, "Catalog Query Failed - network Error");
-        } catch (EndUserException e) {
-            _log.error(e, e.toString());
-            throw makeException(e, "Catalog Query Failed - network Error");
+            throw new DataAccessException("Catalog Query Failed - network Error", e);
         } catch (NoDataFoundException e) {
             _log.briefInfo("no data found for search");
             outFile = null;
         } catch (Exception e) {
             _log.error(e, e.toString());
-            throw makeException(e, "Catalog Query Failed");
+            throw new DataAccessException("Catalog Query Failed", e);
         }
         return outFile;
     }
 
     protected void validateRequest(CatalogRequest req) {}
+    public void prepareTableMeta(TableMeta meta, List<DataType> columns, ServerRequest request) {}
 
 
     private URL createURL(CatalogRequest req, boolean isPost) throws EndUserException, IOException {
@@ -150,7 +169,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         FileUtil.silentClose(fr);
         if (StringUtils.isEmpty(errStr)) {
             handleErr(outFile,
-                    "IRSA search failed, Catalog is unavailable",
+                    "IRSA search failed. Catalog is unavailable",
                     "No data returned from search- the output file is zero length");
         } else if (errStr.startsWith(ERR_START) && errStr.charAt(errStr.length() - 1) == ']') {
             String s = errStr.substring(ERR_START.length(), errStr.length() - 1);
@@ -166,20 +185,20 @@ public abstract class BaseGator extends IpacTablePartProcessor {
 
         } else if (errStr.toLowerCase().contains(ANY_ERR_STR)) {
             handleErr(outFile,
-                    "IRSA search failed, Catalog is unavailable",
+                    "IRSA search failed. Catalog is unavailable",
                     "Receiving unrecognized errors from Gator, Error: " + errStr);
         } else if (errStr.toLowerCase().contains(HTML_ERR) &&
                 outFile.length() > MAX_ERROR_LEN) {
             handleErr(outFile,
-                    "IRSA search failed, Catalog is unavailable",
+                    "IRSA search failed. Catalog is unavailable",
                     "Receiving unrecognized errors from Gator, html send by mistake");
         } else if (errStr.toLowerCase().contains(HTML_ERR)) { // maybe send the html here
             handleErr(outFile,
-                    "IRSA search failed, Catalog is unavailable",
+                    "IRSA search failed. Catalog is unavailable",
                     "Receiving unrecognized errors from Gator, html send by mistake");
         } else if (errStr.contains(STRANGE_HEADER_ERR) && outFile.length() < 100) { // i don't know why but it is bad
             handleErr(outFile,
-                    "IRSA search failed, Catalog is unavailable or results are too large to process",
+                    "IRSA search failed. Catalog is unavailable or results are too large to process",
                     "Receiving unrecognized errors from Gator, sending html header in the body by mistake");
         }
     }
@@ -209,7 +228,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         if (!Double.isNaN(value)) {
             requiredParam(sb, name, value + "");
         } else {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor did not find the required parameter: " + name);
         }
     }
@@ -218,7 +237,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         if (!StringUtils.isEmpty(value)) {
             sb.append(param(name, value));
         } else {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor did not find the required parameter: " + name);
         }
     }
@@ -228,7 +247,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         if (!Double.isNaN(value)) {
             postParam(name, value + "");
         } else {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor did not find the required parameter: " + name);
         }
     }
@@ -238,7 +257,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         if (!StringUtils.isEmpty(value)) {
             postParam(name, value);
         } else {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor did not find the required parameter: " + name);
         }
     }
@@ -247,7 +266,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
         if (f.canRead()) {
             _postBuilder.addFile(name, f);
         } else {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor could not read file: " + f.getPath());
         }
     }
@@ -263,7 +282,7 @@ public abstract class BaseGator extends IpacTablePartProcessor {
             }
         }
         if (badParam) {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor did not find the required parameter: " + name);
         }
     }

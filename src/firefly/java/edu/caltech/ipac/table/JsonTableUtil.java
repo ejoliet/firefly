@@ -14,6 +14,8 @@ import org.json.simple.JSONValue;
 
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static edu.caltech.ipac.table.TableMeta.DERIVED_FROM;
 import static edu.caltech.ipac.util.StringUtils.*;
 
 /**
@@ -337,6 +340,7 @@ public class JsonTableUtil {
             applyIfNotEmpty(dt.getDesc(),       v -> c.put("desc", v));
             applyIfNotEmpty(dt.getLabel(),      v -> c.put("label", v));
             applyIfNotEmpty(dt.getArraySize(),  v -> c.put("arraySize", v));
+            applyIfNotEmpty(dt.getDerivedFrom(),  v -> c.put(DERIVED_FROM, v));
 
             if (dt.getVisibility() != DataType.Visibility.show)
                 c.put("visibility", dt.getVisibility().name());
@@ -355,6 +359,7 @@ public class JsonTableUtil {
             applyIfNotEmpty(dt.getPrecision(), v -> c.put("precision", v));
             applyIfNotEmpty(dt.getUCD(), v -> c.put("UCD", v));
             applyIfNotEmpty(dt.getUType(), v -> c.put("utype", v));
+            applyIfNotEmpty(dt.getXType(), v -> c.put("xtype", v));
             applyIfNotEmpty(dt.getRef(), v -> c.put("ref", v));
             applyIfNotEmpty(dt.getMaxValue(), v -> c.put("maxValue", v));
             applyIfNotEmpty(dt.getMinValue(), v -> c.put("minValue", v));
@@ -368,8 +373,8 @@ public class JsonTableUtil {
                 c.put("links", toJsonLinkInfos(dt.getLinkInfos()));
 
             if (dt instanceof ParamInfo &&
-                 !StringUtils.isEmpty(((ParamInfo) dt).getValue())) {
-                c.put("value", ((ParamInfo) dt).getValue());
+                    ((ParamInfo) dt).getValue() != null) {
+                c.put("value", mapToJsonAware( ((ParamInfo) dt).getValue(), false ));
 
             }
 
@@ -477,8 +482,7 @@ public class JsonTableUtil {
         List<JSONObject> params = toJsonColumns(paramInfos.toArray(new ParamInfo[0]));
 
         for (int i = 0; i < paramInfos.size(); i++) {
-            String val = paramInfos.get(i).getValue();
-            if (val != null)  params.get(i).put("value", paramInfos.get(i).getValue());
+            if (paramInfos.get(i).getValue() != null)   params.get(i).put("value", mapToJsonAware(paramInfos.get(i).getValue(), false));
         }
         return params;
     }
@@ -507,7 +511,7 @@ public class JsonTableUtil {
                 applyIfNotEmpty(param.get("utype"), v -> paramInfo.setUType(v.toString()));
                 applyIfNotEmpty(param.get("arraysize"), v -> paramInfo.setArraySize(v.toString()));
                 applyIfNotEmpty(param.get("ref"), v -> paramInfo.setRef(v.toString()));
-                applyIfNotEmpty(param.get("value"), v -> paramInfo.setValue(v.toString()));
+                applyIfNotEmpty(param.get("value"), v -> paramInfo.setValue(v));
 
                 applyIfNotEmpty(param.get("datatype"), v -> {
                     paramInfo.setTypeDesc(v.toString());
@@ -536,8 +540,9 @@ public class JsonTableUtil {
             applyIfNotEmpty(ri.getDesc(),  v -> json.put("desc", v));
             if (ri.getGroups().size() > 0) json.put("groups", toJsonGroupInfos(ri.getGroups()));
             if (ri.getParams().size() > 0) json.put("params", toJsonParamInfos(ri.getParams()));
+            if (ri.getInfos().size() > 0)  json.put("infos", ri.getInfos());
             return json;
-        }).collect(Collectors.toList());
+        }).filter(json -> !json.isEmpty()).collect(Collectors.toList());
     }
 
     /**
@@ -627,9 +632,14 @@ public class JsonTableUtil {
 
 
     private static final SimpleDateFormat JSON_DATE = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ");       // similar to JSON.stringify()
+    private static final DateTimeFormatter DATE_LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd");                 // similar to JSON.stringify()
     public static JSONAware getJsonMapper(Object obj) {
 
-        if (obj instanceof Date) {
+        if (obj instanceof java.sql.Date d) {
+            return () -> "\"" + d.toLocalDate().format(DATE_LOCAL) + "\"";
+        } else if (obj instanceof LocalDate d) {
+            return () -> "\"" + d.format(DATE_LOCAL) + "\"";
+        } else if (obj instanceof Date) {
             return () -> "\"" + JSON_DATE.format(obj) + "\"";
         }
         return null;

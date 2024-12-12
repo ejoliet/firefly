@@ -5,17 +5,16 @@ import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.server.ws.WsCredentials;
 import edu.caltech.ipac.util.AppProperties;
-import org.apache.log4j.PropertyConfigurator;
+import org.apache.logging.log4j.Level;
 import org.junit.BeforeClass;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.file.Paths;
 import java.util.Properties;
 import java.util.UUID;
-import java.util.logging.LogManager;
 
 /**
  * Should load the logger and app properties to apply to any test runnner
@@ -26,8 +25,6 @@ import java.util.logging.LogManager;
  */
 public class ConfigTest {
 
-    public static String LOG4J_PROP_FILE = "./config/test/log4j-test.properties";
-    public static String LOGGING_PROP_FILE = "./config/test/logging-test.properties";
     public static String TEST_PROP_FILE = "./config/test/app-test.prop";
     public static String WS_USER_ID = AppProperties.getProperty("workspace.user","test@ipac.caltech.edu");
 
@@ -41,27 +38,10 @@ public class ConfigTest {
      */
     @BeforeClass
     public static void initializeTest() {
-        try {
-            File propFile = new File(LOG4J_PROP_FILE);
-            if (!propFile.canRead())
-                throw new FileNotFoundException(propFile + " not found, continue without logs...");
-            PropertyConfigurator.configure(propFile.getAbsolutePath());
-        } catch (Exception e) {
-            System.err.println(ConfigTest.class.getCanonicalName() + ": " + LOG4J_PROP_FILE + " not found, continue without logs...");
-        }
 
-
-        try {
-            File propFile = new File(LOGGING_PROP_FILE);
-
-            if (!propFile.canRead())
-                throw new FileNotFoundException(propFile + " not found, continue without logs...");
-            // Set in logging.properties the level where java.util.logging logger is used instead of log4j
-            // to INFO to see more logs
-            LogManager.getLogManager().readConfiguration(new FileInputStream(propFile));
-        } catch (Exception e) {
-            System.err.println(LOGGING_PROP_FILE + " not found, continue with default logging level");
-        }
+        Logger.setLogLevel(Level.OFF);
+        // Turn off logging initially.
+        // use Logger.setLogLevel() anywhere else to adjust logging level.
 
         try {
             loadProperties();
@@ -69,7 +49,6 @@ public class ConfigTest {
             System.err.println(TEST_PROP_FILE + " not found");
         }
     }
-
 
     /**
      * Load properties from test config file app-test.config to overwrite the app.config (OPS)
@@ -122,21 +101,22 @@ public class ConfigTest {
         }
     }
 
-    protected static void setupServerContext(RequestAgent requestAgent) {
+    public static void setupServerContext(RequestAgent requestAgent) {
         String contextPath = System.getenv("contextPath");
         String contextName = System.getenv("contextName");
         String webappConfigPath = System.getenv("webappConfigPath");
 
+        AppProperties.setProperty("CacheManager.disabled", "true");
+        AppProperties.setProperty("work.directory", Paths.get("build").toAbsolutePath().toString());
+
         contextPath = contextPath == null ? "/firefly" : contextPath;
         contextName = contextName == null ? "firefly" : contextName;
-        webappConfigPath = webappConfigPath == null ? "build/firefly/war/WEB-INF/config" : webappConfigPath;
+        webappConfigPath = webappConfigPath == null ? Paths.get("config/test/").toAbsolutePath().toString() : webappConfigPath;
 
-        requestAgent = requestAgent == null ? new RequestAgent(null, "HTTP", "/", "localhost:8080/", "unknow", UUID.randomUUID().toString(), contextPath): null;
+        requestAgent = requestAgent == null ? new RequestAgent(null, "localhost", "/test", "localhost:8080/", "127.0. 0.1", UUID.randomUUID().toString(), contextPath): requestAgent;
 
-        System.setProperty("stats.log.dir", System.getProperty("java.io.tmpdir"));
         ServerContext.getRequestOwner().setRequestAgent(requestAgent);
         ServerContext.init(contextPath, contextName, webappConfigPath);
-
     }
 
 }

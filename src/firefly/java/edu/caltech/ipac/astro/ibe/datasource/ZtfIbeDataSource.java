@@ -7,14 +7,10 @@ import edu.caltech.ipac.astro.ibe.BaseIbeDataSource;
 import edu.caltech.ipac.astro.ibe.IBE;
 import edu.caltech.ipac.astro.ibe.IbeDataParam;
 import edu.caltech.ipac.astro.ibe.IbeQueryParam;
+import edu.caltech.ipac.firefly.server.query.ztf.ZtfRequest;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.StringUtils;
-import edu.caltech.ipac.visualize.plot.CoordinateSys;
-import edu.caltech.ipac.visualize.plot.Plot;
-import edu.caltech.ipac.visualize.plot.WorldPt;
-import edu.caltech.ipac.firefly.server.query.ztf.ZtfRequest;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Map;
 
@@ -33,51 +29,6 @@ public class ZtfIbeDataSource extends BaseIbeDataSource {
     public enum DATA_TYPE {
         INTENSITY, MASK, UNCERTAINTY, COVERAGE
     }
-
-    public enum DataProduct {
-        SCI("products","sci"),
-        REF("products","ref"),
-        DIFF("products","sci");
-
-        private String dataset;
-        private String table;
-
-
-        DataProduct(String dataset, String imageTable) {
-            this.dataset = dataset;
-            this.table = imageTable;
-        }
-
-        public String getDataset() { return dataset;}
-        public String getTable() { return table;}
-    }
-
-    public ZtfIbeDataSource() {}
-
-    public ZtfIbeDataSource(DataProduct ds) {
-        this(null, ds);
-    }
-
-    public ZtfIbeDataSource(String ibeHost, DataProduct ds) {
-        setupDS(ibeHost, ds.getDataset(), ds.getTable());
-    }
-
-    /**
-     * use the dsInfo to define this datasource.  all values in DataProduct must be populated.
-     * @param dsInfo data set information
-     */
-    @Override
-    public void initialize(Map<String, String> dsInfo) {
-
-        String host = dsInfo.get(HOST);
-        String schema = dsInfo.get(SCHEMA);
-        String table = dsInfo.get(TABLE);
-        setupDS(host, schema, table);
-    }
-
-//====================================================================
-//  ZTF implementation of IBE services
-//====================================================================
 
     @Override
     public IbeDataParam makeDataParam(Map<String, String> pathInfo) {
@@ -119,7 +70,7 @@ public class ZtfIbeDataSource extends BaseIbeDataSource {
             String baseDir = YYYY + "/" + MMDD + "/" + dddddd + "/";
             String baseFile = "ztf_" + filefracday + "_" + formatfield + "_" + filtercode + "_c" + formatccdid + "_o_" + "q" + qid + ZtfRequest.SCIIMAGE;
             dataParam.setFilePath(baseDir + baseFile);
-        } else if (dataproduct.equalsIgnoreCase("ref")) {
+        } else if (dataproduct.equalsIgnoreCase("ref") || dataproduct.equalsIgnoreCase("deep") ) {
             String fff = formatfield.substring(0,3);
             String refbaseDir = fff + "/" + "field" + formatfield + "/" + filtercode +"/" + "ccd" +formatccdid +"/" + "q" + qid +"/";
             String refbaseFile = "ztf_" + formatfield + "_" + filtercode +"_c" + formatccdid + "_q" + qid + ZtfRequest.REFIMAGE;
@@ -161,31 +112,58 @@ public class ZtfIbeDataSource extends BaseIbeDataSource {
         return dataParam;
     }
 
+    public ZtfIbeDataSource() {}
+
+    public ZtfIbeDataSource(DataProduct ds) {
+        this(null, ds);
+    }
+
+    public ZtfIbeDataSource(String ibeHost, DataProduct ds) {
+        setupDS(ibeHost, ds.getDataset(), ds.getTable());
+    }
+
+    /**
+     * use the dsInfo to define this datasource.  all values in DataProduct must be populated.
+     * @param dsInfo data set information
+     */
+    @Override
+    public void initialize(Map<String, String> dsInfo) {
+
+        String host = dsInfo.get(HOST);
+        String schema = dsInfo.get(SCHEMA);
+        String table = dsInfo.get(TABLE);
+        setupDS(host, schema, table);
+    }
+
+//====================================================================
+//  ZTF implementation of IBE services
+//====================================================================
+
+    public enum DataProduct {
+        SCI("products","sci"),
+        REF("products","ref"),
+        DEEP( "products", "deep"),
+        DIFF("products","sci");
+
+        private String dataset;
+        private String table;
+
+
+        DataProduct(String dataset, String imageTable) {
+            this.dataset = dataset;
+            this.table = imageTable;
+        }
+
+        public String getDataset() { return dataset;}
+        public String getTable() { return table;}
+    }
+
     @Override
     public IbeQueryParam makeQueryParam(Map<String, String> queryInfo) {
 
-        // source search
-        IbeQueryParam queryParam = new IbeQueryParam();
+        // common position search params
+        IbeQueryParam queryParam = super.makeQueryParam(queryInfo);
 
-        // process POS - target search
-        String userTargetWorldPt = queryInfo.get("UserTargetWorldPt");
-        if (userTargetWorldPt != null) {
-            WorldPt pt = WorldPt.parse(userTargetWorldPt);
-            if (pt != null) {
-                pt = Plot.convert(pt, CoordinateSys.EQ_J2000);
-                queryParam.setPos(pt.getLon() + "," + pt.getLat());
-                if (!StringUtils.isEmpty(queryInfo.get("intersect"))) {
-                    queryParam.setIntersect(IbeQueryParam.Intersect.valueOf(queryInfo.get("intersect")));
-                }
-                String mcen = queryInfo.get("mcenter");
-                if (mcen != null && mcen.equalsIgnoreCase(MCEN)) {
-                    queryParam.setMcen(true);
-
-                } else {
-                    queryParam.setSize(queryInfo.get("size"));
-                }
-            }
-        }
         // process constraints
         String constraints = processConstraints(queryInfo);
         if (!StringUtils.isEmpty(constraints)) {

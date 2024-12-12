@@ -4,11 +4,11 @@
 
 import {useContext, useState, useEffect, useRef} from 'react';
 import PropTypes from 'prop-types';
-import {get,omit} from 'lodash';
+import {get, isUndefined, omit} from 'lodash';
 import {dispatchMountComponent,dispatchValueChange} from '../fieldGroup/FieldGroupCntlr.js';
-import FieldGroupUtils, {getFieldGroupState} from '../fieldGroup/FieldGroupUtils.js';
+import FieldGroupUtils, {callValidator, canValidate, getFieldGroupState} from '../fieldGroup/FieldGroupUtils.js';
 import {flux} from '../core/ReduxFlux.js';
-import {GroupKeyCtx} from './FieldGroup';
+import {FieldGroupCtx, ForceValidCtx} from './FieldGroup';
 import {isDefined} from '../util/WebUtil';
 
 const defaultConfirmValue= (v) => v;
@@ -27,14 +27,14 @@ function buildViewProps(fieldState,props,fieldKey,groupKey,value='') {
         return obj;
     },{} );
 
-    const tmpProps= Object.assign({ message, valid, visible, value, displayValue,
-            tooltip, validator, key:`${groupKey}-${fieldKey}`},
-        rest, propsClean);
+    const tmpProps= { message, valid, visible, value, displayValue,
+            tooltip, validator, key:`${groupKey}-${fieldKey}`, ...rest, ...propsClean};
 
     return omit(tmpProps, STORE_OMIT_LIST);
 }
 
 function showValueWarning(groupKey, fieldKey, value, ignoring) {
+    if (!ignoring) return;
     const extra= ignoring ? 'value property is being ignored, since initialState.value is defined' : '';
     console.warn(
         `useFieldGroupConnector: fieldKey: ${fieldKey}, groupKey: ${groupKey}: value should not be passed in props\n`,
@@ -62,7 +62,7 @@ function doGetInitialState(groupKey, initialState,  props, confirmValueOnInit= d
     const {keepState=false}= getFieldGroupState(groupKey) ?? {};
     const storeField= get(FieldGroupUtils.getGroupFields(groupKey), [fieldKey]);
     const initS= !keepState ? (initialState ||  storeField || {}) : (storeField || initialState || {});
-    return {...initS, value: confirmValueOnInit(initS.value,props,initialState)};
+    return {...initS, value: confirmValueOnInit(initS.value,props,initialState,initS)};
 }
 
 
@@ -145,7 +145,8 @@ export const fgMinPropTypes= {
  */
 export const useFieldGroupConnector= (props) => {
     const infoRef = useRef({prevFieldKey:undefined, prevGroupKey:undefined});
-    const context= useContext(GroupKeyCtx);
+    const context= useContext(FieldGroupCtx);
+    const {forceValid}= useContext(ForceValidCtx) ;
     const {fieldKey,confirmValue,confirmValueOnInit}= props;
     let {initialState}= props;
     const groupKey= props.groupKey || context.groupKey;
@@ -209,6 +210,18 @@ export const useFieldGroupConnector= (props) => {
     useEffect(() => {  // only run on dismount
         return () => dispatchMountComponent( groupKey, fieldKey, false);
     }, []);
+
+    useEffect(() => {
+        if (doingInit || isUndefined(forceValid)) return;
+        if (forceValid) {
+            fireValueChange({valid:true});
+        }
+        else {
+            const f= {...fieldState};
+            f.validator= f.validator ?? props.validator;
+            if (canValidate(f)) fireValueChange({...callValidator(f)});
+        }
+    }, [forceValid]);
 
     return {
         fireValueChange, viewProps: buildViewProps(fieldState,props,fieldKey,groupKey, value), fieldKey, groupKey

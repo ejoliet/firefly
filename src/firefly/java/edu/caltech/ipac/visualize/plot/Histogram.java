@@ -2,8 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.visualize.plot;
-
-import edu.caltech.ipac.util.SUTDebug;
+import edu.caltech.ipac.firefly.data.HasSizeOf;
 
 import java.util.Arrays;
 
@@ -11,7 +10,6 @@ import java.util.Arrays;
  * Creates a histogram of an image
  *
  * @author Booth Hartley
- *
  * Edit history
  * LZ 6/15/15
  *         - Renamed and rewrote the getTblArray method and commented out the eq_tbl and deq_dtbl
@@ -19,15 +17,17 @@ import java.util.Arrays;
  */
 
 
-public class Histogram {
-    private static int HISTSIZ2 = 4096;  /* full size of hist array */
-    private static int HISTSIZ = 2048;     /* half size of hist array */
+public class Histogram implements HasSizeOf {
+    private static final int HISTSIZ2 = 4096;  /* full size of hist array */
+    private static final int HISTSIZ = 2048;     /* half size of hist array */
+    private static final boolean debug= false;
 
-    private int[] hist;
+    private final int[] hist;
     private double histMin;
     private double histBinsize;
-    private double irafMin;
-    private double irafMax;
+    private final double irafMin;
+    private final double irafMax;
+    private final double largeBinPercent;
 
 
 
@@ -40,7 +40,6 @@ public class Histogram {
             datamax = -Double.MAX_VALUE;
             datamin = Double.MAX_VALUE;
             for (int k = 0; k < float1dArray.length; k++) {
-
                 if (!Double.isNaN(float1dArray[k])) {
                     if (float1dArray[k] < datamin)
                         datamin = float1dArray[k];
@@ -72,29 +71,22 @@ public class Histogram {
                 if (!Double.isNaN(float1dArray[k]))
                 {
                    int i = (int) ((float1dArray[k] - histMin) / histBinsize);
-                      if (i<0)
-                    {
-                        //redo_flag = true;   /* hist_min was bad */
+                    if (i<0) {
                         underflowCount++;
                     }
-                    else if (i>HISTSIZ2)
-                    {
-                        //redo_flag = true;   /* hist_max was bad */
+                    else if (i>HISTSIZ2) {
                         overflowCount++;
                     }
-                    else
-                    {
+                    else {
                         hist[i] ++;
                     }
-                    if (float1dArray[k] < histDatamin)
-                        histDatamin = float1dArray[k];
-                    if (float1dArray[k] > histDatamax)
-                        histDatamax = float1dArray[k];
+                    if (float1dArray[k] < histDatamin) histDatamin = float1dArray[k];
+                    if (float1dArray[k] > histDatamax) histDatamax = float1dArray[k];
                 }
             }
 
 
-            printeDebugInfo(histMax, underflowCount, overflowCount);
+            printDebugInfo(histMax, underflowCount, overflowCount);
             datamin = histDatamin;
             datamax = histDatamax;
 
@@ -136,13 +128,10 @@ public class Histogram {
             }
 
 
-            if (SUTDebug.isDebug())
-                System.out.println("done");
+            if (debug) System.out.println("done");
 
             if ( !doing_redo  &&  redo_flag ) {
-
-                if (SUTDebug.isDebug())
-                    System.out.println("rebuilding histogram . . ");
+                if (debug) System.out.println("rebuilding histogram . . ");
                 doing_redo = true;
             } else
                 break;
@@ -150,9 +139,9 @@ public class Histogram {
 
         irafMin = datamin;
         irafMax = datamax;
-
-
+        largeBinPercent= computeLargeBinPercent(float1dArray.length);
     }
+
 
     private double  getHistBinSize(double histMax){
         double  hbinsiz = (histMax - histMin) / HISTSIZ2;
@@ -179,8 +168,6 @@ public class Histogram {
 
     private int getHighSumIndex(int lowLimit) {
         int highSum = 0;
-
-
         for (int i = HISTSIZ2; i >= 0; i--) {
             highSum += hist[i];
             if (highSum > lowLimit) {
@@ -198,17 +185,12 @@ public class Histogram {
         return (int) (goodpix * 0.0005);
     }
 
-    private void printeDebugInfo(double hist_max, int underFlowCount, int overFlowCount) {
-        if (SUTDebug.isDebug()) {
+    private void printDebugInfo(double hist_max, int underFlowCount, int overFlowCount) {
+        if (debug) {
             System.out.println("histMin = " + histMin);
             System.out.println("hist_max = " + hist_max);
             System.out.println("histBinsize = " + histBinsize);
-
-
-            System.out.println("underFlowCount = " + underFlowCount +
-                    "  overFlowCount = " + overFlowCount);
-
-
+            System.out.println("underFlowCount = " + underFlowCount + "  overFlowCount = " + overFlowCount);
         }
     }
 
@@ -256,7 +238,7 @@ public class Histogram {
             i++;
             sum = sum + hist[i];
         } while (sum < goal);
-        if (SUTDebug.isDebug()) {
+        if (debug) {
             System.out.println("goodpix = " + goodpix
                     + "   goal = " + goal
                     + "   i = " + i
@@ -268,15 +250,30 @@ public class Histogram {
             return ((i) * histBinsize + histMin);
     }
 
+    public double computeLargeBinPercent(int dataLen) {
+       int cnt=0;
+
+       int histMax=0;
+        for (int j : hist) {
+            if (histMax < j) histMax = j;
+        }
+        int marker= (int)(histMax*.4);
+
+
+        for (int j : hist) {
+            if (j > marker) cnt++;
+        }
+       return (float)cnt/(float)hist.length;
+    }
+
     /**
      * @return A pointer to the histogram array
      */
     public int[] getHistogramArray() {
-        int retHist[] = new int[hist.length];
+        int[] retHist= new int[hist.length];
         System.arraycopy(hist, 0, retHist, 0, hist.length);
         return retHist;
     }
-
 
     /**
      * @return The minimum DN value in the image
@@ -298,6 +295,18 @@ public class Histogram {
      */
     public double getDNfromBin(int bin) {
         return (bin * histBinsize + histMin);
+    }
+
+    /**
+     * Generate the mean bin data array
+     * @param bscale the bscale from the fits header
+     * @param bzero the bzero from the fits header
+     * @return an array the same length as the histograme
+     */
+    public double[] getMeanBinDataAry(double bscale, double bzero) {
+        double[] meanDataAry = new double[hist.length];
+        for (int i = 0; i < meanDataAry.length; i++) meanDataAry[i] = getDNfromBin(i) * bscale + bzero;
+        return meanDataAry ;
     }
 
     /**
@@ -375,7 +384,7 @@ public class Histogram {
         return tbl;
     }
 
+    public long getSizeOf() { return hist.length*4L + 40L; }
+
+    public double getLargeBinPercent() { return largeBinPercent; }
 }
-
-
-

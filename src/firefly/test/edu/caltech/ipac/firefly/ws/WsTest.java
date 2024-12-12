@@ -1,12 +1,12 @@
 package edu.caltech.ipac.firefly.ws;
 
+import com.google.common.net.MediaType;
 import edu.caltech.ipac.firefly.ConfigTest;
 import edu.caltech.ipac.firefly.data.WspaceMeta;
 import edu.caltech.ipac.firefly.server.WorkspaceManager;
 import edu.caltech.ipac.firefly.server.ws.*;
 import edu.caltech.ipac.firefly.util.FileLoader;
 import org.apache.commons.io.FileUtils;
-import org.apache.http.entity.ContentType;
 import org.junit.*;
 
 import java.io.File;
@@ -108,8 +108,7 @@ public class WsTest extends ConfigTest {
 
         WspaceMeta meta = man.getMeta("/", WspaceMeta.Includes.ALL_PROPS);
 
-        // Change to INFO level in log4j-test.properties to see output.
-        // log4j.logger.test=INFO, A1
+        // Change to INFO level to see output.  i.e. Logger.setProLog(Level.INFO, null);
 
         LOG.info(meta.getNodesAsString());
 
@@ -224,7 +223,7 @@ public class WsTest extends ConfigTest {
         if (!resourceList.contains(ufilePath)) {
             resourceList.add(ufilePath);
         }
-        man.putFile(relFolder, true,testFile, ContentType.DEFAULT_BINARY.getMimeType());
+        man.putFile(relFolder, true,testFile, MediaType.OCTET_STREAM.type());
         return ufilePath;
     }
 

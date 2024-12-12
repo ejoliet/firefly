@@ -125,7 +125,7 @@ public class ImageHeaderTest  extends ConfigTest {
         FitsRead fitsRead0 = FitsReadFactory.createFitsReadArray(inFits)[0];
         Header header = fitsRead0.getHeader();
         ImageHDU imageHdu = (ImageHDU) fitsRead0.getHDU();
-        int planeNumber = header.getIntValue("SPOT_PL", 0);
+        int planeNumber = fitsRead0.getPlaneNumber();
         int  extension_number = header.getIntValue("SPOT_EXT", -1);
         long HDUOffset = extension_number == -1? imageHdu.getFileOffset():header.getIntValue("SPOT_OFF", 0);
 
@@ -237,12 +237,12 @@ public class ImageHeaderTest  extends ConfigTest {
 //
 //        //created parameter fields
 //        Class<?> paramsClass = params.getClass();
-//        Field[] cFields = paramsClass.getFields();
+//        Field[] circleFields = paramsClass.getFields();
 //
-//        for (int i=0; i<cFields.length; i++){
+//        for (int i=0; i<circleFields.length; i++){
 //            for (int j=0; j<eFields.length; j++) {
-//                if (cFields[i].getName().equalsIgnoreCase(eFields[j].getName())) {
-//                     Assert.assertEquals(eFields[j].get(imageHeader), cFields[i].get(params));
+//                if (circleFields[i].getName().equalsIgnoreCase(eFields[j].getName())) {
+//                     Assert.assertEquals(eFields[j].get(imageHeader), circleFields[i].get(params));
 //                    break;
 //                }
 //            }
@@ -272,7 +272,7 @@ public class ImageHeaderTest  extends ConfigTest {
         HashMap<String, Double> expectedImagePtMap = new HashMap<>();
         String[] keys = (String[])  obj.keySet().toArray(new String[0]);
         for (int i=0; i<keys.length; i++){
-            expectedImagePtMap.put(keys[i], new Double((Double) obj.get(keys[i])) );
+            expectedImagePtMap.put(keys[i], (Double) obj.get(keys[i]) );
         }
         obj = (JSONObject) jsonObject.get("expectedWorldPt");
 
@@ -404,7 +404,7 @@ public class ImageHeaderTest  extends ConfigTest {
 
         ImageHDU imageHdu = (ImageHDU) fitsRead0.getHDU();
         Header headerSpot =fitsRead0.getHeader();
-        int planeNumber = headerSpot.getIntValue("SPOT_PL", 0);
+        int planeNumber = fitsRead0.getPlaneNumber();
         int  extension_number = headerSpot.getIntValue("SPOT_EXT", -1);
         long HDUOffset = extension_number == -1? imageHdu.getFileOffset():headerSpot.getIntValue("SPOT_OFF", 0);
         ImageHeader imageHeaderWithSpot = new ImageHeader(headerSpot, HDUOffset, planeNumber);

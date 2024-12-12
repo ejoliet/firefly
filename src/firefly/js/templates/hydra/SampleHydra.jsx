@@ -3,7 +3,7 @@
  */
 
 
-import React, {Component, PropTypes} from 'react';
+import React from 'react';
 import {get} from 'lodash';
 import SplitPane from 'react-split-pane';
 
@@ -98,8 +98,8 @@ function WiseForm ({searchItem}) {
             <h3 style={{textAlign:'center'}}> {searchItem.desc} </h3>
 
             <div style={{padding:'5px 0 5px 0'}}>
-                <TargetPanel labelWidth={100}/>
-                <ValidationField fieldKey='radius' labelWidth={100} initialState= {{value: 300, size: 4, label : 'Radius:'}}
+                <TargetPanel />
+                <ValidationField fieldKey='radius' initialState= {{value: 300, size: 4, label : 'Radius:'}}
                 />
             </div>
         </FieldGroup>

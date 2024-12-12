@@ -2,14 +2,15 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {get, map, isUndefined} from 'lodash';
+import {get, map, isUndefined, isEmpty} from 'lodash';
 import {flux} from './ReduxFlux';
 import {dispatchAddActionWatcher} from './MasterSaga';
 import {appDataReducer, menuReducer, alertsReducer} from './AppDataReducers.js';
 import Point, {isValidPoint} from '../visualize/Point.js';
-import {getModuleName, getProp} from '../util/WebUtil.js';
+import {getModuleName, getProp, getRootURL, isFullURL} from '../util/WebUtil.js';
 import {dispatchRemoteAction} from './JsonUtils.js';
 import {getWsConn} from './messaging/WebSocketClient';
+import {getLayouInfo} from 'firefly/core/LayoutCntlr';
 
 export const APP_DATA_PATH = 'app_data';
 export const COMMAND = 'COMMAND';
@@ -32,6 +33,8 @@ export const SET_USER_INFO = `${APP_DATA_PATH}.setUserInfo`;
 export const HELP_LOAD = `${APP_DATA_PATH}.helpLoad`;
 export const LOAD_SEARCHES = `${APP_DATA_PATH}.loadSearches`;
 export const NOTIFY_REMOTE_APP_READY = `${APP_DATA_PATH}.notifyRemoteAppReady`;
+export const FORM_SUBMIT = `${APP_DATA_PATH}.formSubmit`;
+export const FORM_CANCEL = `${APP_DATA_PATH}.formCancel`;
 
 /** fired when there's a connection is added/removed from this channel.  useful for tracking connections in channel, etc   */
 export const WS_CONN_UPDATED = `${APP_DATA_PATH}.wsConnUpdated`;
@@ -41,6 +44,7 @@ export const GRAB_WINDOW_FOCUS = `${APP_DATA_PATH}.grabFocus`;
 
 /** the extension to add to a channel string to make a viewer channel */
 const CHANNEL_VIEWER_EXTENSION = '__viewer';
+const channel_matcher = new RegExp(`(.+)${CHANNEL_VIEWER_EXTENSION}(?:-(.+))?`)
 
 /** @type {SearchInfo} */
 const searchInfo = {};
@@ -82,17 +86,17 @@ export function dispatchAppOptions(appOptions) {
 /**
  * @param componentId the id or array of ids of the component to record the task count
  * @param taskId id of task, you create with makeTaskId()
- * @param replace
+ * @param [replace=true] if true, replace the taskId in the list
  */
-export function dispatchAddTaskCount(componentId,taskId, replace= false) {
+export function dispatchAddTaskCount(componentId,taskId, replace= true) {
     flux.process({type: ADD_TASK_COUNT, payload: {componentId,taskId, replace}});
 }
 
 
 let taskCnt= 0;
-export function makeTaskId() {
+export function makeTaskId(key='task') {
     taskCnt++;
-    return `task-${taskCnt}`;
+    return `${key}-${taskCnt}`;
 }
 
 /**
@@ -151,8 +155,7 @@ export function dispatchUpdateAppData(appData) {
 export function dispatchNotifyRemoteAppReady() {
     const channel= getWsChannel();
     if (!channel) return;
-    const sourceChannel= channel.endsWith(CHANNEL_VIEWER_EXTENSION) ?
-        channel.substr(0,channel.lastIndexOf(CHANNEL_VIEWER_EXTENSION)) : channel;
+    const [, sourceChannel, app] = channel.match(channel_matcher) || [,channel];
     dispatchRemoteAction(sourceChannel,{ type : NOTIFY_REMOTE_APP_READY, payload: {ready:true, viewerChannel:channel}});
 }
 
@@ -168,17 +171,36 @@ export function dispatchOnAppReady(callback) {
     }
 }
 
+/**
+ * Dispatch FORM_SUBMIT with the given payload.  This is only a notification action.  It does not do anything with the payload.
+ * Payload can be a number of things.  See FormPanel for details.  But, this function can also be called outside of FormPanel
+ * where a FORM_SUBMIT is intended.
+ * @param {object} payload   data submitted.
+ */
+export function dispatchFormSubmit(payload) {
+    flux.process({ type : FORM_SUBMIT, payload});
+}
+
+/**
+ * Dispatch FORM_CANCEL with the given payload.  This is only a notification action.
+ * @param {object} payload   data for identification.
+ */
+export function dispatchFormCancel(payload) {
+    flux.process({ type : FORM_CANCEL, payload});
+}
 
 /*---------------------------- EXPORTED FUNCTIONS -----------------------------*/
 
 
 /**
- * Give a channel string return a version the will be the channel for a viewer
+ * Given a channel string return a version of the will be the channel for a viewer
  * @param {String} channel
  * @return {string}
  */
-export function makeViewerChannel(channel) {
-    return channel + CHANNEL_VIEWER_EXTENSION;
+export function makeViewerChannel(channel, file) {
+    const endFile= isFullURL(file) ? new URL(file).pathname : file;
+    const cleanFile = endFile ? '-' + endFile.replaceAll('.', '_') : '';
+    return channel + CHANNEL_VIEWER_EXTENSION + cleanFile;
 }
 
 export function isAppReady() {
@@ -188,6 +210,11 @@ export function isAppReady() {
 export function getSearchInfo() {
     const {activeSearch} = get(flux.getState(), [APP_DATA_PATH, 'searches'], {});
     return Object.assign({}, searchInfo, {activeSearch});
+}
+
+export function getSearchByName(name) {
+    const {allSearchItems={}} = getSearchInfo();
+    return allSearchItems[name];
 }
 
 export function getMenu() {
@@ -216,11 +243,19 @@ export function getRootUrlPath() {
 }
 
 export function getAppOptions() {
-    return flux.getState()[APP_DATA_PATH].appOptions || window.firefly?.options;
+    return flux.getState()[APP_DATA_PATH].appOptions ?? window.firefly?.options ?? {};
 }
 
 export function getUserInfo() {
     return flux.getState()[APP_DATA_PATH].userInfo;
+}
+
+export function getSearchActions() {
+    const {searchActions, searchActionsCmdMask}= getAppOptions() ?? {};
+    if (isEmpty(searchActions)) return undefined;
+    if (isEmpty(searchActionsCmdMask)) return searchActions;
+    const retSearchActions= searchActions.filter( ({cmd}) => searchActionsCmdMask.includes(cmd));
+    return retSearchActions;
 }
 
 /**
@@ -233,7 +268,7 @@ export function getConnectionCount(channel) {
 
 /**
  * @param wp center WorldPt
- * @param corners array of 4 WorldPts that represent the corners of a image
+ * @param [corners] array of 4 WorldPts that represent the corners of a image
  */
 export const dispatchActiveTarget= function(wp,corners=undefined) {
     const payload={};
@@ -267,6 +302,23 @@ export function getWsConnId(baseUrl) {
     return getWsConn(baseUrl)?.connId;
 }
 
+/**
+ * Returns the name/action of the select menu item.  If not set, it will determine what it should be
+ * @param {object} menu
+ * @param {object} dropDown
+ * @returns {string} the name/action selected menu item
+ */
+export function getSelectedMenuItem(menu,dropDown) {
+    menu ??= getMenu();
+    dropDown ??= getLayouInfo()?.dropDown;
+    // if (!menu || !dropDown?.visible) return '';
+    if (!menu) return '';
+    if (menu.selected) return menu.selected;
+    let selected = menu.menuItems?.find(({action}) => (action===dropDown?.view))?.action;
+    if (!selected && dropDown?.visible) selected = menu.menuItems[0].action;
+    return selected;
+}
+
 
 /*---------------------------- REDUCERS -----------------------------*/
 
@@ -288,34 +340,32 @@ function grabWindowFocus() {
 function onlineHelpLoad( action )
 {
     return () => {
-        var url = getAppOptions()?.['help.base.url'] || getProp('help.base.url', '');
-        var windowName = 'onlineHelp';
-        var moduleName = getProp('help.subpath', getModuleName());
-
-        if (moduleName) {
-            windowName += '-' + moduleName;
-        }
+        let url = getAppOptions()?.['help.base.url'] || getProp('help.base.url');
         url = url.endsWith('/') ? url : url + '/';
-        if (action.payload && action.payload.helpId) {
-            url += '#id=' + action.payload.helpId;
-        }
 
-        if (url) {
-            window.open(url, windowName);
-        }
+        const {helpId, isDarkMode} = action?.payload || {};
+        if (isDarkMode) url += '?mode=dark';
+        if (helpId)     url += '#id=' + helpId;
+
+        url = new URL(url, getRootURL());                   // use rootURL instead of document.baseURI if relative
+        const moduleName = getProp('help.subpath', getModuleName());
+        const windowName = `onlineHelp-${moduleName}`;
+        window.open(url.href, windowName);
     };
 }
 
 function loadSearches(action) {
     return function (dispatch) {
-        var {groups=[], activeSearch, ...rest} = action.payload;
+        var {groups=[], activeSearch, renderAsMenuItems=false, flow, ...rest} = action.payload;
         groups.forEach( (g) => {
             Object.entries(get(g, 'searchItems',{}))
                   .forEach(([k,v]) => v.name = k);      // insert key as name into the search object.
         });
         activeSearch = activeSearch || get(Object.values(get(groups, [0, 'searchItems'], {})), [0, 'name']);    // defaults to first searchItem
         const allSearchItems = Object.assign({}, ...map(groups, 'searchItems'));
-        Object.assign(searchInfo, rest, {allSearchItems, groups});
+        if (renderAsMenuItems) flow ??= 'hidden';
+
+        Object.assign(searchInfo, rest, {flow, renderAsMenuItems, allSearchItems, groups});
         dispatch({ type : APP_UPDATE, payload: {searches: {activeSearch}}});
     };
 }

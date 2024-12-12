@@ -4,21 +4,22 @@
 package edu.caltech.ipac.table.io;
 
 import edu.caltech.ipac.firefly.core.FileAnalysisReport;
+import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.table.DataGroup;
-import edu.caltech.ipac.table.DataObject;
 import edu.caltech.ipac.table.DataType;
-import edu.caltech.ipac.table.IpacTableUtil;
 import edu.caltech.ipac.table.IpacTableDef;
+import edu.caltech.ipac.table.IpacTableUtil;
 import edu.caltech.ipac.table.TableUtil;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -32,49 +33,79 @@ public final class IpacTableReader {
     private static final Logger.LoggerImpl logger = Logger.getLogger();
 
     public static DataGroup read(File inf, String... onlyColumns) throws IOException {
-        IpacTableDef tableDef = IpacTableUtil.getMetaInfo(inf);
-        BufferedReader bufferedReader = new BufferedReader(new FileReader(inf), IpacTableUtil.FILE_IO_BUFFER_SIZE);
-        return doRead(bufferedReader, tableDef, onlyColumns);
+       return read(inf,null, onlyColumns) ;
+    }
+
+    public static DataGroup read(File inf, TableServerRequest request, String... onlyColumns) throws IOException {
+        return read(new FileInputStream(inf), SpectrumMetaInspector.hasSpectrumHint(request), onlyColumns);
     }
 
     public static DataGroup read(InputStream inputStream, String... onlyColumns) throws IOException {
-        BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream), IpacTableUtil.FILE_IO_BUFFER_SIZE);
-        IpacTableDef tableDef = IpacTableUtil.getMetaInfo(bufferedReader);
-        return  doRead(bufferedReader, tableDef, onlyColumns);
+        return read(inputStream, false, onlyColumns);
     }
 
+    public static DataGroup read(InputStream inputStream, boolean searchForSpectrum,  String... onlyColumns) throws IOException {
+        var handler = new TableParseHandler.Memory(false, searchForSpectrum);
+        parseTable(handler, inputStream, onlyColumns);
+        return handler.getTable(0);
+    }
 
-    public static void main(String args[]) {
+    public static void parseTable(TableParseHandler handler, File srcFile, String... onlyColumns) throws IOException {
+        parseTable(handler, new FileInputStream(srcFile), onlyColumns);
+    }
 
-        if (args.length > 0) {
-            try {
-                DataGroup dg = read(new File(args[0]));
-                dg.setTitle("test");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        } else {
-            try {
-                System.in.read();
-            } catch (IOException e) {
-            }
-            DataGroup IRAC1fixedGroup;
-            File f = new File("2massmag3_formatted.tbl");
+    public static void parseTable(TableParseHandler handler, InputStream inputStream, String... onlyColumns) throws IOException {
+        String line = null;
+        int lineNum = 0;
+        var bufferedReader = new BufferedReader(new InputStreamReader(inputStream), IpacTableUtil.FILE_IO_BUFFER_SIZE);
+        try (bufferedReader) {
+            handler.start();
+            handler.startTable(0);
 
-            String onlyColumns[] = {"ra", "dec", "name", "mag"};
-            String catName = "IRAC1";
-            try {
-                IRAC1fixedGroup = read(f, onlyColumns);
-                IRAC1fixedGroup.setTitle(catName);
-            } catch (Exception e) {
-                System.out.println("got an exception:  " + e);
-                e.printStackTrace();
+            IpacTableDef tableDef = IpacTableUtil.getMetaInfo(bufferedReader);
+            DataGroup headers = create(tableDef, onlyColumns);
+            handler.header(headers);
+
+            if (!handler.headerOnly()) {
+                lineNum = tableDef.getExtras() == null ? 0 : tableDef.getExtras().getKey();
+
+                line = tableDef.getExtras() == null ? bufferedReader.readLine() : tableDef.getExtras().getValue();
+                lineNum++;
+                DataType[] cols = headers.getDataDefinitions();
+                TableUtil.ParsedColInfo[] parsedInfos = Arrays.stream(cols)
+                        .map(dt -> tableDef.getParsedInfo(dt.getKeyName()))
+                        .toArray(TableUtil.ParsedColInfo[]::new);
+                while (line != null) {
+                    Object[] row = IpacTableUtil.parseRow(line, cols, parsedInfos);
+                    if (row != null)    handler.data(row);
+                    line = bufferedReader.readLine();
+                    lineNum++;
+                }
             }
+        } catch (Exception e) {
+            String msg = e.getMessage() + "<br>on line " + lineNum + ": " + line;
+            if (msg.length() > 128) msg = msg.substring(0, 128) + "...";
+            logger.error(e, "on line " + lineNum + ": " + line);
+            throw new IOException(msg);
+        } finally {
+            handler.endTable(0);
+            handler.end();
         }
     }
 
-    static DataGroup doRead(BufferedReader bufferedReader, IpacTableDef tableDef, String... onlyColumns) throws IOException {
+    public static FileAnalysisReport analyze(File infile, FileAnalysisReport.ReportType type) throws IOException {
+        IpacTableDef meta = IpacTableUtil.getMetaInfo(infile);
+        FileAnalysisReport report = new FileAnalysisReport(type, TableUtil.Format.IPACTABLE.name(), infile.length(), infile.getPath());
+        FileAnalysisReport.Part part = new FileAnalysisReport.Part(FileAnalysisReport.Type.Table, String.format("IPAC Table (%d cols x %s rows)", meta.getCols().size(), meta.getRowCount()));
+        part.setTotalTableRows(meta.getRowCount());
+        report.addPart(part);
+        if (type.equals(FileAnalysisReport.ReportType.Details)) {
+            part.setDetails(TableUtil.getDetails(0, meta));
+        }
+        return report;
+    }
 
+    private static DataGroup create(IpacTableDef tableDef, String... onlyColumns) {
         List<DataGroup.Attribute> attributes = tableDef.getKeywords();
         List<DataType> cols = tableDef.getCols();
 
@@ -100,51 +131,16 @@ public final class IpacTableReader {
         outData.getTableMeta().setKeywords(attributes);
         IpacTableUtil.consumeColumnInfo(outData);   // move column attributes into columns
 
-        String line = null;
-        int lineNum = tableDef.getExtras() == null ? 0 : tableDef.getExtras().getKey();
-
-        try {
-            line = tableDef.getExtras() == null ? bufferedReader.readLine() : tableDef.getExtras().getValue();
-            lineNum++;
-            DataObject row, arow;
-            while (line != null) {
-                row = IpacTableUtil.parseRow(inData, line, tableDef);
-                if (row != null) {
-                    if (isSelectedColumns) {
-                        arow = new DataObject(outData);
-                        for (DataType dt : outData.getDataDefinitions()) {
-                            arow.setDataElement(dt, row.getDataElement(dt.getKeyName()));
-                        }
-                        outData.add(arow);
-                    } else {
-                        outData.add(row);
-                    }
-                }
-                line = bufferedReader.readLine();
-                lineNum++;
-            }
-        } catch(Exception e) {
-            String msg = e.getMessage()+"<br>on line "+lineNum+": " + line;
-            if (msg.length()>128) msg = msg.substring(0,128)+"...";
-            logger.error(e, "on line "+lineNum+": " + line);
-            throw new IOException(msg);
-        } finally {
-            bufferedReader.close();
+        // if fixlen != T, don't guess format
+        if (!String.valueOf(tableDef.getAttribute("fixlen")).trim().equals("T")) {
+            tableDef.getCols().forEach(c -> {
+                tableDef.getParsedInfo(c.getKeyName()).formatChecked = true;
+            });
         }
-        outData.trimToSize();
+        if (tableDef.getRowCount() > 0) outData.setInitCapacity(tableDef.getRowCount());        // set initial capacity to avoid resizing
+
         return outData;
     }
 
-    public static FileAnalysisReport analyze(File infile, FileAnalysisReport.ReportType type) throws IOException {
-        IpacTableDef meta = IpacTableUtil.getMetaInfo(infile);
-        FileAnalysisReport report = new FileAnalysisReport(type, TableUtil.Format.IPACTABLE.name(), infile.length(), infile.getPath());
-        FileAnalysisReport.Part part = new FileAnalysisReport.Part(FileAnalysisReport.Type.Table, String.format("IPAC Table (%d cols x %s rows)", meta.getCols().size(), meta.getRowCount()));
-        part.setTotalTableRows(meta.getRowCount());
-        report.addPart(part);
-        if (type.equals(FileAnalysisReport.ReportType.Details)) {
-            part.setDetails(TableUtil.getDetails(0, meta));
-        }
-        return report;
-    }
 
 }

@@ -4,15 +4,18 @@
 package edu.caltech.ipac.table;
 
 import edu.caltech.ipac.firefly.data.TableServerRequest;
+import edu.caltech.ipac.firefly.server.db.DuckDbReadable;
 import edu.caltech.ipac.firefly.server.util.JsonToDataGroup;
 import edu.caltech.ipac.table.io.DsvTableIO;
 import edu.caltech.ipac.table.io.FITSTableReader;
 import edu.caltech.ipac.table.io.IpacTableReader;
 import edu.caltech.ipac.table.io.VoTableReader;
+import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.StringUtils;
 import org.apache.commons.csv.CSVFormat;
 
 import java.io.BufferedReader;
+import java.io.CharArrayReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
@@ -22,9 +25,12 @@ import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 
 /**
@@ -40,29 +46,33 @@ public class TableUtil {
             "j2000", "galactic", "image", "physical", "global", "boxcircle"};
 
     public static DataGroup readAnyFormat(File inf) throws IOException {
-        return readAnyFormat(inf, 0, null);
+        return readAnyFormat(inf, 0);
     }
 
-    public static DataGroup readAnyFormat(File inf, int tableIndex, Map<String, String> metaInfo) throws IOException {
+    public static DataGroup readAnyFormat(File inf, int tableIndex) throws IOException {
+        return readAnyFormat(inf, tableIndex, null);
+    }
+
+    public static DataGroup readAnyFormat(File inf, int tableIndex, TableServerRequest request) throws IOException {
         Format format = guessFormat(inf);
         if (format == Format.IPACTABLE) {
-            return IpacTableReader.read(inf);
+            return IpacTableReader.read(inf, request);
         } else if (format == Format.VO_TABLE) {
-            DataGroup[] tables = VoTableReader.voToDataGroups(inf.getAbsolutePath(), tableIndex);
+            DataGroup[] tables = VoTableReader.voToDataGroups(inf.getAbsolutePath(), request, tableIndex);
             if (tables.length > 0) {
                 return tables[0];
             } else return null;
         } else if (format == Format.CSV || format == Format.TSV) {
-            return DsvTableIO.parse(inf, format.type);
+            return DsvTableIO.parse(inf, format, request);
         } else if (format == Format.FITS ) {
             try {
                 // Switch to the new function:
-                return FITSTableReader.convertFitsToDataGroup(inf.getAbsolutePath(), metaInfo, FITSTableReader.DEFAULT, tableIndex);
+                return FITSTableReader.convertFitsToDataGroup(inf.getAbsolutePath(), request, FITSTableReader.DEFAULT, tableIndex);
             } catch (Exception e) {
                 throw new IOException("Unable to read FITS file:" + inf, e);
             }
         } else if (format == Format.JSON) {
-            return JsonToDataGroup.parse(inf);
+            return JsonToDataGroup.parse(inf, request);
         } else {
             throw new IOException("Unsupported format, file:" + inf);
         }
@@ -71,8 +81,8 @@ public class TableUtil {
 
 
     private static boolean isRegLine(String line) {
-        if (StringUtils.isEmpty(line)) return false;
-        line= StringUtils.trim(line).toLowerCase();
+        if (isEmpty(line)) return false;
+        line= line.trim().toLowerCase();
         for(String sw : regStartWith) {
             if (line.startsWith(sw)) return true;
         }
@@ -81,15 +91,22 @@ public class TableUtil {
 
     public static Format guessFormat(File inf) throws IOException {
 
-        int readAhead = 10;
-
-        int row = 0;
-
+        // guess based on filename extension
         if (inf.getName().toLowerCase().endsWith("tar")) {
             return Format.TAR;
         }
 
-        BufferedReader reader = new BufferedReader(new FileReader(inf), IpacTableUtil.FILE_IO_BUFFER_SIZE);
+        var fmt = DuckDbReadable.guessFileFormat(inf.getAbsolutePath());      // test for files that DuckDb can import directly
+        if (fmt != null) return fmt;
+
+        // guess by sampling file content
+        int readAhead = 10;
+        int row = 0;
+
+        BufferedReader subsetReader = new BufferedReader(new FileReader(inf), IpacTableUtil.FILE_IO_BUFFER_SIZE);
+        char[] charAry= new char[IpacTableUtil.FILE_IO_BUFFER_SIZE];
+        subsetReader.read(charAry,0,charAry.length);           // limit the amount for the guess to FILE_IO_BUFFER_SIZE(32k)
+        BufferedReader reader= new BufferedReader(new CharArrayReader(charAry));
         try {
             String line = reader.readLine();
             if (line.startsWith("{")) {
@@ -102,7 +119,7 @@ public class TableUtil {
             int csvIdx = 0, tsvIdx = 1;
             int regionTextCnt= 0;
             if (isRegLine(line))  regionTextCnt++;
-            while (line != null && row < readAhead) {
+            while ( (line != null && !line.trim().isEmpty()) && row < readAhead) {
                 if (line.startsWith("|") || line.startsWith("\\")) {
                     return Format.IPACTABLE;
                 } else if (line.startsWith("COORD_SYSTEM: ") || line.startsWith("EQUINOX: ") ||
@@ -115,6 +132,8 @@ public class TableUtil {
                 } else if (line.startsWith("<VOTABLE") ||
                         (line.contains("<?xml") && line.contains("<VOTABLE "))) {
                     return Format.VO_TABLE;
+                } else if (isUwsEl(line)) {
+                    return Format.UWS;
                 } else if (row == 0 && line.toLowerCase().indexOf("pdf") > 0) {
                     return Format.PDF;
                 } else if (isRegLine(line)) {
@@ -159,9 +178,16 @@ public class TableUtil {
         } catch (Exception e){
             return Format.UNKNOWN;
         } finally {
-            try {reader.close();} catch (Exception e) {e.printStackTrace();}
+            FileUtil.silentClose(subsetReader);
+            FileUtil.silentClose(reader);
         }
 
+    }
+
+    private static boolean isUwsEl(String line) {
+        line = line.trim().toLowerCase();
+        boolean isUws = line.contains("www.ivoa.net/xml/uws");
+        return isUws && line.matches("<(.+:)?job .*");
     }
 
     private static int getColCount(CSVFormat format, String line) {
@@ -180,11 +206,14 @@ public class TableUtil {
         RandomAccessFile reader = new RandomAccessFile(inf, "r");
         long skip = ((long)start * (long)tableDef.getLineWidth()) + (long)tableDef.getRowStartOffset();
         int count = 0;
+        TableUtil.ParsedColInfo[] parsedColInfos = Arrays.stream(dg.getDataDefinitions())
+                                                        .map(dt -> tableDef.getParsedInfo(dt.getKeyName()))
+                                                        .toArray(TableUtil.ParsedColInfo[]::new);
         try {
             reader.seek(skip);
             String line = reader.readLine();
             while (line != null && count < rows) {
-                DataObject row = IpacTableUtil.parseRow(dg, line, tableDef);
+                Object[] row = IpacTableUtil.parseRow(line, dg.getDataDefinitions(), parsedColInfos);
                 if (row != null) {
                     dg.add(row);
                     count++;
@@ -203,7 +232,7 @@ public class TableUtil {
     }
 
     /**
-     * takes all of the TableMeta that is column's related and use it to set column's properties.
+     * takes all the TableMeta that is column's related and use it to set column's properties.
      * remove the TableMeta that was used.
      * @param dg
      * @param treq  if not null, merge META-INFO from this request into TableMeta before consuming
@@ -294,57 +323,104 @@ public class TableUtil {
         return Arrays.asList(val);
     }
 
+    /**
+     * @param cnames a string of column name(s).  It can also be expression including functions.
+     *               ignore commas inside double-quotes or parentheses(e.g. function parameters) when parsing
+     * @return an array of column names.
+     */
+    public static String[] splitCols(String cnames) {
+        return cnames == null ? new String[0] : cnames.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)(?![^(]*\\))");
+    }
+
+    /**
+     * If both ID and label exists, the label should be used in contexts where
+     * case sensitivity is supported.
+     * @param dt Firefly table column
+     * @return the resolved name
+     */
+    public static String getAliasName(DataType dt) {
+        return !isEmpty(dt.getID()) && !isEmpty(dt.getLabel()) ? dt.getLabel() : dt.getKeyName();
+    }
+
+    public static void fixDuplicates(List<DataType> cols) {
+        HashSet<String> cnames = new HashSet<>();
+        for (DataType dt : cols) {
+            if (cnames.contains(dt.getKeyName().toUpperCase())) {
+                int idx = 1;
+                String nCname;
+                do {
+                    nCname = "%s_%d".formatted(dt.getKeyName(), idx++);
+                } while (cnames.contains(nCname.toUpperCase()));
+                if (isEmpty(dt.getID()))    dt.setID(dt.getKeyName());      // if we change cname, save original as ID.
+                dt.setLabel(dt.getKeyName());
+                dt.setKeyName(nCname);
+            }
+            cnames.add(dt.getKeyName().toUpperCase());
+        }
+    }
+
 //====================================================================
 //
 //====================================================================
 
-    public enum Format { TSV(CSVFormat.TDF, ".tsv"), CSV(CSVFormat.DEFAULT, ".csv"), IPACTABLE(".tbl"), UNKNOWN(null),
-                         FIXEDTARGETS(".tbl"), FITS(".fits"), JSON(".json"), PDF(".pdf"), TAR(".tar"), HTML(".html"),
-                         VO_TABLE(".xml"), VO_TABLE_TABLEDATA(".vot"), VO_TABLE_BINARY(".vot"), VO_TABLE_BINARY2(".vot"),
-                         VO_TABLE_FITS(".vot"), REGION(".reg");
-        public CSVFormat type;
+        public enum Mode { original, displayed};
+
+        public enum Format {
+                        TSV("tsv", ".tsv"),
+                        CSV("csv", ".csv"),
+                        IPACTABLE("ipac", ".tbl"),
+                        UNKNOWN("null", null),
+                        FIXEDTARGETS("fixed-targets", ".tbl"),
+                        FITS("fits",".fits"),
+                        JSON("json", ".json"),
+                        PDF("pdf", ".pdf"),
+                        TAR("tar", ".tar"),
+                        HTML("html", ".html"),
+                        VO_TABLE("votable", ".xml"),
+                        VO_TABLE_TABLEDATA("votable-tabledata", ".vot"),
+                        VO_TABLE_BINARY("votable-binary-inline", ".vot"),
+                        VO_TABLE_BINARY2("votable-binary2-inline", ".vot"),
+                        VO_TABLE_FITS("votable-fits-inline",".vot"),
+                        REGION("reg", ".reg"),
+                        PNG("png", ".png"),
+                        UWS("uws", ".xml"),
+                        PARQUET(DuckDbReadable.Parquet.NAME, "."+DuckDbReadable.Parquet.NAME);
+        public String type;
         String fileNameExt;
-        Format(String ext) {this.fileNameExt = ext;}
-        Format(CSVFormat type, String ext) {
+        Format(String type, String ext) {
             this.type = type;
             this.fileNameExt = ext;
         }
         public String getFileNameExt() {
             return fileNameExt;
         }
+        public String toString() {return type;}
     }
 
-    private static Map<String, Format> allFormats = new HashMap<>();
-    static {
-        allFormats.put("ipac", Format.IPACTABLE);
-        allFormats.put("csv", Format.CSV);
-        allFormats.put("tsv", Format.TSV);
-        allFormats.put("votable-tabledata", Format.VO_TABLE_TABLEDATA);
-        allFormats.put("votable-binary-inline", Format.VO_TABLE_BINARY);
-        allFormats.put("votable-binary2-inline", Format.VO_TABLE_BINARY2);
-        allFormats.put("votable-fits-inline", Format.VO_TABLE_FITS);
-        allFormats.put("fits", Format.FITS);
-        allFormats.put("pdf", Format.PDF);
+    public static Map<String, Format> getAllFormats() {
+        return Arrays.stream(Format.values())
+                .collect(Collectors.toMap(f -> f.type, f -> f));
     }
 
-    public static Map<String, Format> getAllFormats() { return allFormats; }
+    public static class ParsedInfo {
+        HashMap<String, ParsedColInfo> parsedInfo = new HashMap<>();  // keyed by column name
 
-    public static class ColCheckInfo {
-        HashMap<String, CheckInfo> colCheckInfos = new HashMap<>();  // keyed by column name
-
-        public CheckInfo getCheckInfo(String cname) {
-            CheckInfo checkInfo = colCheckInfos.get(cname);
+        public ParsedColInfo getInfo(String cname) {
+            ParsedColInfo checkInfo = parsedInfo.get(cname);
             if (checkInfo == null) {
-                checkInfo = new CheckInfo();
-                colCheckInfos.put(cname, checkInfo);
+                checkInfo = new ParsedColInfo();
+                parsedInfo.put(cname, checkInfo);
             }
             return checkInfo;
         }
     }
 
-    public static class CheckInfo {
+    public static class ParsedColInfo {
         public boolean formatChecked;              // indicates guess format logic has been performed
         public boolean htmlChecked;                // indicates html content check has been performed
+        public int startIdx;
+        public int endIdx;
+
     }
 }
 

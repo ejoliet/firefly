@@ -5,8 +5,8 @@ import validator from 'validator';
 import {isNil} from 'lodash';
 
 const isInRange= function(val,min,max) {
-    const retval= !(min !== undefined && min!==null && val<min);
-    return retval && !(max !== undefined && max!==null && val>max);
+    const retval= !(min !== undefined && !isNaN(min) && min!==null && val<min);
+    return retval && !(max !== undefined && !isNaN(min) && max!==null && val>max);
 };
 
 const typeInject= {
@@ -85,6 +85,20 @@ export const NotBlank = (val='') => {
     return retval;
 };
 
+export const textValidator = ({min=0, max, pattern, message}) => {
+    return (val='') => {
+        val = val.trim();
+        let error = `Value must be at least ${min} character${min>1 ? 's' : ''}`;
+        if (max) error += ` and no more than ${max} characters`;
+
+        if(val.length === 0 && min > 0)    return {valid: false, message: message ?? 'This is a required field. \n' + error};
+        if (val.length < min || val.length > (max ?? Number.MAX_VALUE)) return {valid: false, message: message ?? error};
+        if (pattern && !val.match(pattern)) return {valid: false, message: message ?? `Value must match pattern: ${pattern}`};
+
+        return {valid: true, message: ''};
+    };
+};
+
 export const validateEmail = function(description,valStr) {
     const retval = {
         valid: true,
@@ -145,7 +159,7 @@ export const isFloat = function(description, valStr) {
     if (valStr) {
         if (!validator.isFloat(valStr+'')) {
             retval.valid = false;
-            retval.message = description + ': must be a float';
+            retval.message = description + ': must be a number';
         }
     }
     return retval;

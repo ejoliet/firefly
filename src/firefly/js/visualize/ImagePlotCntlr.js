@@ -2,52 +2,78 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {has,isArray} from 'lodash';
 import Enum from 'enum';
-import {flux} from '../core/ReduxFlux.js';
-import {ZoomType} from './ZoomType.js';
-import {reducer as plotChangeReducer} from './reducer/HandlePlotChange.js';
-import {reducer as plotCreationReducer} from './reducer/HandlePlotCreation.js';
-import {reducer as plotAdminReducer} from './reducer/HandlePlotAdmin.js';
-import {getPlotGroupById} from './PlotGroup.js';
-import {isActivePlotView, getPlotViewById, getOnePvOrGroup, primePlot} from './PlotViewUtil.js';
-
-import {dispatchReplaceViewerItems, EXPANDED_MODE_RESERVED} from './MultiViewCntlr.js';
+import {has, isArray} from 'lodash';
 import {REINIT_APP} from '../core/AppDataCntlr.js';
-
-import {UserZoomTypes} from './ZoomUtil.js';
-import {zoomActionCreator} from './task/ZoomTask.js';
+import {flux} from '../core/ReduxFlux.js';
 import {convertToIdentityObj} from '../util/WebUtil.js';
 import {changePrime} from './ChangePrime.js';
-import {makePlotImageAction} from './task/PlotImageTask.js';
-import {makePlotHiPSAction, makeChangeHiPSAction, makeImageOrHiPSAction} from './task/PlotHipsTask.js';
-import {plotImageMaskActionCreator, plotImageMaskLazyActionCreator,
-        overlayPlotChangeAttributeActionCreator} from './task/ImageOverlayTask.js';
-import {
-    colorChangeActionCreator,
-    stretchChangeActionCreator,
-    cropActionCreator,
-    requestLocalDataActionCreator
-} from './task/PlotChangeTask.js';
-import {wcsMatchActionCreator} from './task/WcsMatchTask.js';
-import {autoPlayActionCreator, changePointSelectionActionCreator,
-    restoreDefaultsActionCreator, deletePlotViewActionCreator} from './task/PlotAdminTask.js';
-import { flipActionCreator, processScrollActionCreator, recenterActionCreator, rotateActionCreator } from './task/PlotChangeTask';
-import {makeAbortHiPSAction} from './task/PlotHipsTask';
 
-/** enum can be 'COLLAPSE', 'GRID', 'SINGLE' */
+import {dispatchReplaceViewerItems, EXPANDED_MODE_RESERVED, IMAGE} from './MultiViewCntlr.js';
+import {getPlotGroupById} from './PlotGroup.js';
+import {getOnePvOrGroup, getPlotViewById, isActivePlotView, isImageExpanded, primePlot} from './PlotViewUtil.js';
+import {reducer as plotAdminReducer} from './reducer/HandlePlotAdmin.js';
+import {reducer as plotChangeReducer} from './reducer/HandlePlotChange.js';
+import {reducer as plotCreationReducer} from './reducer/HandlePlotCreation.js';
+import {
+    overlayPlotChangeAttributeActionCreator, plotImageMaskActionCreator, plotImageMaskLazyActionCreator
+} from './task/ImageOverlayTask.js';
+import {
+    autoPlayActionCreator, changePointSelectionActionCreator, deletePlotViewActionCreator, restoreDefaultsActionCreator
+} from './task/PlotAdminTask.js';
+import {
+    flipActionCreator, processScrollActionCreator, recenterActionCreator, rotateActionCreator
+} from './task/PlotChangeTask';
+import {
+    colorChangeActionCreator, cropActionCreator, requestLocalDataActionCreator, stretchChangeActionCreator
+} from './task/PlotChangeTask.js';
+import {makeAbortHiPSAction} from './task/PlotHipsTask';
+import {makeChangeHiPSAction, makeImageOrHiPSAction, makePlotHiPSAction} from './task/PlotHipsTask.js';
+import {makePlotImageAction} from './task/PlotImageTask.js';
+import {wcsMatchActionCreator} from './task/WcsMatchTask.js';
+import {zoomActionCreator} from './task/ZoomTask.js';
+import {ZoomType} from './ZoomType.js';
+
+import {UserZoomTypes} from './ZoomUtil.js';
+
+/** @typedef ExpandType
+ * enum can be one of
+ * @prop COLLAPSE
+ * @prop GRID
+ * @prop SINGLE
+ * @type {Enum}
+ */
+
+/** @type ExpandType*/
 export const ExpandType= new Enum(['COLLAPSE', 'GRID', 'SINGLE']);
 
-/** enum can be 'Standard', 'Target' */
+/**
+ * @typedef {Object} WcsMatchType
+ * enum can be one of
+ * @prop Standard
+ * @prop Target
+ * @prop Pixel
+ * @prop PixelCenter
+ * @type {Enum}
+ */
+
+/** @type WcsMatchType */
 export const WcsMatchType= new Enum(['Standard', 'Target', 'Pixel', 'PixelCenter']);
 
 
 
 /**
- * enum can be 'GROUP', 'SINGLE', 'LIST'
+ * @typedef ActionScope
+ * enum can be one of
+ * @prop GROUP
+ * @prop SINGLE
+ * @prop LIST'
+ * @type {Enum}
  * @public
  * @global
  */
+
+/** @type ActionScope */
 export const ActionScope= new Enum(['GROUP','SINGLE', 'LIST']);
 
 export const PLOTS_PREFIX= 'ImagePlotCntlr';
@@ -72,27 +98,18 @@ const PLOT_HIPS_FAIL= `${PLOTS_PREFIX}.PlotHiPSFail`;
 const ANY_REPLOT= `${PLOTS_PREFIX}.Replot`;
 
 /** Action Type: start the zoom process.  The image will appear zoomed by scaling, the server has not updated yet */
-const ZOOM_IMAGE_START= `${PLOTS_PREFIX}.ZoomImageStart`;
+const ZOOM_HIPS= `${PLOTS_PREFIX}.ZoomHiPS`;
 
 /** Action Type: The zoom from the server has complete */
 const ZOOM_IMAGE= `${PLOTS_PREFIX}.ZoomImage`;
-const ZOOM_IMAGE_FAIL= `${PLOTS_PREFIX}.ZoomImageFail`;
 const ZOOM_LOCKING= `${PLOTS_PREFIX}.ZoomEnableLocking`;
 
 
-/** Action Type: image with new color table call started */
-const COLOR_CHANGE_START= `${PLOTS_PREFIX}.ColorChangeStart`;
 /** Action Type: image with new color table loaded */
 const COLOR_CHANGE= `${PLOTS_PREFIX}.ColorChange`;
-const COLOR_CHANGE_FAIL= `${PLOTS_PREFIX}.ColorChangeFail`;
 
-
-/** Action Type: server image stretch call started */
-const STRETCH_CHANGE_START= `${PLOTS_PREFIX}.StretchChangeStart`;
 /** Action Type: image loaded with new stretch */
 const STRETCH_CHANGE= `${PLOTS_PREFIX}.StretchChange`;
-const STRETCH_CHANGE_FAIL= `${PLOTS_PREFIX}.StretchChangeFail`;
-
 
 /** Action Type: image rotated */
 const ROTATE= `${PLOTS_PREFIX}.Rotate`;
@@ -119,6 +136,7 @@ const OVERLAY_COLOR_LOCKING= `${PLOTS_PREFIX}.OverlayColorLocking`;
 const CHANGE_POINT_SELECTION= `${PLOTS_PREFIX}.ChangePointSelection`;
 
 const CHANGE_ACTIVE_PLOT_VIEW= `${PLOTS_PREFIX}.ChangeActivePlotView`;
+const CHANGE_SUBHIGHLIGHT_PLOT_VIEW= `${PLOTS_PREFIX}.ChangeSubHighlightPlotView`;
 const CHANGE_PLOT_ATTRIBUTE= `${PLOTS_PREFIX}.ChangePlotAttribute`;
 
 /** Action Type: display mode to or from expanded */
@@ -133,7 +151,7 @@ const CHANGE_MOUSE_READOUT_MODE=`${PLOTS_PREFIX}.changeMouseReadoutMode`;
 /** Action Type: delete a plotView */
 const DELETE_PLOT_VIEW=`${PLOTS_PREFIX}.deletePlotView`;
 
-const UPDATE_RAW_IMAGE_DATA= `${PLOTS_PREFIX}.updatePlotImageData`;
+const BYTE_DATA_REFRESH= `${PLOTS_PREFIX}.byteDataRefresh`;
 
 const PLOT_MASK_START= `${PLOTS_PREFIX}.plotMaskStart`;
 /** Action Type: add a mask image*/
@@ -152,11 +170,11 @@ const WCS_MATCH=`${PLOTS_PREFIX}.wcsMatch`;
 const PLOT_PROGRESS_UPDATE= `${PLOTS_PREFIX}.PlotProgressUpdate`;
 const API_TOOLS_VIEW= `${PLOTS_PREFIX}.apiToolsView`;
 
-const ADD_PROCESSED_TILES= `${PLOTS_PREFIX}.addProcessedTiles`;
-
 /** Action Type: enable/disable wcs matching*/
 export const IMAGE_PLOT_KEY= 'allPlots';
 
+export const MOUSE_CLICK_REASON= 'mouseClickReason';
+export const OTHER_REASON= 'otherReason';
 
 /**
  * @returns {VisRoot}
@@ -172,7 +190,7 @@ export function visRoot() { return flux.getState()[IMAGE_PLOT_KEY]; }
  *
  * @returns {VisRoot}
  */
-const initState= function() {
+const initState= () => {
 
     /**
      * @global
@@ -194,39 +212,41 @@ const initState= function() {
      * @prop {boolean} singleAutoPlay true if auto play on in expanded mode
      * @prop {boolean} apiToolsView true if working in api mode
      * @prop {boolean} positionLock plots are locked together for scrolling and rotation.
+     * @prop {WorldPt} wcsMatchCenterWP: null, // the point to match to
+     * @prop {WcsMatchType} wcsMatchType   one of 'Standard', 'Target', 'Pixel', 'PixelCenter', or false
+     * @prop {String} mpwWcsPrimId  plotId of the prime wcs match image
+     * @prop {boolean} autoScrollToHighlightedTableRow
+     * @prop {boolean} useAutoScrollToHighlightedTableRow
+     *
      */
     return {
         activePlotId: null,
         plotViewAry : [],  //there is one plot view for every ImageViewer, a plotView will have a plotId
         plotGroupAry : [], // there is one for each group, a plot group may have multiple plotViews
-        // plotHistoryRequest: [], //todo
 
-        prevActivePlotId: null,
-        plotRequestDefaults : {}, // object: if normal request;
-        //                                         {plotId : {threeColor:boolean, wpRequest : object, }
-        //                                   if 3 color:
-        //                                         {plotId : {threeColor:boolean,
-        //                                                    redReq : object,
-        //                                                    greenReq : object,
-        //                                                    blueReq : object }
+        prevActivePlotId: null, // previous active plot before current one
+        plotRequestDefaults : {}, // object:
+        //                           if normal request;
+        //                              {plotId : {threeColor:boolean, wpRequest : object}
+        //                           if 3 color:
+        //                             {plotId : {threeColor:boolean, redReq : object, greenReq : object, blueReq : object }
 
-        positionLock: false,
         //-- expanded settings
         expandedMode: ExpandType.COLLAPSE,
         previousExpandedMode: ExpandType.GRID, //  must be SINGLE OR GRID
         singleAutoPlay : false,
 
         //--  misc
-        pointSelEnableAry : [],
-        apiToolsView: false,
+        pointSelEnableAry : [], // a list of keys who have enable point select, is array length is non-zero, then point select is enabled
+        apiToolsView: false,  // this should be deprecated, it is not used for much and there are other ways to do it.
         autoScrollToHighlightedTableRow: true,
-        useAutoScrollToHighlightedTableRow: true, // this is not a use option, it is use to handle temporary disabling auto scroll`
+        useAutoScrollToHighlightedTableRow: true, // this is not an option, it is used to handle temporary disabling auto scroll`
 
         //-- wcs match parameters
-        wcsMatchCenterWP: null,
-        wcsMatchType: false,
-        mpwWcsPrimId: null,
-        processedTiles: []
+        positionLock: false, // images are locked together
+        wcsMatchCenterWP: null, // the point to match to
+        wcsMatchType: false,  // one of 'Standard', 'Target', 'Pixel', 'PixelCenter', or false
+        mpwWcsPrimId: null,   // the plotId others are match to
     };
 
 };
@@ -299,16 +319,16 @@ function actionCreators() {
 export default {
     reducers, actionCreators,
     ANY_REPLOT, PLOT_IMAGE_START, PLOT_IMAGE_FAIL, PLOT_IMAGE, PLOT_HIPS, PLOT_HIPS_FAIL, CHANGE_HIPS,ABORT_HIPS,
-    ZOOM_IMAGE_START, ZOOM_IMAGE_FAIL, ZOOM_IMAGE,ZOOM_LOCKING,
+    ZOOM_HIPS, ZOOM_IMAGE, ZOOM_LOCKING,
     CHANGE_CENTER_OF_PROJECTION, ROTATE, FLIP, CROP_START, CROP, CROP_FAIL,
-    COLOR_CHANGE_START, COLOR_CHANGE, COLOR_CHANGE_FAIL,
-    STRETCH_CHANGE_START, STRETCH_CHANGE, STRETCH_CHANGE_FAIL, CHANGE_POINT_SELECTION, CHANGE_EXPANDED_MODE,
+    COLOR_CHANGE, STRETCH_CHANGE, CHANGE_POINT_SELECTION, CHANGE_EXPANDED_MODE,
     PLOT_PROGRESS_UPDATE, UPDATE_VIEW_SIZE, PROCESS_SCROLL, RECENTER, OVERLAY_COLOR_LOCKING, POSITION_LOCKING,
     RESTORE_DEFAULTS, CHANGE_PLOT_ATTRIBUTE,EXPANDED_AUTO_PLAY,
     DELETE_PLOT_VIEW, CHANGE_ACTIVE_PLOT_VIEW, CHANGE_PRIME_PLOT, CHANGE_IMAGE_VISIBILITY,
-    PLOT_MASK, PLOT_MASK_START, PLOT_MASK_FAIL, PLOT_MASK_LAZY_LOAD, DELETE_OVERLAY_PLOT, UPDATE_RAW_IMAGE_DATA,
-    OVERLAY_PLOT_CHANGE_ATTRIBUTES, WCS_MATCH, ADD_PROCESSED_TILES, API_TOOLS_VIEW, CHANGE_MOUSE_READOUT_MODE,
-    CHANGE_HIPS_IMAGE_CONVERSION, CHANGE_TABLE_AUTO_SCROLL, USE_TABLE_AUTO_SCROLL,REQUEST_LOCAL_DATA
+    PLOT_MASK, PLOT_MASK_START, PLOT_MASK_FAIL, PLOT_MASK_LAZY_LOAD, DELETE_OVERLAY_PLOT, BYTE_DATA_REFRESH,
+    OVERLAY_PLOT_CHANGE_ATTRIBUTES, WCS_MATCH, API_TOOLS_VIEW, CHANGE_MOUSE_READOUT_MODE,
+    CHANGE_HIPS_IMAGE_CONVERSION, CHANGE_TABLE_AUTO_SCROLL, USE_TABLE_AUTO_SCROLL,REQUEST_LOCAL_DATA,
+    CHANGE_SUBHIGHLIGHT_PLOT_VIEW
 };
 
 const KEY_ROOT= 'progress-';
@@ -327,14 +347,13 @@ export function makeUniqueRequestKey(prefix= KEY_ROOT) {
 /**
  * Tweek how the API image view works
  * @param {boolean} apiToolsView
- * @param {boolean} useFloatToolbar
  *
  * @public
  * @function dispatchApiToolsView
  * @memberof firefly.action
  */
-export function dispatchApiToolsView(apiToolsView, useFloatToolbar= true) {
-    flux.process({ type: API_TOOLS_VIEW , payload: { apiToolsView, useFloatToolbar}});
+export function dispatchApiToolsView(apiToolsView) {
+    flux.process({ type: API_TOOLS_VIEW , payload: { apiToolsView}});
 }
 /**
  *
@@ -385,21 +404,22 @@ export function dispatchPositionLocking(plotId,positionLock) {
  * @param {Object} p
  * @param {string} p.plotId
  * @param {number} p.primeIdx
- * @param {Function} p.dispatcher only for special dispatching uses such as remote
+ * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  */
 export function dispatchChangePrimePlot({plotId, primeIdx, dispatcher= flux.process}) {
     dispatcher({ type: CHANGE_PRIME_PLOT , payload: { plotId, primeIdx }});
 }
 
 /**
- * set if the base image is visible
+ * set if the base image is visible on a PlotView or an OverlayPlotView
  * @param {Object} p
  * @param {string} p.plotId
+ * @param {string} [p.imageOverlayId] if defined change the visibility on the OverlayPlotView match this idea
  * @param {boolean} p.visible - true if visible
- * @param {Function} p.dispatcher only for special dispatching uses such as remote
+ * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  */
-export function dispatchChangeImageVisibility({plotId, visible, dispatcher= flux.process}) {
-    dispatcher({ type: CHANGE_IMAGE_VISIBILITY, payload: { plotId, visible}});
+export function dispatchChangeImageVisibility({plotId, imageOverlayId, visible, dispatcher= flux.process}) {
+    dispatcher({ type: CHANGE_IMAGE_VISIBILITY, payload: { plotId, imageOverlayId, visible}});
 }
 
 /**
@@ -409,8 +429,8 @@ export function dispatchChangeImageVisibility({plotId, visible, dispatcher= flux
  *
  * @param {Object}  obj
  * @param {string} obj.plotId
- * @param {number} obj.cbarId must be in the range, 0 - 21, each number represents different colorbar
- * @param {number} obj.bias bias betwee 0 - 1, .5 is no bias
+ * @param {number} obj.cbarId must be in the range, 0 - 21, each number represents different color bar
+ * @param {number} obj.bias bias between 0 - 1, .5 is no bias
  * @param {number} obj.contrast bias between 0 - 2, .1 is no contrast
  * @param {boolean} obj.useRed use this band, only use with 3 color
  * @param {boolean} obj.useGreen use this band, only use with 3 color
@@ -447,12 +467,12 @@ export function dispatchColorChange({plotId, cbarId, bias, contrast,
  * // Example of stretch 2 - 98 percent, log stretch
  * var rv= RangeValues.makeSimple(‘percent’, 2, 98, ‘log’);
  * const stretchData= [{ band : 'NO_BAND', rv :  rv, bandVisible: true }];
- * action.dispatchStretchChange({plotId:’myplot’, strechData:stretchData });
+ * action.dispatchStretchChange({plotId:’myPlot’, stretchData:stretchData });
  * @example
  * // Example of stretch -2 - 5 sigma, linear stretch
  * var rv= RangeValues.makeSimple(’sigma’, -2, 5, 'linear’);
  * const stretchData= [{ band : 'NO_BAND', rv :  rv, bandVisible: true }];
- * action.dispatchStretchChange({plotId:’myplot’, strechData:stretchData });
+ * action.dispatchStretchChange({plotId:’myPlot’, stretchData:stretchData });
  *
  */
 export function dispatchStretchChange({plotId, stretchData,
@@ -464,7 +484,7 @@ export function dispatchStretchChange({plotId, stretchData,
  * Enable / Disable WCS Match
  * @param {Object}  p
  * @param {string} p.plotId
- * @param {Enum|string|boolean} p.matchType one of 'Standard', 'Off', or you may pass false
+ * @param {WcsMatchType|string|boolean} p.matchType one of 'Standard', 'Off', or you may pass false
  * @param {boolean} [p.lockMatch]
  * @param {Function} [p.dispatcher]
  */
@@ -479,11 +499,11 @@ export function dispatchWcsMatch({plotId, matchType, lockMatch= true, dispatcher
  * Note - function parameter is a single object
  * @param {Object}  p
  * @param {string} p.plotId
- * @param {Enum} p.rotateType enum RotateType
- * @param {number} p.angle - rotation angle- rotation is always toward the east of north. That is east-left images will
+ * @param {RotateType} p.rotateType enum RotateType
+ * @param {number} [p.angle] - rotation angle- rotation is always toward the east of north. That is east-left images will
  * rotate counter-clockwise, while east-right image will rotate clockwise
- * @param {string|ActionScope} p.actionScope enum ActionScope
- * @param {Function} p.dispatcher only for special dispatching uses such as remote
+ * @param {string|ActionScope} [p.actionScope] enum ActionScope
+ * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  *
  * @public
  * @function dispatchRotate
@@ -499,9 +519,9 @@ export function dispatchRotate({plotId, rotateType, angle=-1,
  * Note - function parameter is a single object
  * @param {Object}  p
  * @param {string} p.plotId
- * @param {boolean} p.isY
- * @param {boolean} p.rematchAfterFlip
- * @param {string|ActionScope} p.actionScope enum ActionScope
+ * @param {boolean} [p.isY]
+ * @param {boolean} [p.rematchAfterFlip]
+ * @param {string|ActionScope} [p.actionScope] enum ActionScope
  * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  *
  * @public
@@ -539,8 +559,8 @@ export function dispatchCrop({plotId, imagePt1, imagePt2, cropMultiAll, dispatch
  * @param {Object}  p
  * @param {string} p.plotId
  * @param {Object} p.scrollPt a new point to scroll
- * @param {Object} p.disableBoundCheck
- * @param {Function} p.dispatcher only for special dispatching uses such as remote
+ * @param {Object} [p.disableBoundCheck]
+ * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  */
 export function dispatchProcessScroll({plotId,scrollPt, disableBoundCheck=false, dispatcher= flux.process}) {
     dispatcher({type: PROCESS_SCROLL, payload: {plotId, scrollPt,disableBoundCheck} });
@@ -550,11 +570,12 @@ export function dispatchProcessScroll({plotId,scrollPt, disableBoundCheck=false,
  *
  * @param {Object}  p
  * @param {string} p.plotId
- * @param {WorldPt} p.centerProjPt
- * @param {Function} p.dispatcher only for special dispatching uses such as remote
+ * @param {WorldPt} [p.centerProjPt] new center, if undefined just keep the same center
+ * @param {boolean} [p.fullSky] if true AITOFF, false half sky, undefined then don't change
+ * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  */
-export function dispatchChangeCenterOfProjection({plotId,centerProjPt, dispatcher= flux.process}) {
-    dispatcher({type: CHANGE_CENTER_OF_PROJECTION, payload: {plotId, centerProjPt} });
+export function dispatchChangeCenterOfProjection({plotId,centerProjPt, fullSky, dispatcher= flux.process}) {
+    dispatcher({type: CHANGE_CENTER_OF_PROJECTION, payload: {plotId, centerProjPt, fullSky} });
 }
 
 /**
@@ -564,11 +585,12 @@ export function dispatchChangeCenterOfProjection({plotId,centerProjPt, dispatche
  * @param {Object}  p
  * @param {string} p.plotId
  * @param {Point} [p.centerPt] Point to center on
- * @param {boolean} p.centerOnImage only used if centerPt is not defined.  If true then the centering will be
+ * @param {boolean} [p.centerOnImage] only used if centerPt is not defined.  If true then the centering will be
  *                                  the center of the image.  If false, then the center point will be the
  *                                  FIXED_TARGET attribute, if defined. Otherwise it will be the center of the image.
- * @param {boolean} [updateFixedTarget] if true and centerPt is a worldPt, it will update the
+ * @param {boolean} [p.updateFixedTarget] if true and centerPt is a worldPt, it will update the
  *                                  FIXED_TARGET attribute on the plot
+ * @param {boolean} [p.updateWcsPrimId] if true update the make plotId the prime for wcs matching, defaults to true
  * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  *
  * @public
@@ -576,8 +598,9 @@ export function dispatchChangeCenterOfProjection({plotId,centerProjPt, dispatche
  * @memberof firefly.action
  */
 export function dispatchRecenter({plotId, centerPt= undefined, centerOnImage=false,
+                                     updateWcsPrimId=true,
                                      updateFixedTarget= false, dispatcher= flux.process}) {
-    dispatcher({type: RECENTER, payload: {plotId, centerPt, centerOnImage, updateFixedTarget} });
+    dispatcher({type: RECENTER, payload: {plotId, centerPt, centerOnImage, updateFixedTarget, updateWcsPrimId} });
 }
 
 /**
@@ -683,7 +706,7 @@ export function dispatchPlotHiPS({plotId,wpRequest, viewerId, pvOptions= {}, att
                                    hipsImageConversion= undefined,
                                      enableRestore= true, renderTreeId,
                                      setNewPlotAsActive= true, dispatcher= flux.process }) {
-    dispatcher( { type: PLOT_HIPS, payload: {wpRequest, plotId, pvOptions, attributes, enableRestore,
+    dispatcher( { type: PLOT_HIPS, payload: {wpRequest, plotId, pvOptions, attributes, enableRestore, renderTreeId,
                                              hipsImageConversion, setNewPlotAsActive, viewerId} });
 }
 
@@ -699,7 +722,7 @@ export function dispatchAbortHiPS({plotId, dispatcher= flux.process }) {
  * @param {string} p.plotId
  * @param {WebPlotParams|WebPlotRequest} p.hipsRequest
  * @param {WebPlotParams|WebPlotRequest} p.imageRequest - must be a ServiceType request.
- * @param {WebPlotParams|WebPlotRequest} p.allSkyRequest - must be a allsky type request
+ * @param {WebPlotParams|WebPlotRequest} p.allSkyRequest - must be an allsky type request,  this is deprecated, parameter ignored
  * @param {boolean} [p.plotAllSkyFirst= false] - if there is an all sky set up then plot that first
  * @param {number} [p.fovDegFallOver] - the size in degrees that the image will switch between hips and a image cutout
  * @param {number} [p.fovMaxFitsSize] - the max size the fits image service can support
@@ -747,6 +770,7 @@ export function dispatchChangeHipsImageConversion({plotId, hipsImageConversionCh
  * @param {string} p.plotId
  * @param {string} [p.hipsUrlRoot]
  * @param {CoordinateSys} [p.coordSys]
+ * @param {number} [p.cubeIdx]
  * @param {WorldPt} [p.centerProjPt]
  * @param {String} [p.blankColor] set the background color of the hips if is is a blank hips
  * @param {boolean} [p.applyToGroup] apply to the whole group it is locked
@@ -771,6 +795,8 @@ export function dispatchChangeHiPS({ plotId, hipsUrlRoot, coordSys, centerProjPt
  * @param {string} p.fileKey file on the server
  * @param {string} p.color - color is optional, if not specified, one is chosen
  * @param {string} p.title
+ * @param {string} p.lazyLoad
+ * @param {string} p.uiCanAugmentTitle
  * @param {string} [p.relatedDataId] pass a related data id if one exist
  * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  *
@@ -828,11 +854,10 @@ export function dispatchOverlayPlotChangeAttributes({plotId,imageOverlayId, attr
  * @param {string|UserZoomTypes} p.userZoomType (one of ['UP','DOWN', 'FIT', 'FILL', 'ONE', 'LEVEL', 'WCS_MATCH_PREV')
  * @param {boolean} [p.maxCheck]
  * @param {boolean} [p.zoomLockingEnabled]
- * @param {boolean} [p.forceDelay]
  * @param {number} [p.level] the level to zoom to, used only userZoomType 'LEVEL'
  * @param {number} [p.upDownPercent] value between 0 and 1 - 1 is 100% of the next step up or down
  * @param {string|ActionScope} [p.actionScope] default to group
- * @param {DevicePt} devicePt
+ * @param {DevicePt} [p.devicePt]
  * @param {Function} [p.dispatcher] only for special dispatching uses such as remote
  *
  * @public
@@ -841,27 +866,24 @@ export function dispatchOverlayPlotChangeAttributes({plotId,imageOverlayId, attr
  *
  * @example
  * // Example of zoom to level
- *  action.dispatchZoom({plotId:’myplot’, userZoomType:’LEVEL’, level: .75 });
+ *  action.dispatchZoom({plotId:’myPlot’, userZoomType:’LEVEL’, level: .75 });
  *
  * @example
  * // Example of zoom up
- * action.dispatchZoom({plotId:’myplot’, userZoomType:’UP’ }};
+ * action.dispatchZoom({plotId:’myPlot’, userZoomType:’UP’ }};
  * @example
  * // Example of zoom to fit
- * action.dispatchZoom({plotId:’myplot’, userZoomType:’FIT’ }};
+ * action.dispatchZoom({plotId:’myPlot’, userZoomType:’FIT’ }};
  * @example
- * // Example of zoom to level, if you are connected to a widget that is changing  the level fast, zlevel is the varible with the zoom level
- * action.dispatchZoom({plotId:’myplot’, userZoomType:’LEVEL’, level: zlevel, forceDelay: true }};
+ * // Example of zoom to level, if you are connected to a widget that is changing  the level fast, zLevel is the variable with the zoom level
+ * action.dispatchZoom({plotId:’myPlot’, userZoomType:’LEVEL’, level: zLevel }};
  */
 export function dispatchZoom({plotId, userZoomType, maxCheck= true, upDownPercent=1,
-                             zoomLockingEnabled=false, forceDelay=false, level, devicePt,
-                             actionScope=ActionScope.GROUP,
-                             dispatcher= flux.process} ) {
+                             zoomLockingEnabled=false, level, devicePt,
+                             actionScope=ActionScope.GROUP, dispatcher= flux.process} ) {
     dispatcher({
         type: ZOOM_IMAGE,
-        payload :{
-            plotId, userZoomType, actionScope, maxCheck, zoomLockingEnabled, forceDelay, level, devicePt, upDownPercent,
-        }});
+        payload :{ plotId, userZoomType, actionScope, maxCheck, zoomLockingEnabled, level, devicePt, upDownPercent}});
 }
 
 /**
@@ -894,12 +916,22 @@ export function dispatchZoomLocking(plotId,zoomLockingEnabled, zoomLockingType) 
 /**
  * Set the plotId of the active plot view
  * @param {string} plotId
+ * @param {string} reason
  */
 
-export function dispatchChangeActivePlotView(plotId) {
+export function dispatchChangeActivePlotView(plotId,reason=OTHER_REASON) {
     if (!isActivePlotView(visRoot(),plotId)) {
-        flux.process({ type: CHANGE_ACTIVE_PLOT_VIEW, payload: {plotId} });
+        flux.process({ type: CHANGE_ACTIVE_PLOT_VIEW, payload: {plotId,reason} });
     }
+}
+
+/**
+ * Set the plotId ot be subhighlight
+ * @param {Object}  p this function takes a single parameter
+ * @param {Array.<{plotId:String, subHighlight:boolean}>} p.subHighlightAry subHighlight updates
+ */
+export function dispatchChangeSubHighPlotView({subHighlightAry}) {
+    flux.process({ type: CHANGE_SUBHIGHLIGHT_PLOT_VIEW, payload: {subHighlightAry} });
 }
 
 /**
@@ -958,8 +990,10 @@ export function dispatchChangeExpandedMode(expandedMode) { //todo: this code sho
         const pv= getPlotViewById(vr,plotId);
         if (pv) {
             const group= getPlotGroupById(vr,pv.plotGroupId);
-            const plotIdAry= getOnePvOrGroup(vr.plotViewAry,plotId,group, true).map( (pv) => pv.plotId);
-            dispatchReplaceViewerItems(EXPANDED_MODE_RESERVED,plotIdAry);
+            const plotIdAry= getOnePvOrGroup(vr.plotViewAry,plotId,group, true)
+                .filter((pv) => pv.plotViewCtx.canBeExpanded)
+                .map( (pv) => pv.plotId);
+            dispatchReplaceViewerItems(EXPANDED_MODE_RESERVED,plotIdAry, IMAGE );
         }
     }
 
@@ -999,17 +1033,6 @@ export function dispatchExpandedAutoPlay(autoPlayOn) {
     flux.process({ type: EXPANDED_AUTO_PLAY, payload: {autoPlayOn} });
 }
 
-/**
- *
- * @param plotId
- * @param imageOverlayId
- * @param plotImageId
- * @param zoomFactor
- * @param clientTileAry
- */
-export function dispatchAddProcessedTiles(plotId, imageOverlayId, plotImageId, zoomFactor, clientTileAry) {
-    flux.process({ type: ADD_PROCESSED_TILES, payload: {plotId, imageOverlayId, plotImageId, zoomFactor, clientTileAry} });
-}
 
 //======================================== Action Creators =============================
 //======================================== Action Creators =============================
@@ -1034,12 +1057,12 @@ const creationActions= convertToIdentityObj([
 ]);
 
 const changeActions= convertToIdentityObj([
-    ZOOM_LOCKING, ZOOM_IMAGE_START, ZOOM_IMAGE_FAIL, ZOOM_IMAGE, UPDATE_VIEW_SIZE, PROCESS_SCROLL,
-    CHANGE_PLOT_ATTRIBUTE, COLOR_CHANGE, COLOR_CHANGE_START, COLOR_CHANGE_FAIL, ROTATE, FLIP,
-    STRETCH_CHANGE_START, STRETCH_CHANGE, STRETCH_CHANGE_FAIL, RECENTER, OVERLAY_COLOR_LOCKING, POSITION_LOCKING,
+    ZOOM_LOCKING, ZOOM_HIPS, ZOOM_IMAGE, UPDATE_VIEW_SIZE, PROCESS_SCROLL,
+    CHANGE_PLOT_ATTRIBUTE, COLOR_CHANGE, ROTATE, FLIP,
+    STRETCH_CHANGE, RECENTER, OVERLAY_COLOR_LOCKING, POSITION_LOCKING,
     PLOT_PROGRESS_UPDATE, OVERLAY_PLOT_CHANGE_ATTRIBUTES, CHANGE_PRIME_PLOT, CHANGE_CENTER_OF_PROJECTION,
-    CHANGE_HIPS, ADD_PROCESSED_TILES, CHANGE_HIPS_IMAGE_CONVERSION, CHANGE_IMAGE_VISIBILITY, UPDATE_RAW_IMAGE_DATA,
-    REQUEST_LOCAL_DATA
+    CHANGE_HIPS, CHANGE_HIPS_IMAGE_CONVERSION, CHANGE_IMAGE_VISIBILITY, BYTE_DATA_REFRESH,
+    REQUEST_LOCAL_DATA,CHANGE_SUBHIGHLIGHT_PLOT_VIEW
 ]);
 
 const adminActions= convertToIdentityObj([
@@ -1097,8 +1120,3 @@ function validateState(state,originalState,action) {
     if (console.groupEnd) console.groupEnd();
 }
 
-
-
-export const isImageExpanded = (expandedMode) => expandedMode===true ||
-                                     expandedMode===ExpandType.GRID ||
-                                     expandedMode===ExpandType.SINGLE;

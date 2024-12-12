@@ -2,6 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {Box, Skeleton, Stack, Typography} from '@mui/joy';
 import React, {memo, useState, useEffect, useRef} from 'react';
 import PropTypes from 'prop-types';
 import {debounce, get} from 'lodash';
@@ -11,7 +12,6 @@ import {ListBoxInputField} from '../../ui/ListBoxInputField.jsx';
 import {CheckboxGroupInputField} from '../../ui/CheckboxGroupInputField.jsx';
 import {RangeSlider} from '../../ui/RangeSlider.jsx';
 import {callGetColorHistogram} from '../../rpc/PlotServicesJson.js';
-import {encodeServerUrl, getRootURL} from '../../util/WebUtil.js';
 import {
     PERCENTAGE,  ABSOLUTE,SIGMA, STRETCH_LINEAR, STRETCH_LOG, STRETCH_LOGLOG, STRETCH_EQUAL,
     STRETCH_SQUARED, STRETCH_SQRT, STRETCH_ASINH, STRETCH_POWERLAW_GAMMA} from '../RangeValues.js';
@@ -20,11 +20,7 @@ import ImagePlotCntlr, {dispatchStretchChange, visRoot} from '../ImagePlotCntlr.
 import {getActivePlotView, isThreeColor} from '../PlotViewUtil.js';
 import {makeSerializedRv} from './ColorDialog.jsx';
 import {getFluxUnits} from '../WebPlot';
-import {SimpleCanvas} from 'firefly/visualize/draw/SimpleCanvas.jsx';
-import {
-    getColorModel,
-    makeColorHistImage,
-    makeColorTableImage
+import { getColorModel, makeColorHistImage, makeColorTableImage
 } from 'firefly/visualize/rawData/rawAlgorithm/ColorTable.js';
 import {useWatcher} from 'firefly/ui/SimpleComponent.jsx';
 import {dispatchForceFieldGroupReducer} from 'firefly/fieldGroup/FieldGroupCntlr.js';
@@ -73,11 +69,6 @@ export const ColorBandPanel= memo(({fields,plot,band, groupKey}) => {
             return retFunc;
         }
         callGetColorHistogram(plotState,band).then(  (result) => {
-            const dataHistUrl= encodeServerUrl(getRootURL() + 'sticky/FireFly_ImageDownload',
-                { file: result.DataHistImageUrl, type: 'any' });
-
-            const cbarUrl= encodeServerUrl(getRootURL() + 'sticky/FireFly_ImageDownload',
-                { file: result.CBarImageUrl, type: 'any' });
             const dataHistogram= result.DataHistogram;
             const dataBinMeanArray= result.DataBinMeanArray;
             const dataBinColorIdx= result.DataBinColorIdx;
@@ -100,33 +91,31 @@ export const ColorBandPanel= memo(({fields,plot,band, groupKey}) => {
 
     const bandReplot= debounce(getReplotFunc(groupKey, band), 600);
 
-    const ctOrBand= isThreeColor(plot)?band:getColorModel(plot.plotState.colorTableId);
+    const ctOrBand= isThreeColor(plot)?band:getColorModel(plot.colorTableId);
     const cbarUrl= makeColorTableImage(ctOrBand, 300,10).toDataURL('image/png');
     const dataHistUrl= dataHistogram && dataBinColorIdx &&
-        makeColorHistImage(ctOrBand, Number(plot.plotState.colorTableId),
+        makeColorHistImage(ctOrBand, Number(plot.colorTableId),
             HIST_WIDTH,HIST_HEIGHT,dataHistogram,dataBinColorIdx).toDataURL('image/png');
 
     return (
-        <div style={{minHeight:305, minWidth:360, padding:5, position:'relative'}}>
-            {dataHistUrl && <img style={histImStyle} src={dataHistUrl} key={dataHistUrl}
-                 onMouseMove={mouseMove} onMouseLeave={() => setExit(true)} />}
-            <ReadoutPanel
-                width={HIST_WIDTH} exit={exit} idx={histReadout.histIdx} histValue={histReadout.histValue}
-                histMean={histReadout.histMean} plot={plot} band={band}
-            />
-            <div style={{display:'table', margin:'auto auto'}}>
-                {getStretchTypeField()}
-            </div>
+        <Stack {...{spacing:2, minHeight:305, minWidth:360, padding:.5, position:'relative'}}>
+            {doMask && <Skeleton sx={{inset:0}}/>}
+            <Stack>
+                {dataHistUrl && <img style={histImStyle} src={dataHistUrl} key={dataHistUrl}
+                                     onMouseMove={mouseMove} onMouseLeave={() => setExit(true)} />}
+                <ReadoutPanel
+                    width={HIST_WIDTH} exit={exit} idx={histReadout.histIdx} histValue={histReadout.histValue}
+                    histMean={histReadout.histMean} plot={plot} band={band}
+                />
+            </Stack>
+            <StretchTypeField/>
+            <ZscaleCheckbox/>
             <ColorInput fields={fields} bandReplot={bandReplot}/>
-            <div style={{position:'absolute', bottom:5, left:5, right:5}}>
-                <div>
-                    {suggestedValuesPanel( plot,band )}
-                </div>
-                {getZscaleCheckbox()}
+            <Stack {...{spacing:1, direction:'column', alignItems:'center'}}>
+                <SuggestedValuesPanel {...{plot,band}}/>
                 <img style={cbarImStyle} src={cbarUrl} key={cbarUrl}/>
-            </div>
-            {doMask && <div style={maskWrapper}> <div className='loading-mask'/> </div> }
-       </div>
+            </Stack>
+       </Stack>
    );
 });
 
@@ -150,41 +139,46 @@ function ColorInput({fields,bandReplot}) {
 const readTopBaseStyle= { fontSize: '11px', paddingBottom:5, height:16 };
 const dataStyle= { color: 'red' };
 
-function suggestedValuesPanel( plot,band ) {
-
-    const style= { fontSize: '11px', paddingBottom:5, height:16, whiteSpace: 'pre'};
+function SuggestedValuesPanel({plot,band}) {
     const fitsData= plot.webFitsData[band.value];
     const {dataMin, dataMax} = fitsData;
     const dataMaxStr = `Data Max: ${sprintf('%.6f',dataMax)} `;
     const dataMinStr = `Data Min: ${sprintf('%.6f', dataMin)}`;
 
     return (
-        <div style={style}>
-                <span style={{float:'left', paddingRight:2, opacity:.5, marginLeft:40 }}>
-                  {dataMinStr}            {dataMaxStr}
-                </span>
-        </div>
+        <Stack sx={{alignItems:'center'}}>
+            {(dataMin || dataMax) &&
+                <Typography level='body-xs'>
+                    {dataMinStr}
+                    <span style={{paddingLeft:'2rem'}}/>
+                    {dataMaxStr}
+                </Typography>
+            }
+        </Stack>
     );
 }
 
-function ReadoutPanel({exit, plot,band,idx,histValue,histMean,width}) {
-    const topStyle= Object.assign({width},readTopBaseStyle);
+function ReadoutPanel({exit, plot,band,idx,histValue,histMean}) {
+    const level='body-xs';
     if (exit) {
         return (
-            <div style={topStyle}>
-                <span style={{float:'right', paddingRight:2, opacity:.4, textAlign: 'center' }}>
-                Move mouse over graph to see values
-                </span>
-            </div>
+            <Stack {...{alignContent:'flex-end'}}>
+                <Typography level='body-xs' sx={{textAlign:'right'}}>
+                    Move mouse over graph to see values
+                </Typography>
+            </Stack>
         );
     }
     else {
         return (
-            <div style={topStyle}> Histogram: index:
-                <span style={dataStyle}>{idx}</span>, Size:
-                <span style={dataStyle}>{histValue}</span>, Mean Value :
-                <span style={dataStyle}> {formatFlux(histMean, plot, band)} </span>
-            </div>
+            <Stack {...{direction:'row'}}>
+                <Typography {...{level}}>Histogram: index:</Typography>
+                <Typography {...{level, color:'warning'}}>{idx}</Typography>
+                <Typography {...{level, pl:.5}}>Size:</Typography>
+                <Typography {...{level, color:'warning'}}>{histValue}</Typography>
+                <Typography {...{level, pl:.5}}>Mean Value:</Typography>
+                <Typography {...{level, color:'warning'}}>{formatFlux(histMean, plot, band)}</Typography>
+            </Stack>
         );
     }
 }
@@ -209,7 +203,7 @@ ReadoutPanel.propTypes= {
 
 export function getTypeMinField(lowerWhich='lowerWhich') {
     return (
-        <ListBoxInputField fieldKey={lowerWhich} inline={true} labelWidth={0}
+        <ListBoxInputField fieldKey={lowerWhich}
                            options={ [ {label: '%', value: PERCENTAGE},
                                        {label: 'Data', value: ABSOLUTE},
                                        {label: 'Sigma', value: SIGMA}
@@ -221,7 +215,7 @@ export function getTypeMinField(lowerWhich='lowerWhich') {
 
 function getTypeMaxField() {
     return (
-        <ListBoxInputField fieldKey='upperWhich' inline={true} labelWidth={0}
+        <ListBoxInputField fieldKey='upperWhich'
                            options={ [ {label: '%', value: PERCENTAGE},
                                        {label: 'Data', value: ABSOLUTE},
                                        {label: 'Sigma', value: SIGMA}
@@ -231,24 +225,20 @@ function getTypeMaxField() {
     );
 }
 
-export function getZscaleCheckbox() {
-    return (
-        <div style={{display:'table', margin:'auto auto', paddingBottom:5}}>
-            <CheckboxGroupInputField
-                options={ [ {label: 'Use ZScale for bounds', value: 'zscale'} ] }
-                fieldKey='zscale'
-                labelWidth={0} />
-        </div>
-    );
-}
+export const ZscaleCheckbox= () => (
+    <CheckboxGroupInputField
+        options={ [ {label: 'Use ZScale for bounds', value: 'zscale'} ] }
+        fieldKey='zscale'/>
+);
+
 
 function renderZscale() {
     return (
-        <div>
-            <ValidationField wrapperStyle={textPadding} labelWidth={LABEL_WIDTH} fieldKey='zscaleContrast' />
-            <ValidationField wrapperStyle={textPadding} labelWidth={LABEL_WIDTH} fieldKey='zscaleSamples' />
-            <ValidationField wrapperStyle={textPadding} labelWidth={LABEL_WIDTH} fieldKey='zscaleSamplesPerLine' />
-        </div>
+        <Stack {...{spacing:1}}>
+            <ValidationField fieldKey='zscaleContrast' />
+            <ValidationField fieldKey='zscaleSamples' />
+            <ValidationField fieldKey='zscaleSamplesPerLine' />
+        </Stack>
     );
 }
 
@@ -256,29 +246,22 @@ function renderStandard() { return  getUpperAndLowerFields(); }
 
 function getUpperAndLowerFields() {
     return (
-        <div>
-            <div style={{ whiteSpace:'no-wrap'}}>
-                <ValidationField wrapperStyle={textPadding} inline={true}
-                                 labelWidth={LABEL_WIDTH}
-                                 fieldKey='lowerRange'
-                />
-                {getTypeMinField()}
-            </div>
-            <div style={{ whiteSpace:'no-wrap'}}>
-                <ValidationField  wrapperStyle={textPadding} labelWidth={LABEL_WIDTH}
-                                  inline={true}
-                                  fieldKey='upperRange'
-                />
-                {getTypeMaxField()}
-            </div>
-        </div>
+        <Stack spacing={1}>
+            <ValidationField endDecorator={getTypeMinField()}
+                             sx={{'& .MuiInput-root':{ 'paddingInlineEnd': 0, }}}
+                             fieldKey='lowerRange'
+            />
+            <ValidationField  endDecorator={getTypeMaxField()}
+                              sx={{'& .MuiInput-root':{ 'paddingInlineEnd': 0, }}}
+                              fieldKey='upperRange'
+            />
+        </Stack>
     );
 }
 
-function getStretchTypeField() {
-    return (
+const StretchTypeField= () => (
         <div style={{paddingBottom:12}}>
-            <ListBoxInputField fieldKey='algorithm' inline={true} labelWidth={67}
+            <ListBoxInputField fieldKey='algorithm'
                                options={ [
                                     {label: 'Linear',                 value: STRETCH_LINEAR},
                                     {label: 'Log',                    value: STRETCH_LOG},
@@ -292,7 +275,6 @@ function getStretchTypeField() {
             />
         </div>
     );
-}
 
 function renderGamma(fields) {
     const {zscale}= fields;
@@ -301,24 +283,30 @@ function renderGamma(fields) {
         <div>
             {range}
             <div style={{paddingTop:10}}/>
-            <ValidationField wrapperStyle={textPadding}  labelWidth={LABEL_WIDTH} fieldKey='gamma' />
+            <ValidationField fieldKey='gamma' />
         </div>
     );
 }
 
-const asinhSliderMarks = { 0: '0', 5: '5', 10: '10', 15: '15', 20: '20' };
+const asinhSliderMarks = [
+    {label: '0', value:0},
+    {label: '5', value:5},
+    {label: '10', value:10},
+    {label: '15', value:15},
+    {label: '20', value:20},
+];
 const ASINH_Q_MAX_SLIDE_VAL = 20;
 
-export function renderAsinH(fields, renderRange, replot, wrapperStyle={paddingBottom: 60}, qOnTop=false) {
-    const qvalue = get(fields, ['asinhQ', 'value'], Number.NaN);
+export function renderAsinH(fields, renderRange, replot, qOnTop=false) {
+    const qvalue = fields?.asinhQ?.value || 0;
     const label = `Q: ${Number.parseFloat(qvalue).toFixed(1)} `;
 
     return (
-        <div style={wrapperStyle}>
+        <Stack spacing={1}>
             {!qOnTop && renderRange}
-            <div style={{paddingTop: 5, paddingRight: 15, opacity: .4, textAlign: 'center'}}>
+            <Typography level='body-sm' sx={{pt:1, textAlign: 'center'}}>
                 Q=0 for linear stretch;<br/> increase Q to make brighter features visible
-            </div>
+            </Typography>
             <RangeSlider fieldKey='asinhQ'
                          min={0}
                          minStop={0}
@@ -328,13 +316,12 @@ export function renderAsinH(fields, renderRange, replot, wrapperStyle={paddingBo
                          step={0.1}
                          slideValue={qvalue}
                          label={label}
-                         labelWidth={60}
-                         wrapperStyle={{marginTop: 10, marginBottom: 20, marginRight: 15}}
+                         sx={{mt: 1, mb: 2, mr: 2}}
                          decimalDig={1}
                          onValueChange={replot}
             />
             {qOnTop && renderRange}
-        </div>
+        </Stack>
     );
 }
 

@@ -2,28 +2,22 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.firefly.server.rpc;
-/**
- * User: roby
- * Date: 2/8/12
- * Time: 1:27 PM
- */
 
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.server.ServCommand;
 import edu.caltech.ipac.firefly.server.ServerCommandAccess;
 import edu.caltech.ipac.firefly.server.SrvParam;
-import edu.caltech.ipac.firefly.server.servlets.CommandService;
-import edu.caltech.ipac.firefly.server.util.Logger;
+import edu.caltech.ipac.firefly.server.visualize.DirectStretchUtils.CompressType;
 import edu.caltech.ipac.firefly.server.visualize.VisJsonSerializer;
 import edu.caltech.ipac.firefly.server.visualize.VisServerOps;
-import edu.caltech.ipac.firefly.server.visualize.WebPlotResultSerializer;
 import edu.caltech.ipac.firefly.server.visualize.imagesources.ImageMasterData;
 import edu.caltech.ipac.firefly.visualize.Band;
 import edu.caltech.ipac.firefly.visualize.PlotState;
-import edu.caltech.ipac.firefly.visualize.StretchData;
 import edu.caltech.ipac.firefly.visualize.WebPlotRequest;
 import edu.caltech.ipac.firefly.visualize.WebPlotResult;
 import edu.caltech.ipac.visualize.plot.ImagePt;
+import edu.caltech.ipac.visualize.plot.PixelValue;
+import edu.caltech.ipac.visualize.plot.plotdata.FitsExtract;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
@@ -32,60 +26,28 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
  * @author Trey Roby
+ * Date: 2/8/12
  */
 public class VisServerCommands {
 
     public static class FileFluxCmdJson extends ServCommand {
         public String doCommand(SrvParam sp) throws IllegalArgumentException {
-
-
-            PlotState stateAry[]= sp.getStateAry();
-            PlotState state= stateAry[0];
-            ImagePt pt = sp.getRequiredImagePt("pt");
-            String[] res= VisServerOps.getFlux(stateAry,pt);
-
-
-            JSONObject obj= new JSONObject();
-            obj.put("JSON", true);
-            obj.put("success", true);
-
-            JSONObject data= new JSONObject();
-            Band[] bands = state.getBands();
-            int resultCnt=0;
-            for (;resultCnt<res.length && resultCnt<bands.length; resultCnt++){
-                data.put(bands[resultCnt].toString(), res[resultCnt]);
-            }
-
-
-            if (stateAry.length>1) {
-                for(int i=1; (i<stateAry.length);i++) {
-                    data.put("overlay-"+(i-1), res[resultCnt++]);
-                }
-            }
-            JSONArray wrapperAry= new JSONArray();
-            obj.put("data", data);
-            wrapperAry.add(obj);
-
-            return wrapperAry.toJSONString();
+            PlotState[] stateAry= sp.getStateAry();
+            List<PixelValue.Result> res= VisServerOps.getFlux(stateAry,sp.getRequiredImagePt("pt"));
+            return VisJsonSerializer.createPixelResultJson(res,stateAry[0].getBands(),stateAry.length);
         }
 
     }
 
-
-
     public static class GetWebPlotCmd extends ServCommand {
 
         public String doCommand(SrvParam sp) throws IllegalArgumentException {
-
-
             WebPlotRequest red  =     sp.getOptionalWebPlotRequest(ServerParams.RED_REQUEST);
             WebPlotRequest green=     sp.getOptionalWebPlotRequest(ServerParams.GREEN_REQUEST);
             WebPlotRequest blue =     sp.getOptionalWebPlotRequest(ServerParams.BLUE_REQUEST);
@@ -93,86 +55,47 @@ public class VisServerCommands {
 
             boolean threeColor;
 
-            if (nobandReq != null) {
-                if (CommandService.DEBUG) {
-                    Logger.debug("noband req: " + (nobandReq!=null ? nobandReq.toString() : "null"));
-                }
-                threeColor = false;
-            } else if (red != null || green != null || blue != null) {
-                threeColor = true;
-            } else {
-                throw new IllegalArgumentException("No request specified");
-            }
+            if (nobandReq != null) threeColor= false;
+            else if (red != null || green != null || blue != null) threeColor = true;
+            else throw new IllegalArgumentException("No request specified");
+
 
             WebPlotResult result = threeColor ? VisServerOps.create3ColorPlot(red, green, blue) :
                                                 VisServerOps.createPlot(nobandReq);
-
-            return WebPlotResultSerializer.createJson(result);
+            return VisJsonSerializer.createResultJson(result);
         }
     }
 
     public static class GetWebPlotGroupCmd extends ServCommand {
 
         public String doCommand(SrvParam sp) throws IllegalArgumentException {
-
-
-            String key = sp.getRequired(ServerParams.PROGRESS_KEY);
-            List<WebPlotRequest> reqList= sp.getRequestList();
-            WebPlotResult resultAry[] = VisServerOps.createPlotGroup(reqList,key);
-
-            return WebPlotResultSerializer.createJson(resultAry,key);
+            String requestKey = sp.getRequired(ServerParams.PROGRESS_KEY);
+            List<WebPlotResult> resultList= VisServerOps.createPlotGroup(sp.getRequestList(),requestKey);
+            return VisJsonSerializer.createPlotGroupResultJson(resultList,requestKey);
         }
     }
 
-    public static class ZoomCmd extends ServCommand {
-
-        public String doCommand(SrvParam sp) throws IllegalArgumentException {
-
-
-            PlotState stateAry[]= sp.getStateAry();
-            float level= sp.getRequiredFloat(ServerParams.LEVEL);
-            boolean isFull = sp.getOptionalBoolean(ServerParams.FULL_SCREEN, false);
-
-            WebPlotResult result = VisServerOps.setZoomLevel(stateAry, level, isFull);
-            return WebPlotResultSerializer.createJson(result);
-        }
-    }
-
-
-
-    public static class FloatAryCmd extends ServerCommandAccess.HttpCommand {
-
-        public void processRequest(HttpServletRequest req, HttpServletResponse res, SrvParam sp) throws Exception {
-
-            PlotState state= sp.getState();
-            Band band = Band.parse(sp.getRequired(ServerParams.BAND));
-            float [] float1D= VisServerOps.getFloatDataArray(state,band);
-            res.setContentType("application/octet-stream");
-
-
-//            ServletOutputStream out = res.getOutputStream();
-//            DataOutputStream dos= new DataOutputStream(new BufferedOutputStream(out, (int)FileUtil.MEG));
-//            int len= float1D.length;
-//            for(int i=0; (i<len); i++) dos.writeFloat(float1D[i]);
-////            for(float f: float1D) dos.writeFloat(f);
+// keep around for now but will probably not use
+//    public static class FloatAryCmd extends ServerCommandAccess.HttpCommand {
 //
-//            dos.close();
-//            out.close();
-
-
-            ByteBuffer byteBuf = ByteBuffer.allocateDirect(float1D.length * Float.BYTES); //4 bytes per float
-            byteBuf.order(ByteOrder.nativeOrder());
-            byteBuf.order(ByteOrder.LITTLE_ENDIAN);
-            FloatBuffer buffer = byteBuf.asFloatBuffer();
-            buffer.put(float1D);
-            buffer.position(0);
-            WritableByteChannel chan= Channels.newChannel(res.getOutputStream());
-            chan.write(byteBuf);
-            chan.close();
-
-
-        }
-    }
+//        public void processRequest(HttpServletRequest req, HttpServletResponse res, SrvParam sp) throws Exception {
+//
+//            PlotState state= sp.getState();
+//            Band band = Band.parse(sp.getRequired(ServerParams.BAND));
+//            float [] float1D= VisServerOps.getFloatDataArray(state,band);
+//            res.setContentType("application/octet-stream");
+//
+//            ByteBuffer byteBuf = ByteBuffer.allocateDirect(float1D.length * Float.BYTES); //4 bytes per float
+//            byteBuf.order(ByteOrder.nativeOrder());
+//            byteBuf.order(ByteOrder.LITTLE_ENDIAN);
+//            FloatBuffer buffer = byteBuf.asFloatBuffer();
+//            buffer.put(float1D);
+//            buffer.position(0);
+//            WritableByteChannel chan= Channels.newChannel(res.getOutputStream());
+//            chan.write(byteBuf);
+//            chan.close();
+//        }
+//    }
 
     public static class ByteAryCmd extends ServerCommandAccess.HttpCommand {
 
@@ -181,11 +104,19 @@ public class VisServerCommands {
             PlotState state= sp.getState();
             boolean mask= sp.getOptionalBoolean(ServerParams.MASK_DATA,false);
             int maskBits= sp.getOptionalInt(ServerParams.MASK_BITS,0);
-            int tileSize = sp.getRequiredInt(ServerParams.TILE_SIZE);
-            byte [] byte1D= VisServerOps.getByteStretchArray(state,tileSize,mask,maskBits);
-            res.setContentType("application/octet-stream");
+            int tileSize= sp.getRequiredInt(ServerParams.TILE_SIZE);
+            String compress= sp.getOptional(ServerParams.DATA_COMPRESS, "FULL");
+            CompressType ct;
+            try {
+                ct = CompressType.valueOf(compress.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                ct= CompressType.FULL;
+            }
 
-            ByteBuffer byteBuf = ByteBuffer.wrap(byte1D);
+            byte[] data = VisServerOps.getByteStretchArray(state,tileSize,mask,maskBits,ct);
+
+            res.setContentType("application/octet-stream");
+            ByteBuffer byteBuf = ByteBuffer.wrap(data);
             byteBuf.position(0);
             WritableByteChannel chan= Channels.newChannel(res.getOutputStream());
             chan.write(byteBuf);
@@ -194,44 +125,59 @@ public class VisServerCommands {
     }
 
 
-    public static class StretchCmd extends ServCommand {
 
-        public String doCommand(SrvParam sp) throws IllegalArgumentException {
+    public static class ExtractionCmd extends ServerCommandAccess.HttpCommand {
+        public void processRequest(HttpServletRequest req, HttpServletResponse res, SrvParam sp) throws Exception {
 
             PlotState state= sp.getState();
-            List<StretchData> list = new ArrayList<>(3);
+            String exType= sp.getRequired(ServerParams.EXTRACTION_TYPE);
+            boolean useFloat = sp.getOptionalInt(ServerParams.EXTRACTION_FLOAT_SIZE,64)==32;
+            int ptSize= sp.getOptionalInt(ServerParams.POINT_SIZE,1);
+            int ptSizeX= sp.getOptionalInt(ServerParams.POINT_SIZE_X,1);
+            int ptSizeY= sp.getOptionalInt(ServerParams.POINT_SIZE_Y,1);
+            int hduNum= sp.getRequiredInt(ServerParams.HDU_NUM);
+            FitsExtract.CombineType ct= Enum.valueOf(FitsExtract.CombineType.class,sp.getOptional(ServerParams.COMBINE_OP,"AVG"));
 
-            StretchData sd;
-            sd= VisJsonSerializer.deserializeStretchDataFromString(
-                    sp.getOptional(ServerParams.STRETCH_DATA + "0"));
-            if (sd != null) list.add(sd);
-            sd= VisJsonSerializer.deserializeStretchDataFromString(
-                    sp.getOptional(ServerParams.STRETCH_DATA + "1"));
-            if (sd != null) list.add(sd);
-            sd= VisJsonSerializer.deserializeStretchDataFromString(
-                    sp.getOptional(ServerParams.STRETCH_DATA + "2"));
-            if (sd != null) list.add(sd);
+            List<Number> extractList= switch (exType) {
+                case "z-axis" ->
+                    VisServerOps.getZAxisAry(state,
+                            sp.getRequiredImagePt(ServerParams.PT),
+                            hduNum, ptSize, ct);
 
-            StretchData sdAry[] = list.toArray(new StretchData[list.size()]);
+                case "line" ->
+                    VisServerOps.getLineDataAry(state,
+                            sp.getRequiredImagePt(ServerParams.PT),
+                            sp.getRequiredImagePt(ServerParams.PT2),
+                            sp.getRequiredInt(ServerParams.PLANE),
+                            hduNum, ptSize, ct);
 
+                case "points" ->
+                        VisServerOps.getPointDataAry(state,
+                                sp.getRequiredImagePtAry(ServerParams.PTARY),
+                                sp.getRequiredInt(ServerParams.PLANE),
+                                hduNum, ptSizeX, ptSizeY, ct);
+                default -> throw new IllegalArgumentException(ServerParams.EXTRACTION_TYPE + " is not supported");
+            };
 
-            if (sdAry.length == 0) {
-                throw new IllegalArgumentException("missing parameters");
+            res.setContentType("application/octet-stream");
+            int valueSize= useFloat ? Float.BYTES : Double.BYTES; //4 bytes per float, 8 bytes per double
+            ByteBuffer byteBuf = ByteBuffer.allocateDirect(extractList.size() * valueSize);
+            byteBuf.order(ByteOrder.nativeOrder());
+            byteBuf.order(ByteOrder.LITTLE_ENDIAN);
+            if (useFloat) {
+                int loc=0;
+                float [] floatExtractAry= new float[extractList.size()];
+                for(Number n : extractList) floatExtractAry[loc++]= n.floatValue();
+                byteBuf.asFloatBuffer().put(floatExtractAry);
             }
-
-            WebPlotResult result = VisServerOps.recomputeStretch(state, sdAry);
-            return WebPlotResultSerializer.createJson(result);
-        }
-    }
-
-    public static class ChangeColor extends ServCommand {
-
-        public String doCommand(SrvParam sp) throws IllegalArgumentException {
-            
-            PlotState state= sp.getState();
-            int idx= sp.getRequiredInt(ServerParams.COLOR_IDX);
-            WebPlotResult result = VisServerOps.changeColor(state, idx);
-            return WebPlotResultSerializer.createJson(result);
+            else {
+                double [] doubleExtractAry= extractList.stream().mapToDouble(Number::doubleValue).toArray();
+                byteBuf.asDoubleBuffer().put(doubleExtractAry);
+            }
+            byteBuf.position(0);
+            WritableByteChannel chan= Channels.newChannel(res.getOutputStream());
+            chan.write(byteBuf);
+            chan.close();
         }
     }
 
@@ -245,12 +191,12 @@ public class VisServerCommands {
             if (sp.contains(ServerParams.STATE)) {
                 PlotState state= sp.getState();
                 WebPlotResult result = VisServerOps.crop(state, pt1, pt2, cropMultiAll);
-                return WebPlotResultSerializer.createJson(result);
+                return VisJsonSerializer.createResultJson(result);
             }
             else {
-                PlotState stateAry[]= sp.getStateAry();
+                PlotState[] stateAry= sp.getStateAry();
                 WebPlotResult result = VisServerOps.crop(stateAry, pt1, pt2, cropMultiAll);
-                return WebPlotResultSerializer.createJson(result);
+                return VisJsonSerializer.createResultJson(result);
             }
         }
     }
@@ -272,7 +218,7 @@ public class VisServerCommands {
             double rAngle = Math.toRadians(Double.parseDouble(rotation));
 
             WebPlotResult result = VisServerOps.getAreaStatistics(state, pt1, pt2, pt3, pt4, shape, rAngle);
-            return WebPlotResultSerializer.createJson(result);
+            return VisJsonSerializer.createResultJson(result);
         }
     }
 
@@ -280,14 +226,10 @@ public class VisServerCommands {
 
 
     public static class ColorHistogram extends ServCommand {
-
         public String doCommand(SrvParam sp) throws IllegalArgumentException {
-            
-            PlotState state= sp.getState();
             Band band= Band.parse(sp.getRequired(ServerParams.BAND));
-            WebPlotResult result = VisServerOps.getColorHistogram(state, band);
-
-            return WebPlotResultSerializer.createJson(result);
+            WebPlotResult result = VisServerOps.getColorHistogram(sp.getState(), band);
+            return VisJsonSerializer.createResultJson(result);
         }
     }
 
@@ -307,7 +249,7 @@ public class VisServerCommands {
             } else {
                 result = VisServerOps.getDS9Region(fileKey);
             }
-            return WebPlotResultSerializer.createJson(result);
+            return VisJsonSerializer.createResultJson(result);
         }
     }
 
@@ -316,7 +258,7 @@ public class VisServerCommands {
         public String doCommand(SrvParam sp) throws IllegalArgumentException {
             String data = sp.getRequired(ServerParams.REGION_DATA);
             WebPlotResult result= VisServerOps.saveDS9RegionFile(data);
-            return WebPlotResultSerializer.createJson(result);
+            return VisJsonSerializer.createResultJson(result);
         }
     }
 
@@ -325,24 +267,13 @@ public class VisServerCommands {
         public String doCommand(SrvParam sp) throws IllegalArgumentException {
             String imageSources = sp.getRequired(ServerParams.IMAGE_SOURCES);
             String sortOrder = sp.getOptional(ServerParams.SORT_ORDER);
-            String imageSourcesAry[] = imageSources.split(",");
-            String sortOrderAry[]= (sortOrder!=null) ? sortOrder.split(",") : null;
+            String[] imageSourcesAry = imageSources.split(",");
+            String[] sortOrderAry= (sortOrder!=null) ? sortOrder.split(",") : null;
             JSONArray result= ImageMasterData.getJson(imageSourcesAry, sortOrderAry);
             JSONObject obj= new JSONObject();
-            if (result!=null) {
-                obj.put("success", true);
-                obj.put("data", result);
-            }
-            else {
-                obj.put("success", false);
-                obj.put("data", null);
-                obj.put("message", "Could not generate data");
-            }
-
+            obj.put("success", true);
+            obj.put("data", result);
             return obj.toJSONString();
         }
     }
-
-
 }
-

@@ -8,12 +8,14 @@ import {download} from '../util/fetch';
 
 export const DATA_PRODUCTS_KEY= 'dataProducts';
 const PREFIX= 'DataProductCntlr';
+export const DATA_PRODUCT_ID_PREFIX= 'DPC';
 export const INIT_DATA_PRODUCTS= `${PREFIX}.InitDataProducts`;
 export const UPDATE_DATA_PRODUCTS= `${PREFIX}.UpdateDataProducts`;
 export const UPDATE_ACTIVE_KEY= `${PREFIX}.UpdateActiveKey`;
 export const ACTIVATE_MENU_ITEM= `${PREFIX}.ActivateMenuItem`;
 export const ACTIVATE_FILE_MENU_ITEM= `${PREFIX}.ActivateFileMenuItem`;
 export const SET_SEARCH_PARAMS= `${PREFIX}.SetSearchParams`;
+export const DEFAULT_DATA_PRODUCTS_COMPONENT_KEY= `${PREFIX}.defaultComponentDataKey`;
 
 export function dataProductRoot() { return flux.getState()[DATA_PRODUCTS_KEY]; }
 
@@ -104,9 +106,9 @@ function initState() {
             activeFileMenuKeys: {},
             activeMenuKeys: {},
             activateParams: {
-                imageViewerId:'DPC-image-0',
-                tableGroupViewerId:'DPC-table-0',
-                chartViewerId:'DPC-chart-0'
+                imageViewerId: DATA_PRODUCT_ID_PREFIX+'-image-0',
+                tableGroupViewerId: DATA_PRODUCT_ID_PREFIX+'-table-0',
+                chartViewerId: DATA_PRODUCT_ID_PREFIX+'-chart-0'
             },
             serviceParamsAry: []
         }
@@ -138,6 +140,7 @@ export function dispatchUpdateDataProducts(dpId, dataProducts) {
 /**
  * Update the activeMenuKeys and/or the one or more of the activeFileMenuKey's
  * @param {Object} p
+ * @param  p.dpId - data products id
  * @param {Object} [p.activeMenuKeyChanges] - change the activeMenuItemKey
  *     this is a map of a cacheKey and the related activeFileMenuKey
  * @param {Object} [p.activeFileMenuKeyChanges] - changes to the activeFileMenuKey's,
@@ -192,6 +195,7 @@ export const getActiveFileMenuKeyByKey= (dpId,key) => createOrFind(dataProductRo
 export const getActiveMenuKey= (dpId,activeMenuLookupKey) =>
     createOrFind(dataProductRoot(),dpId).activeMenuKeys[activeMenuLookupKey];
 
+export const getCurrentActiveKeyID= (dpId) => createOrFind(dataProductRoot(),dpId).currentActiveKeyID ?? '';
 
 export function getSearchParams(serviceParamsAry,activeMenuLookupKey,menuKey)  {
     return serviceParamsAry?.find( (obj) => obj.activeMenuLookupKey===activeMenuLookupKey && obj.menuKey===menuKey)?.params;
@@ -241,9 +245,9 @@ const makeNewDPData= (dpId) => {
         activeFileMenuKeys: {},
         activeMenuKeys: {},
         activateParams: {
-            imageViewerId:`DPC-image-${activateCnt}`,
-            tableGroupViewerId:`DPC-table-${activateCnt}`,
-            chartViewerId:`DPC-chart-${activateCnt}`,
+            imageViewerId:`${DATA_PRODUCT_ID_PREFIX}-image-${activateCnt}`,
+            tableGroupViewerId:`${DATA_PRODUCT_ID_PREFIX}-table-${activateCnt}`,
+            chartViewerId:`${DATA_PRODUCT_ID_PREFIX}-chart-${activateCnt}`,
             dpId,
         },
         serviceParamsAry: []
@@ -263,7 +267,7 @@ function setSearchParams(state,action) {
             obj.menuKey===menuKey ? {dpId,activeMenuLookupKey,menuKey,params} : obj);
     }
     else {
-        serviceParamsAry= [...dpData.serviceParamsAry, {dpId,activeMenuLookupKey,menuKey,params}]
+        serviceParamsAry= [...dpData.serviceParamsAry, {dpId,activeMenuLookupKey,menuKey,params}];
     }
     return insertOrReplace(state,{...dpData,serviceParamsAry});
 }
@@ -300,7 +304,10 @@ function updateDataProducts(state,action) {
 function updateActiveKey(state,action) {
     const {dpId, activeMenuKeyChanges, activeFileMenuKeyChanges}= action.payload;
     const dpData= createOrFindAndCopy(state,dpId);
-    if (isObject(activeMenuKeyChanges)) dpData.activeMenuKeys= {...dpData.activeMenuKeys,...activeMenuKeyChanges};
+    if (isObject(activeMenuKeyChanges)) {
+        dpData.activeMenuKeys= {...dpData.activeMenuKeys,...activeMenuKeyChanges};
+        dpData.currentActiveKeyID= Object.keys(activeMenuKeyChanges)?.[0];
+    }
     if (isObject(activeFileMenuKeyChanges)) dpData.activeFileMenuKeys= {...dpData.activeFileMenuKeys,...activeFileMenuKeyChanges};
     return insertOrReplace(state,dpData);
 }
@@ -331,10 +338,10 @@ function activateMenuItem(state,action) {
     }
     dpData.activeMenuKeys= {...activeMenuKeys, [activeMenuLookupKey]:menuKey};
 
-    const {activate,imageActivate, url, serDefParams, displayType, allowsInput, name, originalTitle}= aMenuItem;
+    const {displayType}= aMenuItem;
 
     const requiresActivate= ACTIVATE_REQUIRED.includes(displayType);
-    if (requiresActivate && !activate) {
+    if (requiresActivate && !aMenuItem.activate) {
         dpData.dataProducts= {
             displayType: 'message', 'message': `Data Product (${displayType}) not supported (activate required)`,
             menu, menuKey, fileMenu, activeMenuLookupKey
@@ -346,20 +353,21 @@ function activateMenuItem(state,action) {
             case DPtypes.TABLE:
             case DPtypes.CHART:
             case DPtypes.CHOICE_CTI:
-                dpData.dataProducts= {displayType, name, menuKey, menu, fileMenu, activeMenuKey:menuKey, activeMenuLookupKey, activate, imageActivate};
+                dpData.dataProducts= {...aMenuItem, menuKey, menu, fileMenu, activeMenuKey:menuKey, activeMenuLookupKey};
                 break;
             case DPtypes.PNG:
-                dpData.dataProducts= {displayType, name, url, menuKey, menu, activeMenuKey:menuKey, activeMenuLookupKey};
+                dpData.dataProducts= {...aMenuItem, menuKey, menu, activeMenuKey:menuKey, activeMenuLookupKey};
                 break;
             case DPtypes.DOWNLOAD:
-                dpData.dataProducts= {displayType, name, url, menuKey, menu, activeMenuKey:menuKey, activeMenuLookupKey};
+                dpData.dataProducts= {...aMenuItem, menuKey, menu, activeMenuKey:menuKey, activeMenuLookupKey};
                 break;
             case DPtypes.DOWNLOAD_MENU_ITEM:
-                dpData.dataProducts= {displayType, name, url, menuKey, menu, activeMenuKey:menuKey, singleDownload: true, activeMenuLookupKey};
+                dpData.dataProducts= {...aMenuItem, menuKey, menu, activeMenuKey:menuKey, singleDownload: true, activeMenuLookupKey};
                 break;
             case DPtypes.ANALYZE:
-                dpData.dataProducts= {displayType, name, menuKey, menu, activeMenuKey:menuKey, activate,
-                                      allowsInput, serDefParams, activeMenuLookupKey, originalTitle};
+                dpData.dataProducts= {...aMenuItem, menuKey, menu, activeMenuKey:menuKey, activeMenuLookupKey};
+            case DPtypes.MESSAGE:
+                dpData.dataProducts= {...aMenuItem, menuKey, menu, activeMenuKey:menuKey, activeMenuLookupKey};
         }
 
     }
@@ -389,8 +397,7 @@ export function changeActiveFileMenuItem(state,action) {
     const actIdx= fileMenu.menu.findIndex( (m) => m.menuKey===newActiveFileMenuKey);
     const fileMenuItem= fileMenu.menu[actIdx<0? fileMenu.initialDefaultIndex: actIdx];
 
-    const {activate,imageActivate,displayType,serDefParams, message,chartTableDefOption,
-        analysisActivateFunc, originalTitle, noProductsAvailable}= fileMenuItem;
+    const {activate,displayType}= fileMenuItem;
 
     dpData.activeFileMenuKeys={...activeFileMenuKeys, [fileMenu.activeItemLookupKey]:fileMenuItem.menuKey};
 
@@ -404,8 +411,8 @@ export function changeActiveFileMenuItem(state,action) {
     }
 
     const newFileMenu= {...fileMenu, activeFileMenuKey:newActiveFileMenuKey};
-    const newDisplayProduct= { ...selectedMenuDataProduct, displayType, chartTableDefOption, activate, imageActivate, message,
-        fileMenu:newFileMenu, activeMenuKey:menuKey, serDefParams, analysisActivateFunc, originalTitle, noProductsAvailable};
+    const newDisplayProduct= { ...selectedMenuDataProduct, ...fileMenuItem,
+        fileMenu:newFileMenu, activeMenuKey:menuKey, menuKey};
     const newMenu= menu && menu.map( (menuItem) => (menuItem.menuKey!==menuKey) ? menuItem : newDisplayProduct );
     dpData.dataProducts= {...newDisplayProduct, menu:newMenu};
     return insertOrReplace(state,dpData);

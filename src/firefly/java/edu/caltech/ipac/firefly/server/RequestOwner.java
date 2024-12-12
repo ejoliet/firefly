@@ -96,6 +96,14 @@ public class RequestOwner implements Cloneable {
         return wsManager;
     }
 
+    /**
+     * Normally, this is not used, unless for testing or similar cases where you need to change the default behavior.
+     * @param userKey a user key string
+     */
+    public void setUserKey(String userKey) {
+        this.userKey = userKey;
+    }
+
     public String getUserKey() {
         if (userKey == null) {
             userKey = requestAgent == null ? null : requestAgent.getCookieVal(USER_KEY);
@@ -193,6 +201,17 @@ public class RequestOwner implements Cloneable {
         ro.eventConnID = eventConnID;
 
         return ro;
+    }
+
+    public void setTo(RequestOwner ro) {
+        requestAgent = ro.requestAgent;
+        startTime = ro.startTime;
+        workingDir = ro.workingDir;
+        attributes = ro.attributes;
+        eventChannel = ro.eventChannel;
+        eventConnID = ro.eventConnID;
+        userKey = ro.userKey;
+        wsManager = ro.wsManager;
     }
 
     public String getBaseUrl() {

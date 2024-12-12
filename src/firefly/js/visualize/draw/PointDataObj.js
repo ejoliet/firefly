@@ -2,17 +2,17 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {computeScreenDistance} from '../VisUtil';
 import DrawObj from './DrawObj.js';
 import DrawUtil from './DrawUtil.js';
 import {TextLocation, DEFAULT_FONT_SIZE} from './DrawingDef.js';
 import Point, {makeOffsetPt, makeScreenPt} from '../Point.js';
-import CsysConverter, {CCUtil} from '../CsysConverter.js';
+import CsysConverter from '../CsysConverter.js';
 import {RegionType, regionPropsList} from '../region/Region.js';
 import {startRegionDes, setRegionPropertyDes} from '../region/RegionDescription.js';
-import ShapeDataObj, {fontHeight, drawText, translateTo, rotateAround, getPVRotateAngle} from './ShapeDataObj.js';
+import ShapeDataObj, {drawText, translateTo, rotateAround, getPVRotateAngle} from './ShapeDataObj.js';
 import {isWithinPolygon, makeShapeHighlightRenderOptions, DELTA, defaultDashline} from './ShapeHighlight.js';
 import { handleTextFromRegion } from './ShapeToRegion.js';
-import VisUtil from '../VisUtil.js';
 import {isNil, isEmpty, has, set, get, cloneDeep} from 'lodash';
 import {defaultRegionSelectColor, defaultRegionSelectStyle} from '../DrawLayerCntlr.js';
 import {DrawSymbol} from './DrawSymbol.js';
@@ -25,22 +25,24 @@ const DEFAULT_SYMBOL = DrawSymbol.X;
 
 /**
  * drawObj for point, optional: textLoc
- * @param {{x:name,y:name,type:string}} pt
+ * @param {Point|WorldPt} pt
  * @param {number} [size]
  * @param {Enum} [symbol]
  * @param {string} [text]
+ * @param {Object} [renderOptions]
  * @return {object}
  */
-export function make(pt,size,symbol,text) {
+export function make(pt,size,symbol,text, renderOptions) {
     if (!pt) return null;
 
-    var obj= DrawObj.makeDrawObj();
+    const obj= DrawObj.makeDrawObj();
     obj.type= POINT_DATA_OBJ;
     obj.pt= pt;
 
     if (size) obj.size= size;
     if (symbol) obj.symbol= symbol;
     if (text) obj.text= text;
+    if (renderOptions) obj.renderOptions= renderOptions;
     return obj;
 }
 
@@ -194,7 +196,7 @@ function drawPt(ctx, pt, plot, drawObj, drawParams, renderOptions, vpPtM, onlyAd
         else {
             vpPt=plot.getScreenCoords(pt);
         }
-        if (plot.pointOnDisplay(vpPt)) {
+        if (plot.pointInView(vpPt)) {
             drawXY(ctx,vpPt, plot, drawObj, drawParams, renderOptions, onlyAddToPath);
         }
     }
@@ -256,18 +258,20 @@ export function getPointDataobjArea(drawObj, cc) {
 }
 /**
  * calculate the text location based on text location, offset, font size, point size and point symbol.
+ * @param {CanvasRenderingContext2D} ctx
  * @param drawObj
  * @param plot
  * @param textLoc
- * @param fontSize
+ * @param text
  * @returns {*}
  */
-function makeTextLocationPoint(drawObj, plot, textLoc, fontSize) {
+function makeTextLocationPoint(ctx, drawObj, plot, text, textLoc) {
     var area = getPointDataobjArea(drawObj, plot);   // in screen pixel
     if (!area) return null;
 
     var {centerPt, width, height} = area;
-    var fHeight = fontHeight(fontSize);
+    const {width:fWidth, fontBoundingBoxAscent, fontBoundingBoxDescent}= ctx.measureText(text);
+    var fHeight = fontBoundingBoxAscent+fontBoundingBoxDescent;
     var opt;
 
     switch(textLoc) {
@@ -282,6 +286,9 @@ function makeTextLocationPoint(drawObj, plot, textLoc, fontSize) {
             break;
         case TextLocation.REGION_SW:
             opt = makeOffsetPt(width/2, height/2 + fHeight);
+            break;
+        case TextLocation.CENTER:
+            opt = makeOffsetPt(-fWidth/2, -fHeight/2);
             break;
         default:
             opt = makeOffsetPt(0, 0);
@@ -308,7 +315,7 @@ function drawXY(ctx, pt, plot, drawObj, drawParams,renderOptions, onlyAddToPath)
     let vpt;
 
     if (textLoc) {
-        vpt = plot.getDeviceCoords(makeTextLocationPoint(drawObj, plot, textLoc, fontSize));
+        vpt = plot.getDeviceCoords(makeTextLocationPoint(ctx,drawObj, plot, text, textLoc));
     } else {
         vpt = plot.getDeviceCoords(pt);
     }
@@ -512,7 +519,7 @@ export function isInPointDataobj(drawObj, cc, pt) {
                                   makeScreenPt(centerPt.x + w/2, centerPt.y + h/2),
                                   makeScreenPt(centerPt.x - w/2, centerPt.y + h/2)], cc);
     if (inside) {
-        dist = VisUtil.computeScreenDistance(sPt.x, sPt.y, centerPt.x, centerPt.y);
+        dist = computeScreenDistance(sPt.x, sPt.y, centerPt.x, centerPt.y);
     }
 
     return {inside, dist};

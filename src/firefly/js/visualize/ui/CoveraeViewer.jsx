@@ -1,21 +1,24 @@
 /*
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
+import {Stack, Typography} from '@mui/joy';
 import React, {useEffect,useContext} from 'react';
 import {get,once} from 'lodash';
 import PropTypes from 'prop-types';
+import {hasCoverageData} from '../../voAnalyzer/TableAnalysis.js';
+import {visRoot} from '../ImagePlotCntlr';
 import {MultiImageViewer} from './MultiImageViewer';
 import {
     dispatchAddViewer, dispatchViewerUnmounted, getMultiViewRoot, getViewer, IMAGE, NewPlotMode, SINGLE,
 } from '../MultiViewCntlr';
-import {COVERAGE_WATCH_CID, startCoverageWatcher, COVERAGE_FAIL} from '../saga/CoverageWatcher.js';
+import {
+    COVERAGE_WATCH_CID, startCoverageWatcher, COVERAGE_FAIL, COVERAGE_WAITING_MSG
+} from '../saga/CoverageWatcher.js';
 import {MultiViewStandardToolbar} from './MultiViewStandardToolbar';
-import {getActivePlotView} from '../PlotViewUtil';
-import {visRoot} from '../ImagePlotCntlr';
+import {DEFAULT_COVERAGE_VIEWER_ID, getActivePlotView} from '../PlotViewUtil';
 import {RenderTreeIdCtx} from '../../ui/RenderTreeIdCtx.jsx';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {getActiveTableId, getBooleanMetaEntry, getTblById, getTblIdsByGroup} from '../../tables/TableUtil.js';
-import {hasCoverageData} from '../../util/VOAnalyzer.js';
 import {getAppOptions} from '../../core/AppDataCntlr.js';
 import {MetaConst} from '../../data/MetaConst.js';
 import {getComponentState} from '../../core/ComponentCntlr.js';
@@ -28,21 +31,30 @@ const startWatcher= once((viewerId) => {
     },1);
 });
 
-const isCoverageFail= (covState,tbl_id) => covState.find( (e) => e.tbl_id===tbl_id)?.status===COVERAGE_FAIL;
+const isCoverageFail= (covState,tbl_id) => covState.find((e) => e.tbl_id === tbl_id)?.status === COVERAGE_FAIL;
+
 
 const getActiveOrFirstTblId= () => getActiveTableId() || getTblIdsByGroup()[0];
 
+const anyTblHasCoverage= (covState) =>
+    getTblIdsByGroup().some( (tbl_id) => hasCoverageData(tbl_id) && !isCoverageFail(covState,tbl_id));
 
-export function CoverageViewer({viewerId='coverageImages',insideFlex=true, noCovMessage='No Coverage Available',
-                                workingMessage='Working...', noCovStyle={}}) {
+function makeNovCovMsg(covState, baseNoCovMsg, tbl_id) {
+    const titleStr= getTblById(tbl_id)?.request?.META_INFO?.title;
+    return (anyTblHasCoverage(covState) && titleStr) ?
+        `${baseNoCovMsg} for ${titleStr}; other tables have coverage` : baseNoCovMsg;
+}
+
+
+export function CoverageViewer({viewerId=DEFAULT_COVERAGE_VIEWER_ID,noCovMessage='No coverage available',
+                                workingMessage='Working...'}) {
 
     startWatcher(viewerId);
-    const [pv,tbl_id,isFetching,covState] = useStoreConnector(
-        () => getActivePlotView(visRoot()),
-        () => getActiveOrFirstTblId(),
-        () => getTblById(getActiveOrFirstTblId())?.isFetching ?? false,
-        () => getComponentState(COVERAGE_WATCH_CID,[]));
-
+    const pv        = useStoreConnector(() => getActivePlotView(visRoot())); // do not remove, forces a rerender
+    const tbl_id    = useStoreConnector(() => getActiveOrFirstTblId());
+    const isFetching= useStoreConnector(() => getTblById(getActiveOrFirstTblId())?.isFetching ?? false);
+    const covState  = useStoreConnector(() => getComponentState(COVERAGE_WATCH_CID,[]));
+    const {msg:covWorkingMsg}= useStoreConnector(() => getComponentState(COVERAGE_WAITING_MSG,{msg:workingMessage}));
 
     useEffect(() => {
         dispatchAddViewer(viewerId, NewPlotMode.replace_only, IMAGE, true, renderTreeId, SINGLE);
@@ -59,30 +71,34 @@ export function CoverageViewer({viewerId='coverageImages',insideFlex=true, noCov
 
     if (hasPlots && (tblHasCoverage || forceShow)) {
         return (
-            <div style={{display:'flex', flexDirection:'column', width:'100%', background:'rgb(200, 200, 200)'}}>
+            <Stack height={1} width={1}>
                 <MultiImageViewer viewerId={viewerId}
-                                  insideFlex={insideFlex}
+                                  insideFlex={true}
                                   canReceiveNewPlots={NewPlotMode.replace_only.key}
                                   controlViewerMounting={false}
                                   Toolbar={MultiViewStandardToolbar}/>
-            </div>
+            </Stack>
         );
     }
     else {
-        let msg= noCovMessage;
+        let msg;
         if (tblHasCoverage || isFetching) {
-            msg= isCoverageFail(covState,tbl_id) ? noCovMessage : workingMessage;
+            msg= isCoverageFail(covState,tbl_id) ? makeNovCovMsg(covState,noCovMessage,tbl_id) : covWorkingMsg;
         }
         else if (forceShow) {
-            msg= getTblIdsByGroup().some( (tbl_id) => hasCoverageData(tbl_id) && !isCoverageFail(covState,tbl_id))
-                ? workingMessage : noCovMessage;
+            msg= anyTblHasCoverage(covState) ? covWorkingMsg : makeNovCovMsg(covState,noCovMessage,tbl_id);
+        }
+        else {
+            msg= makeNovCovMsg(covState,noCovMessage,tbl_id);
         }
         return (
-            <div style={{...{background: '#c8c8c8', paddingTop:35, width:'100%',textAlign:'center',fontSize:'14pt'},...noCovStyle}}>
-                {msg}</div>
+            <Typography level='body-lg' sx={{...{pt:4.5, width:'100%',textAlign:'center',fontSize:'14pt'},}}>
+                {msg}
+            </Typography>
         );
     }
 }
+
 
 
 CoverageViewer.propTypes= {
@@ -90,4 +106,5 @@ CoverageViewer.propTypes= {
     noCovMessage: PropTypes.string,
     workingMessage: PropTypes.string,
     insideFlex: PropTypes.bool,
+    noCovStyle: PropTypes.object
 };

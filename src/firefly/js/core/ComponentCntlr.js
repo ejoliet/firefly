@@ -3,7 +3,7 @@
  */
 
 import {flux} from './ReduxFlux';
-import {get} from 'lodash';
+import {get, isNil} from 'lodash';
 import update from 'immutability-helper';
 import {REINIT_APP} from './AppDataCntlr.js';
 
@@ -18,6 +18,7 @@ const SHOW_DIALOG = 'ComponentCntlr.showDialog';
 const HIDE_DIALOG = 'ComponentCntlr.hideDialog';
 const HIDE_ALL_DIALOGS = 'ComponentCntlr.hideAllDialogs';
 export const COMPONENT_STATE_CHANGE = 'ComponentCntlr.componentStateChange';
+export const SIDE_BAR_ID = 'SIDE_BAR_ID';
 
 
 
@@ -38,6 +39,7 @@ export function dispatchShowDialog(dialogId,ownerId=undefined) {
 }
 
 export function dispatchHideDialog(dialogId) {
+    if (!isDialogVisible(dialogId)) return;
     flux.process({type: HIDE_DIALOG, payload: {dialogId}});
 }
 
@@ -64,7 +66,7 @@ export function getDialogOwner(dialogKey) {
 }
 
 export function getComponentState(componentKey, defaultValue={}) {
-    return get(flux.getState()[DIALOG_OR_COMPONENT_KEY], [COMPONENT_KEY,componentKey], defaultValue);
+    return flux.getState()[DIALOG_OR_COMPONENT_KEY]?.[COMPONENT_KEY]?.[componentKey] ?? defaultValue;
 }
 
 /*
@@ -166,6 +168,14 @@ const hideAllDialogsChange= function(state) {
 const changeComponentState=  function(state, action) {
     const {componentId, componentState} = action.payload;
     if (!componentId) {return state;}
+
+    if (isNil(componentState)) {
+        return update(state,
+            {
+                [COMPONENT_KEY]: {[componentId]: {$set: undefined}}
+            });
+    }
+
     if (!state[COMPONENT_KEY][componentId]) {
         state = update(state,
             {

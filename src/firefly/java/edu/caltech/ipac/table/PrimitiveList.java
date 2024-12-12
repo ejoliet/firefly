@@ -4,8 +4,10 @@
 
 package edu.caltech.ipac.table;
 
+import javax.validation.constraints.NotNull;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 
 /**
  * Date: 6/15/18
@@ -31,20 +33,12 @@ public interface PrimitiveList {
         }
     }
 
-    default int getIntValue(Object val) {
-        if (val instanceof Integer) return (int)val;
-        else if (val instanceof Byte) return (int)(Byte)val;
-        else if (val instanceof Short) return (int)(Short)val;
-        throw new RuntimeException(String.format("%s is with type %s, can not be assigned to Integer", val, getDataClass()));
-    }
-
-
     /**
      * returns a new capacity base on the given parameters
      */
     default int newCapacity(int minCapacity, int oldCapacity) {
         // overflow-conscious code
-        int newCapacity = oldCapacity + (oldCapacity >> 1);
+        int newCapacity = oldCapacity + Math.min(oldCapacity >> 1, 100000);     // setting a newCapacity size limit to ensure HUGE table do not require unnecessary amount of memory to load.
         if (newCapacity - minCapacity < 0)
             newCapacity = minCapacity;
         return newCapacity;
@@ -52,7 +46,13 @@ public interface PrimitiveList {
     }
 
     public static class Objects implements PrimitiveList {
-        private ArrayList<Object> data = new ArrayList<>(100);
+        private ArrayList<Object> data;
+
+        public Objects() { this(1000); }
+
+        public Objects(int initCapacity) {
+            this.data = new ArrayList<>(initCapacity);
+        }
 
         public Class getDataClass() {
             return Object.class;
@@ -79,22 +79,33 @@ public interface PrimitiveList {
         public void trimToSize() { data.trimToSize(); }
     }
 
-    public static class Doubles implements PrimitiveList {
-        private double[] data;
+    abstract class NullablePrimitiveList implements PrimitiveList{
+        private Class clz;
+        private BitSet nulls = new BitSet();
         private int size;
 
+        public NullablePrimitiveList(Class clz) {
+            this.clz = clz;
+        }
+
         public Class getDataClass() {
-            return Double.class;
+            return this.clz;
         }
 
         public Object get(int idx) {
-            return Double.isNaN(data[idx]) ? null : data[idx];
+            if (nulls.length() > idx && nulls.get(idx)) return null;
+            return getImpl(idx);
         }
 
         public void set(int idx, Object val) {
             checkType(val);
             ensureCapacity(idx);
-            data[idx] = val == null ? Double.NaN : (double) val;
+            if (val == null) {
+                nulls.set(idx, true);
+            } else {
+                nulls.set(idx, false);
+                setImpl(idx, val);
+            }
             if (idx >= size()) size = idx+1;
         }
 
@@ -103,202 +114,215 @@ public interface PrimitiveList {
         }
 
         public void clear() {
-            size = 0;
-            data = null;
+            nulls.clear();
+            clearImpl();
         }
+
+        abstract public Object getImpl(int idx);
+        abstract public void setImpl(int idx, @NotNull Object val);
+        abstract public void clearImpl();
+        abstract protected void ensureCapacity(int minCapacity);
+    }
+
+    class Doubles extends NullablePrimitiveList {
+        private double[] data;
+
+        public Doubles() { this(1000); }
+
+        public Doubles(int initCapacity) {
+            super(Double.class);
+            data  = new double[initCapacity];
+        }
+
+        public Object getImpl(int idx) { return data[idx]; }
+        public void setImpl(int idx, Object val) { data[idx] = (double) val; }
+        public void clearImpl() { data = null; }
 
         /**
          * ensure data have the given minimum capacity
          * @param minCapacity
          */
-        private void ensureCapacity(int minCapacity) {
-            if (data == null) {
-                data  = new double[100];
-            }
+        protected void ensureCapacity(int minCapacity) {
             if (minCapacity >= data.length) {
                 data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
             }
         }
 
         public void trimToSize() {
-            if (size < data.length) {
-                data = (size == 0) ? null : Arrays.copyOf(data, size);
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
             }
         }
     }
 
-    public static class Floats implements PrimitiveList {
+    class Floats extends NullablePrimitiveList {
         private float[] data;
-        private int size;
 
-        public Class getDataClass() {
-            return Float.class;
+        public Floats() { this(1000); }
+
+        public Floats(int initCapacity) {
+            super(Float.class);
+            data  = new float[initCapacity];
         }
 
-        public Object get(int idx) {
-            return Float.isNaN(data[idx]) ? null : data[idx];
-        }
+        public Object getImpl(int idx) { return data[idx]; }
+        public void setImpl(int idx, Object val) { data[idx] = (float) val; }
+        public void clearImpl() { data = null; }
 
-        public void set(int idx, Object val) {
-            checkType(val);
-            ensureCapacity(idx);
-            data[idx] = val == null ? Float.NaN : (float) val;
-            if (idx >= size()) size = idx+1;
-        }
-
-        public int size() {
-            return size;
-        }
-
-        public void clear() {
-            size = 0;
-            data = null;
-        }
-
-        private void ensureCapacity(int minCapacity) {
-            if (data == null) {
-                data = new float[100];
-            }
+        protected void ensureCapacity(int minCapacity) {
             if (minCapacity >= data.length) {
                 data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
             }
         }
 
         public void trimToSize() {
-            if (size < data.length) {
-                data = (size == 0) ? null : Arrays.copyOf(data, size);
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
             }
         }
     }
 
-    public static class Longs implements PrimitiveList {
+    class Longs extends NullablePrimitiveList {
         private long[] data;
-        private int size;
 
-        public Class getDataClass() {
-            return Long.class;
+        public Longs() { this(1000); }
+
+        public Longs(int initCapacity) {
+            super(Long.class);
+            data  = new long[initCapacity];
         }
 
-        public Object get(int idx) {
-            return data[idx] == Long.MIN_VALUE ? null : data[idx];
+        public Object getImpl(int idx) {
+            return data[idx];
         }
+        public void setImpl(int idx, Object val) { data[idx] = (long) val; }
+        public void clearImpl() { data = null; }
 
-        public void set(int idx, Object val) {
-            checkType(val);
-            ensureCapacity(idx);
-            data[idx] = val == null ? Long.MIN_VALUE : (long) val;
-            if (idx >= size()) size = idx+1;
-        }
-
-        public int size() {
-            return size;
-        }
-
-        public void clear() {
-            size = 0;
-            data = null;
-        }
-
-        private void ensureCapacity(int minCapacity) {
-            if (data == null) {
-                data = new long[100];
-            }
+        protected void ensureCapacity(int minCapacity) {
             if (minCapacity >= data.length) {
                 data = Arrays.copyOf(data, newCapacity(minCapacity,data.length));
             }
         }
 
         public void trimToSize() {
-            if (size < data.length) {
-                data = (size == 0) ? null : Arrays.copyOf(data, size);
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
             }
         }
     }
 
-    public static class Integers implements PrimitiveList {
+    class Integers extends NullablePrimitiveList {
         private int[] data = null;
-        private int size;
 
-        public Class getDataClass() {
-            return Integer.class;
+        public Integers() { this(1000); }
+
+        public Integers(int initCapacity) {
+            super(Integer.class);
+            data  = new int[initCapacity];
         }
 
-        public Object get(int idx) {
-            return data[idx] == Integer.MIN_VALUE ? null : data[idx];
-        }
-
-        public void set(int idx, Object val) {
-            int ival = val == null ? Integer.MIN_VALUE : getIntValue(val);
-            ensureCapacity(idx);
-            data[idx] = ival;
-            if (idx >= size()) size = idx+1;
-        }
-
-        public int size() {
-            return size;
-        }
-
-        public void clear() {
-            size = 0;
-            data = null;
-        }
-
-        private void ensureCapacity(int minCapacity) {
-            if (data == null) {
-                data = new int[100];
-            }
-            if (minCapacity >= data.length) {
-                data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
-            }
-        }
-
-        public void trimToSize() {
-            if (size < data.length) {
-                data = (size == 0) ? null : Arrays.copyOf(data, size);
-            }
-        }
-    }
-
-    public static class Booleans implements PrimitiveList {
-        private boolean[] data = null;
-        private int size;
-
-        public Class getDataClass() {
-            return Boolean.class;
-        }
-
-        public Object get(int idx) {
+        public Object getImpl(int idx) {
             return data[idx];
         }
+        public void setImpl(int idx, Object val) { data[idx] = (int)val; }
+        public void clearImpl() { data = null; }
 
-        public void set(int idx, Object val) {
-            checkType(val);
-            ensureCapacity(idx);
-            data[idx] = val != null && (boolean) val;
-            if (idx >= size()) size = idx+1;
-        }
-
-        public int size() {
-            return size;
-        }
-
-        public void clear() {
-            size = 0;
-            data = null;
-        }
-
-        private void ensureCapacity(int minCapacity) {
-            if (data == null) {
-                data = new boolean[100];
-            }
+        protected void ensureCapacity(int minCapacity) {
             if (minCapacity >= data.length) {
                 data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
             }
         }
 
         public void trimToSize() {
-            if (size < data.length) {
-                data = (size == 0) ? null : Arrays.copyOf(data, size);
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
+            }
+        }
+    }
+
+    class Shorts extends NullablePrimitiveList {
+        private short[] data = null;
+
+        public Shorts() { this(1000); }
+
+        public Shorts(int initCapacity) {
+            super(Short.class);
+            data  = new short[initCapacity];
+        }
+
+        public Object getImpl(int idx) {
+            return data[idx];
+        }
+        public void setImpl(int idx, Object val) { data[idx] = (short)val; }
+        public void clearImpl() { data = null; }
+
+        protected void ensureCapacity(int minCapacity) {
+            if (minCapacity >= data.length) {
+                data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
+            }
+        }
+
+        public void trimToSize() {
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
+            }
+        }
+    }
+
+    class Bytes extends NullablePrimitiveList {
+        private byte[] data = null;
+
+        public Bytes() { this(1000); }
+
+        public Bytes(int initCapacity) {
+            super(Byte.class);
+            data  = new byte[initCapacity];
+        }
+
+        public Object getImpl(int idx) {
+            return data[idx];
+        }
+        public void setImpl(int idx, Object val) { data[idx] = (byte)val; }
+        public void clearImpl() { data = null; }
+
+        protected void ensureCapacity(int minCapacity) {
+            if (minCapacity >= data.length) {
+                data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
+            }
+        }
+
+        public void trimToSize() {
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
+            }
+        }
+    }
+
+    class Booleans extends NullablePrimitiveList {
+        private boolean[] data = null;
+
+        public Booleans() { this(1000); }
+
+        public Booleans(int initCapacity) {
+            super(Boolean.class);
+            data  = new boolean[initCapacity];
+        }
+
+        public Object getImpl(int idx) {
+            return data[idx];
+        }
+        public void setImpl(int idx, Object val) { data[idx] = (boolean) val;}
+        public void clearImpl() { data = null; }
+
+        protected void ensureCapacity(int minCapacity) {
+            if (minCapacity >= data.length) {
+                data = Arrays.copyOf(data, newCapacity(minCapacity, data.length));
+            }
+        }
+
+        public void trimToSize() {
+            if (size() != data.length) {
+                data = Arrays.copyOf(data, size());
             }
         }
     }

@@ -1,3 +1,4 @@
+import {Box, Tooltip, Typography} from '@mui/joy';
 import React from 'react';
 import {get} from 'lodash';
 import {dispatchWcsMatch, WcsMatchType} from '../ImagePlotCntlr.js';
@@ -5,15 +6,32 @@ import {getPlotViewAry, hasWCSProjection, primePlot} from '../PlotViewUtil.js';
 import {PlotAttribute} from '../PlotAttribute';
 import {SingleColumnMenu} from '../../ui/DropDownMenu.jsx';
 import {DropDownVerticalSeparator, ToolbarButton} from '../../ui/ToolbarButton.jsx';
-import {DropDownToolbarButton} from '../../ui/DropDownToolbarButton.jsx';
-
-import MATCH_LOCKED from 'html/images/28x28_Match_Locked.png';
-import MATCH_UNLOCKED from 'html/images/28x28_Match_Unlocked.png';
 import {isImage} from '../WebPlot';
+import {showInfoPopup} from '../../ui/PopupUtil';
+import {LockImages} from './Buttons.jsx';
 
 function changeMatchType(vr, matchType, lockMatch) {
     const plot= primePlot(vr);
     if (!plot) return;
+    //check for images without WCS when aligning by WCS or Target, and display appropriate warning
+    if(matchType.key === 'Standard' || matchType.key === 'Target') {
+        const warningTitles= getPlotViewAry(vr)
+                .filter( (pv) => !hasWCSProjection(primePlot(pv)) )
+                .map ( (pv) => primePlot(pv)?.title ?? '');
+        if (warningTitles.length !== 0) { //at least one image without WCS
+            const msgTitle = 'The following image(s) do not have celestial WCS:';
+            const msgDesc = warningTitles.join(', ');
+            const renderContent = (
+                <Box>
+                    <Typography level='title-md'>{msgTitle} </Typography>
+                    <br/> <br/>
+                    <Typography style={{padding: '5', whiteSpace: 'normal', letterSpacing: '1', lineHeight: '1.5'}}>
+                        {msgDesc}
+                    </Typography>
+                </Box>);
+            showInfoPopup(renderContent, 'Warning');
+        }
+    }
     dispatchWcsMatch({matchType, plotId:plot.plotId, lockMatch});
 }
 
@@ -43,13 +61,12 @@ export function MatchLockDropDown({visRoot:vr, enabled, visible, inDropDown=fals
     const hasWcs= p && hasWCSProjection(p);
     const hasTarget= Boolean(p && get(p, ['attributes',PlotAttribute.FIXED_TARGET]));
     const buttonIndentStyle = {marginLeft: 15};
-    const titleDiv= {fontSize:'10pt', fontWeight: 'bold', padding: '0 0 3px 0'};
 
     const dropDown= (
         <SingleColumnMenu>
-            <div style={titleDiv} title='Align all images to the selected image, but leave unlocked'>
-                Align-only Options
-            </div>
+            <Tooltip title={'Align all images to the selected image, but leave unlocked'}>
+                <Typography> Align-only Options </Typography>
+            </Tooltip>
             <ToolbarButton text='by WCS' tip='Align by WCS (no locking)'
                            enabled={hasWcs && wcsCnt>1}
                            horizontal={false} key={'by wcs'}
@@ -79,9 +96,9 @@ export function MatchLockDropDown({visRoot:vr, enabled, visible, inDropDown=fals
                            onClick={() => changeMatchType(vr, WcsMatchType.PixelCenter, false)}/>
 
             <DropDownVerticalSeparator useLine={true}/>
-            <div style={titleDiv} title='Align all images to the selected image, and lock this mode'>
-                Align and Lock Options
-            </div>
+            <Tooltip title={'Align all images to the selected image, and lock this mode'}>
+                <Typography>Align and Lock Options</Typography>
+            </Tooltip>
 
             <ToolbarButton text='Unlock' tip='Unlock the alignment of all images' hasCheckBox={true} checkBoxOn={!wcsMatchType}
                                      enabled={true} horizontal={false} key={'unlock'}
@@ -121,8 +138,8 @@ export function MatchLockDropDown({visRoot:vr, enabled, visible, inDropDown=fals
     );
 
     return (
-        <DropDownToolbarButton icon={wcsMatchType?MATCH_LOCKED:MATCH_UNLOCKED }
-                               tip='Determine how to align images'
+        <LockImages locked={Boolean(wcsMatchType)}
+                               tip='Image alignment drop down: determine how to align images'
                                enabled={enabled} horizontal={true}
                                visible={visible}
                                disableHiding={inDropDown}
@@ -132,5 +149,4 @@ export function MatchLockDropDown({visRoot:vr, enabled, visible, inDropDown=fals
                                dropDown={dropDown}/>
 
     );
-
 }

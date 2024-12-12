@@ -18,7 +18,7 @@ import static edu.caltech.ipac.astro.net.Resolver.UNKNOWN;
 public class TargetNetwork {
 
     public final static int TWO_MONTHS= 60 * 86400;
-    private final static Cache objCache= CacheManager.getCache(Cache.TYPE_PERM_LARGE);
+    private final static Cache objCache= CacheManager.getCache(Cache.TYPE_PERM_SMALL);
 
     public static ResolvedWorldPt resolveToWorldPt(String objName, Resolver resolver) {
         if (resolver==null || resolver==UNKNOWN || resolver==NONE) {
@@ -43,7 +43,7 @@ public class TargetNetwork {
         res= (HorizonsEphPairs.HorizonsResults[])objCache.get(params);
         if (res==null) {
             res= HorizonsEphPairs.lowlevelGetEphInfo(nameOrId);
-            objCache.put(params,res,TWO_MONTHS);
+            if (res.length>0) objCache.put(params,res,TWO_MONTHS);
         }
         return res;
     }

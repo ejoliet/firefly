@@ -5,6 +5,7 @@
 import ImagePlotCntlr, {IMAGE_PLOT_KEY, dispatchZoom, dispatchProcessScroll} from './ImagePlotCntlr.js';
 import {getPlotViewById, primePlot} from './PlotViewUtil.js';
 import {getPixScaleArcSec, getScreenPixScaleArcSec} from './WebPlot.js';
+import {hasWCSProjection} from './PlotViewUtil.js';
 import {UserZoomTypes, getZoomLevelForScale} from './ZoomUtil.js';
 import {CysConverter} from './CsysConverter.js';
 import {makeScreenPt} from './Point.js';
@@ -14,10 +15,9 @@ function matcher(oldP,newP) {
     return {
         isSameZoomLevel: oldP.zoomFactor===newP.zoomFactor,
         isSameSize: oldP.dataWidth===newP.dataWidth && oldP.dataHeight===newP.dataHeight,
-        isProjection: oldP.projection.isSpecified() && newP.projection.isSpecified(),
-        isSameScale: oldP.projection && oldP.projection.isSpecified() &&
-                     newP.projection && newP.projection.isSpecified() &&
-                     getPixScaleArcSec(oldP)===getPixScaleArcSec(newP)
+        isProjection: hasWCSProjection(oldP) && hasWCSProjection(newP),
+        isSameScale: hasWCSProjection(oldP) && hasWCSProjection(newP) &&
+            getPixScaleArcSec(oldP)===getPixScaleArcSec(newP)
     };
 }
 
@@ -60,6 +60,7 @@ export function changePrime(rawAction, dispatcher, getState) {
     checkZoom(plotId,oldP, newP, scrollToImagePt,visRoot);
 }
 
+/** @type actionWatcherCallback */
 function zoomCompleteWatch(action, cancelSelf, {plotId,scrollToImagePt},dispatch,getState) {
     if (action.payload.plotId===plotId) {
         const visRoot= getState()[IMAGE_PLOT_KEY];
@@ -75,10 +76,7 @@ function changeScrollToImagePt(visRoot, plotId, scrollToImagePt) {
 }
 
 const addWatcher= (plotId,scrollToImagePt) => dispatchAddActionWatcher( {
-    callback:zoomCompleteWatch,
-    params:{plotId,scrollToImagePt},
-    actions:[ImagePlotCntlr.ZOOM_IMAGE, ImagePlotCntlr.ZOOM_IMAGE_FAIL]
-});
+    callback:zoomCompleteWatch, params:{plotId,scrollToImagePt}, actions:[ImagePlotCntlr.ZOOM_IMAGE] });
 
 
 function checkZoom(plotId, oldP, newP, scrollToImagePt, visRoot) {

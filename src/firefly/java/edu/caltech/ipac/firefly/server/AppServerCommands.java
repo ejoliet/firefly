@@ -6,11 +6,19 @@ package edu.caltech.ipac.firefly.server;
 import edu.caltech.ipac.firefly.data.Alert;
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.userdata.UserInfo;
-import edu.caltech.ipac.firefly.server.packagedata.BackgroundInfoCacher;
-import edu.caltech.ipac.firefly.server.query.BackgroundEnv;
 import edu.caltech.ipac.firefly.server.security.SsoAdapter;
 import edu.caltech.ipac.firefly.server.util.Logger;
+import edu.caltech.ipac.util.AppProperties;
 import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 
 public class AppServerCommands {
     private static final String SPA_NAME = "spaName";
@@ -23,14 +31,48 @@ public class AppServerCommands {
 
             // check for alerts
             AlertsMonitor.checkAlerts(true);
-            // check for background jobs
-            BackgroundEnv.getUserBackgroundInfo().stream()
-                    .forEach(BackgroundInfoCacher::fireBackgroundJobAdd);
             // update login status
             UserInfo userInfo = ServerContext.getRequestOwner().getUserInfo();
-            LOG.briefInfo("Init "+spaName);
+            LOG.info("Init "+spaName);
             LOG.debug("User info for this client: " + userInfo);
             return "true";
+        }
+    }
+
+    public static class JsonProperty extends ServCommand {
+        static final String INVENTORY_PROP = "inventory.serverURLAry";
+        static final String FIREFLY_OPTIONS = "FIREFLY_OPTIONS";
+        static final Map<String, String> map = new HashMap<>();
+        static final List<String> validatedList = new ArrayList<>();
+
+        static {
+            map.put(FIREFLY_OPTIONS, getAppOptions());
+            map.put(INVENTORY_PROP, AppProperties.getProperty(INVENTORY_PROP, "[]"));
+            validateAll();
+        }
+
+        private static void validateAll() {
+            List<String> msgList = new ArrayList<>();
+            msgList.add("-- JSON properties --");
+            for (Map.Entry<String, String> entry : map.entrySet()) {
+                var json = entry.getValue();
+                var prop = entry.getKey();
+                try {
+                    new JSONParser().parse(json);
+                    validatedList.add(prop);
+                    msgList.add(prop + " parsed: " + json);
+                } catch (ParseException e) {
+                    msgList.add(prop + ": Could not parse Json: " + json);
+                }
+            }
+            LOG.info(msgList.toArray(new String[0]));
+        }
+
+        public String doCommand(SrvParam sp) throws Exception {
+            var propName = sp.getRequired(ServerParams.PROP);
+            if (validatedList.contains(propName)) return map.get(propName);
+            if (!map.containsKey(propName)) LOG.error("no json property exposed for " + propName);
+            return "{}";
         }
     }
 
@@ -92,4 +134,24 @@ public class AppServerCommands {
             return map.toString();
         }
     }
+
+
+    private static final String HELP_BASE_URL = "help.base.url";
+    private static String getAppOptions() {
+        Map appOpts;
+        String def = "{}";
+        String appOptStr = AppProperties.getProperty(JsonProperty.FIREFLY_OPTIONS, def);
+        try{
+            appOpts = (Map) new JSONParser().parse(appOptStr);
+            // additional props as FIREFLY_OPTIONS
+            applyIfNotEmpty(AppProperties.getProperty(HELP_BASE_URL), v -> appOpts.put(HELP_BASE_URL, v));
+
+            return new JSONObject(appOpts).toJSONString();
+        }catch(ParseException pe){
+            Logger.getLogger().error(String.format("Failed parsing %s", appOptStr));
+            return def;
+        }
+    }
+
+
 }

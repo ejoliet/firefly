@@ -70,7 +70,7 @@ export function getNumFilters(request) {
  * @prop {boolean} options.removeQuotes  remove double-quotes from column name if present
  * @returns {string[]}
  */
-function parseInput(input, options={}) {
+export function parseInput(input, options={}) {
     const {removeQuotes=false} = options;
     let [cname='', op='', val='', ...rest] = (' '+input).split(operators);
     op = op.trim();
@@ -436,7 +436,7 @@ function autoCorrectCondition(v, col) {
     // empty string or string with no value
     if (!op && !val) return v.trim();
 
-    op = op ? op.toLowerCase() : (useQuote ? 'like' : '=');      // no operator is treated as 'like'
+    op = op ? op.toLowerCase() : (!col?.type || useQuote ? 'like' : '=');      // use 'like' when column type is string-like or not defined
 
     switch (op) {
         case 'like':
@@ -553,8 +553,8 @@ function createOneComparator(filterStr, tableModel) {
 
         if (op !== 'like' && colType.match(/^[dfil]/)) {      // int, float, double, long .. or their short form.
             compareTo = compareTo ? Number(compareTo) : compareTo;
-        } else {
-            compareTo = compareTo ? compareTo.toLowerCase() : compareTo;
+        } else if (colType.includes('char') && !isNil(compareTo)) {
+            compareTo = `${compareTo}`.toLowerCase();
         }
 
         switch (op) {

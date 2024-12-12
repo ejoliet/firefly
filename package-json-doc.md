@@ -16,7 +16,6 @@ The non-react dependencies do not change much.
 
 ##### UI: 3 party react base packages
 - fixed-data-table-2
-- rc-slider
 - rc-tree
 - react-color
 - react-datetime
@@ -38,9 +37,9 @@ The non-react dependencies do not change much.
 - point-in-polygon
 - shallowequal
 - validator
-- redux (v3, v4 has possible breaking changes, _see below_)
+- redux (v3, v4 has breaking changes, _see below_)
 - redux-logger
-- redux-saga (v0, v1 has some possible breaking changes, _see below_)
+- redux-saga
 - redux-thunk
 
 ### Runtime Dependencies - not updated
@@ -48,9 +47,8 @@ The non-react dependencies do not change much.
 These runtime dependencies that are purposely not most the most recent version
 
 #### `redux`
-We have not yet updating redux to version 4. To update to for we are going to
-have to make sure are do stuff to create exceptions. This will need a little testing
-and fixes. 
+We have not yet updating redux to version 4. Webpack 4 requires calls to getState() happen only outside
+of a reducer. We will probably never go to webpack 4.
 
 From release notes:
 > Throw if getState, subscribe, or unsubscribe called while dispatching (including inside a reducer)
@@ -96,9 +94,6 @@ Webpack packages:
 - babel-loader
 - style-loader
 - css-loader
-- url-loader (v2, v3 requires node 10.13)
-- file-loader (v4, v5 requires node 10.13)
-- webpack-visualizer-plugin
 
 
 #### `Jest`
@@ -113,6 +108,7 @@ JSDoc packages:
 - jsdoc-jsx
 - ink-docstrap
 - publish-release
+- taffydb  - JSDoc claims not to need this for 4.0 but I think ink-docstrap needs it
 
 #### `ESLint`
 ESLint is completely up to date. We should always keep this up-to-date

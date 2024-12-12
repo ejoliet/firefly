@@ -4,8 +4,10 @@
 
 
 import React from 'react';
-import ReactDOM from 'react-dom';
+import {createRoot} from 'react-dom/client';
 import {isArray, isElement, isString} from 'lodash';
+
+import {FireflyRoot} from '../ui/FireflyRoot.jsx';
 import {dispatchAddActionWatcher, dispatchCancelActionWatcher} from '../core/MasterSaga.js';
 import {Logger} from '../util/Logger.js';
 import {uniqueID} from '../util/WebUtil';
@@ -42,28 +44,42 @@ export {startAsAppFromApi, getVersion} from '../Firefly.js';
 export function debug(...msg) {
     logger.info(msg);
 }
+
+
+
+
+const reactRoots= new Map();
+
 /**
  *
  * @param {string|Object} div a div element or a string id of the div element
  * @param {Object} Component a react component
- * @param {Object} [props] props for the react component
+ * @param {Object} [props] props for the React component
+ * @param {boolean} wrapWithFireflyRoot wrap component in FireflyRoot
  * @public
  * @function renderDOM
  * @memberof firefly.util
  */
 
-export function renderDOM(div, Component, props) {
+export function renderDOM(div, Component, props, wrapWithFireflyRoot= true) {
     const divElement= isString(div) ? document.getElementById(div) : div;
+
+    const root= reactRoots.get(divElement) ?? createRoot(divElement);
+    reactRoots.set(divElement,root);
+
 
     if (!isElement(divElement)) debug(`the div element ${isString(div)?div:''} is not defined in the html` );
     if (!Component) debug('Component must be defined');
-    divElement.classList.add('rootStyle');
+    // divElement.classList.add('rootStyle');       // this is probably not necessary
 
     const renderStuff= (
+        wrapWithFireflyRoot ?
+            (<FireflyRoot sx={{height:1, width:1}} ctxProperties={{jsApi:true}}>
+                <Component {...props} />
+            </FireflyRoot>) :
             <Component {...props} />
     );
-
-    ReactDOM.render(renderStuff,divElement);
+    root.render(renderStuff);
 }
 
 /**
@@ -79,7 +95,8 @@ export function renderDOM(div, Component, props) {
 
 export function unrenderDOM(div) {
     const divElement= isString(div) ? document.getElementById(div) : div;
-    ReactDOM.unmountComponentAtNode(divElement);
+    const root= reactRoots.get(divElement);
+    root?.unmount();
 }
 
 

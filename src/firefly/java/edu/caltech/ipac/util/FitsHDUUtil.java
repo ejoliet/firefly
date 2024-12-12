@@ -41,16 +41,14 @@ public class FitsHDUUtil {
 
     public static FitsAnalysisReport analyze(File infile, FileAnalysisReport.ReportType type) throws Exception {
         FileAnalysisReport report = new FileAnalysisReport(type, TableUtil.Format.FITS.name(), infile.length(), infile.getPath());
-        Header headerAry[];
+        Header[] headerAry;
 
-        Fits fits = null;
-        try {
-            fits = new Fits(infile);
-            BasicHDU[] parts = FitsReadUtil.readHDUs(fits);
+        try (Fits fits= new Fits(infile)) {
+            BasicHDU<?>[] parts = fits.read();
             headerAry= new Header[parts.length];
             for(int i = 0; i < parts.length; i++) {
                 FileAnalysisReport.Type ptype;
-                int naxis= parts[i].getHeader().getIntValue("NAXIS");
+                int naxis= FitsReadUtil.getNaxis(parts[i].getHeader());
 
                 if (parts[i] instanceof CompressedImageHDU)  ptype= Image;
                 else if (parts[i] instanceof ImageHDU)  ptype= Image;
@@ -67,10 +65,13 @@ public class FitsHDUUtil {
                     ptype = HeaderOnly;
                 }
 
+                var compAttach= isCompressed ? " (compressed)" : "";
                 String desc=null;
-                if (desc == null) desc = header.getStringValue("EXTNAME");
-                if (desc == null) desc = header.getStringValue("NAME");
-                if (desc == null && isCompressed) desc = "CompressedImage";
+                if (FitsReadUtil.getExtName(header)!=null) desc= FitsReadUtil.getExtName(header) + compAttach;
+                else if (header.getStringValue("NAME")!=null) desc = header.getStringValue("NAME") + compAttach;
+                else if (header.getStringValue("HDUCLAS2")!=null) desc = header.getStringValue("HDUCLAS2") + compAttach;
+                else if (isCompressed) desc = "Compressed image";
+
 
 
                 FileAnalysisReport.Part part = new FileAnalysisReport.Part(ptype, desc);
@@ -87,6 +88,29 @@ public class FitsHDUUtil {
                     part.setTotalTableRows(tHdu.getNRows());
                     part.setDesc(desc);
                 }
+                if (ptype == Image) {
+                    if (desc==null) desc= "";
+                    int naxis1;
+                    int naxis2;
+                    int naxis3;
+                    if (isCompressed) {
+                        naxis1= FitsReadUtil.getZNaxis1(header)>-1 ? FitsReadUtil.getZNaxis1(header) : FitsReadUtil.getNaxis1(header);
+                        naxis2= FitsReadUtil.getZNaxis2(header)>-1 ? FitsReadUtil.getZNaxis2(header) : FitsReadUtil.getNaxis2(header);
+                        naxis3= FitsReadUtil.getZNaxis3(header)>-1 ? FitsReadUtil.getZNaxis3(header) : FitsReadUtil.getNaxis3(header);
+                    }
+                    else {
+                        naxis1= FitsReadUtil.getNaxis1(header);
+                        naxis2= FitsReadUtil.getNaxis2(header);
+                        naxis3= FitsReadUtil.getNaxis3(header);
+                    }
+                    if (naxis>=3 && naxis3>1) {
+                        desc+= String.format(" (cube %d x %d x %d)",naxis1,naxis2,naxis3);
+                    }
+                    else {
+                        desc+= String.format(" (%d x %d)",naxis1,Math.max(naxis2,1));
+                    }
+                    part.setDesc(desc);
+                }
                 report.addPart(part);
 
                 if (type == FileAnalysisReport.ReportType.Brief) {
@@ -94,13 +118,6 @@ public class FitsHDUUtil {
                 } else if (type == FileAnalysisReport.ReportType.Details) {
                     part.setDetails(getDetails(i, header));
                 }
-            }
-        }
-        finally {
-            try {
-                if (fits!=null && fits.getStream()!=null) fits.getStream().close();
-            } catch (IOException e) {
-                // do nothing
             }
         }
         return new FitsAnalysisReport(report,headerAry);

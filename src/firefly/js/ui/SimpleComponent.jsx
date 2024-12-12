@@ -1,90 +1,74 @@
-import {PureComponent, useEffect, useState} from 'react';
-import {isArray, isString, uniqueId} from 'lodash';
+import React from 'react';
+import {isEmpty, uniqueId} from 'lodash';
+import {useCallback, useContext, useEffect, useState, useTransition} from 'react';
 import shallowequal from 'shallowequal';
 import {flux} from '../core/ReduxFlux.js';
-import FieldGroupUtils, {getFldValue, getGroupFields} from '../fieldGroup/FieldGroupUtils.js';
+import FieldGroupUtils, {
+    getField, getFieldsForKeys, getFieldVal, getGroupFields, getMetaState, makeFieldsObject, setFieldValue
+} from '../fieldGroup/FieldGroupUtils.js';
 import {dispatchAddActionWatcher, dispatchCancelActionWatcher} from 'firefly/core/MasterSaga.js';
-
-export class SimpleComponent extends PureComponent {
-    constructor(props) {
-        super(props);
-        this.state = this.getNextState(props);
-    }
-
-    UNSAFE_componentWillReceiveProps(np) {
-        if (!this.isUnmounted) {
-            if (!shallowequal(this.props, np)) {
-                this.setState(this.getNextState(np));
-            }
-        }
-    }
-    componentDidMount() {
-        this.removeListener = flux.addListener(() => this.storeUpdate());
-    }
-    componentWillUnmount() {
-        this.isUnmounted=true;
-        this.removeListener && this.removeListener();
-    }
-
-    getNextState(np) {
-        return {};      // need to implement
-    }
-
-    storeUpdate() {
-        if (!this.isUnmounted) {
-            this.setState(this.getNextState(this.props));
-        }
-    }
-}
-
+import {dispatchMetaStateChange} from 'firefly/fieldGroup/FieldGroupCntlr.js';
+import {FieldGroupCtx} from './FieldGroup.jsx';
+import {smartMerge} from 'firefly/tables/TableUtil.js';
 
 
 /**
- * A replacement for SimpleComponent.
  * This function make use of useState and useEffect to
  * trigger a re-render of functional components when the value in the store changes.
  *
- * By default, this will call Object.is() to ensure the state has changed before
+ * By default, this will call shallowequal to ensure the state has changed before
  * calling setState.  To override this behavior, use useStoreConnector.bind({comparator: your_compare_function}).
  *
- * @param stateGetters  one or more functions returning a state, when called the oldState is passed as a parameter.
+ * @param {function} stateGetter  a getter function returning a state, when called the oldState is passed as a parameter.
  * This allows a stateGetter to optionally act as a comparator.  If the stateGetter does not care about the changes
  * then it can return the oldState and there will be no state update.
- * @returns {Object[]}  an array of state's value in the order of the given stateGetters
+ * @param {Array} deps array of dependencies used by stateGetter
+ * @param {boolean} markAsTransition if try then set the state with startTransition
+ * @returns {Object}  new state's value
  */
-export function useStoreConnector(...stateGetters) {
-    const {comparator=Object.is} = this || {};
+export function useStoreConnector(stateGetter, deps=[], markAsTransition=false) {
+    const {comparator=shallowequal} = this || {};
 
-    const rval = [];
-    const setters = stateGetters.map((getter) => {
-        const [val, setter] = useState(getter());
-        rval.push(val);
-        return [getter, setter, val];
-    });
+    const [val, setter] = useState(stateGetter());
+    const [isPending,startTransition]= useTransition();
 
     let isMounted = true;
     useEffect(() => {
+        let cState = val;
         const remover = flux.addListener(() => {
             if (isMounted) {
-                setters.forEach(([getter, setter, oldState], idx) => {
-                    const newState = getter(oldState);  // if getter returns oldState then no state update
-                    if (newState===oldState) return;    // comparator might be overridden, use === first for efficiency
-                    setters[idx][2] = newState;
-                    if (!comparator(oldState, newState)) {
-                        setter(newState);
+                const nState = stateGetter(cState);      // if getter returns oldState then no state update
+                if (nState===cState) return;             // comparator might be overridden, use === first for efficiency
+                if ( !comparator(cState, nState) ) {
+                    cState = nState;
+                    if (markAsTransition) {
+                        startTransition(() =>{
+                           setter(cState);
+                        });
                     }
-                });
+                    else {
+                        setter(cState);
+                    }
+                }
             }
         });
         return () => {
             isMounted = false;
             remover && remover();
         };
-    }, []);     // only run once
+    }, deps);     // defaults to run only once
 
-    return rval;
+    return val;
 }
 
+
+/**
+ * @deprecated
+ * The better approach is to use useFieldGroupValue
+ * @see useFieldGroupValue
+ * @param groupKey
+ * @return {*|undefined}
+ */
 export function useBindFieldGroupToStore(groupKey) {
     let mounted= true;
     const [fields, setFields] = useState(() => getGroupFields(groupKey));
@@ -100,31 +84,147 @@ export function useBindFieldGroupToStore(groupKey) {
     return fields || undefined;
 }
 
-/**
- * This hook will return a object of fields values. {[fieldName]:value}
- * @param {String} groupKey - the field group to check for
- * @param {String|Array.<String>} [fieldKeys] - an array of keys to check for or a single single key to check for
- * @return {{}}
- */
-export function useFieldGroupValues(groupKey,fieldKeys) {
-    const keyList= isArray(fieldKeys) ? fieldKeys : isString(fieldKeys) ? [fieldKeys] : [];
-    let mounted= true;
-    const stateObj= keyList.reduce( (obj,k) => {
-        const [value,set]= useState(() => getFldValue(getGroupFields(groupKey),k));
-        obj[k]={value,set};
-        return obj;
-    },{});
 
+/**
+ * This hook will return a setter and a getter function for a field value.
+ * Note - The setter and getter functions are static until the field value has changed, they are created with react
+ * useCallback. Therefor they can be used in useEffects array of values dependencies.
+ * @param {String} fieldKey - a fieldKey to check for
+ * @param {String} [gk] - the groupKey if not set then it is retrieved from context, the normal use is to not pass this parameter
+ * @return {Array.<Function>}  return an array of 2 functions [getValue,setValue].
+ * getValue(true) will return the whole field while getValue() will just return the fields value.
+ * setValue will take up two arguments. setValue(value, {field group changes}). The first arguments is the new field value.
+ * The second optional augment is an object with any other property of the field group. Such as-
+ * setValue(4,{value:false, message: '4 is not valid'}
+ */
+export function useFieldGroupValue(fieldKey, gk) {
+    const context= useContext(FieldGroupCtx);
+    const groupKey= gk || context.groupKey;
+    const setValueToState= useState(undefined)[1]; // use state here is just to force re-renders on value change
+    let mounted= true;
+    let value= getFieldVal(groupKey,fieldKey);
     useEffect(() => {
-        const remover= FieldGroupUtils.bindToStore(groupKey, (updatedFields) => {
-            mounted && keyList.forEach( (k) => stateObj[k].set( getFldValue(updatedFields,k)));
-        });
+        const updater= () => {
+            if (!mounted) return;
+            const newValue= getFieldVal(groupKey,fieldKey);
+            if (newValue!==value) {
+                setValueToState(newValue);
+                value= newValue;
+            }
+        };
+        const remover= FieldGroupUtils.bindToStore(groupKey, updater);
         return () => {
             mounted= false;
             remover();
         };
     },[]);
-    return Object.fromEntries(Object.entries(stateObj).map( ([k,{value}]) => [k,value] ));
+
+    const getter= useCallback(    // getter - fullFieldInfo: true: return the full field object, false: just the value
+        (fullFieldInfo=false) => fullFieldInfo ? (getField(groupKey,fieldKey) ??{}) : getFieldVal(groupKey,fieldKey,value),
+        [value]);
+    const setter= useCallback(
+        /**
+         * the setter
+         * @param newValue the new value
+         * @param {Object|Boolean} [inSettings] - if object then use as settings for the FieldGroupField, if boolean use as valid
+         */
+        (newValue,inSettings={}) => setFieldValue(groupKey,fieldKey,newValue,inSettings) , [value]); //setter
+    return [ getter, setter];
+}
+
+
+
+/**
+ * This hook will force a rerender if certain fields change
+ * @param {Array.<String>} [fldNameAry] - array of field name keys, if undefined then rerender if any field in the group changes
+ * @param {String} [gk] - the groupKey if not set then it is retrieved from context, the normal use is to not pass this parameter
+ */
+export function useFieldGroupRerender(fldNameAry=[], gk) {
+    const context= useContext(FieldGroupCtx);
+    const groupKey= gk || context.groupKey;
+    const setValueToState= useState(undefined)[1]; // use state here is just to force re-renders on value change
+    let mounted= true;
+    const getFs= () => fldNameAry.length ? makeFieldsObject(groupKey,fldNameAry) : getGroupFields(groupKey);
+    // const getFs= () => getGroupFields(groupKey);
+    let value= getFs();
+    useEffect(() => {
+        const updater= () => {
+            if (!mounted) return;
+            const newValue= getFs();
+            if (!shallowequal(newValue,value)) {
+                setValueToState(newValue);
+                value= newValue;
+            }
+        };
+        const remover= FieldGroupUtils.bindToStore(groupKey, updater);
+        return () => {
+            mounted= false;
+            remover();
+        };
+    },[]);
+}
+
+
+
+export function useFieldGroupWatch(keyAry,f,dependAry=[],gk) {
+    let mounted= true;
+    let isInit= true;
+    const context= useContext(FieldGroupCtx);
+    const groupKey= gk || context.groupKey;
+    let watchFieldsAry= getFieldsForKeys(groupKey,keyAry);
+    useEffect(() => {
+        const watcher= (force) => {
+            if (!mounted) return;
+            if (!keyAry?.length) force= true;
+            const newWatchFieldsAry= getFieldsForKeys(groupKey,keyAry);
+            const doUpdate= force || newWatchFieldsAry.some( (field,idx) =>
+                field.value!==watchFieldsAry[idx].value || field.valid!==watchFieldsAry[idx].valid);
+            if (!doUpdate) return;
+            watchFieldsAry= newWatchFieldsAry;
+            f?.(watchFieldsAry ? watchFieldsAry.map( (fld) => fld.value) : [], isInit);
+            isInit= false;
+        };
+        watcher(true);
+        const remover= FieldGroupUtils.bindToStore(groupKey, () => watcher(false));
+        return () => {
+            mounted= false;
+            remover();
+        };
+
+    },dependAry);
+}
+
+
+
+
+export function useFieldGroupMetaState(defMetaState={}, gk) {
+    const context= useContext(FieldGroupCtx);
+    const groupKey= gk || context.groupKey;
+    const setToReactState= useState(undefined)[1]; // use state here is just to force re-renders on value change
+    let mounted= true;
+    let metaState= {...defMetaState, ...getMetaState(groupKey)};
+    useEffect(() => {
+        const updater= () => {
+            if (!mounted) return;
+            const newMetaState= getMetaState(groupKey);
+            if (!shallowequal(newMetaState,metaState)) {
+                setToReactState(newMetaState);
+                metaState= newMetaState;
+            }
+        };
+        const remover= FieldGroupUtils.bindToStore(groupKey, updater);
+        return () => {
+            mounted= false;
+            remover();
+        };
+    },[metaState]);
+
+    const getter= useCallback( () => {
+        const ms= {...defMetaState, ...getMetaState(groupKey)};
+        return isEmpty(ms) ? metaState : ms;
+    }, [metaState]);// getter
+    const setter= useCallback( (newMetaState) => dispatchMetaStateChange({groupKey, metaState:newMetaState}), [metaState]); //setter
+    return [getter, setter];
 }
 
 
@@ -141,4 +241,53 @@ export function useWatcher(actions, callback, params) {
            dispatchCancelActionWatcher(id);
        };
    },[]);
+}
+
+export function useDebugCycle({id, render=true, mount=true}) {
+
+    useEffect(() => {
+        mount && console.log(id, 'mounting');
+        return () => {
+            mount && console.log(id, 'unmounting');
+        };
+    },[]);
+
+    useEffect(() => {
+        render && console.log(id, 'rendering');
+    });
+}
+
+/*
+ Enforces our usage of slotProps as a way to define both the slot's component as well as its props.
+ The default props and passed in props are deep merged using smartMerge.
+ <Need to revisit> smartMerge works for now, but ultimately, default props should use a path-based
+    key, so it can be precisely inject the default value without uncertainty.  e.g. webutil's updateSet or setIf based on lodash's set.
+
+ When slotProps is used, it will interpret as:
+ ```
+ slotProps: {
+   component: elementType,  // when defined, it is used to render the props.  if null, nothing will render in this slot.
+   ...otherProps: any       // these props will be passed to the rendering component
+ }
+ ```
+
+ Example:
+ ```
+ const defProps= {text: 'hello world', customMsg: 'none'};
+ const passedInSlotProps = {
+    component: MyResults,
+    customMsg: 'I am Joe'
+ }
+
+ <Slot component={EmptyResults} {...defProps} slotProps={passedInSlotProps}/>
+ ```
+ This will return:
+ ```
+   <MyResults text='hello world' customMsg='I am Joe'/>
+ ```
+ */
+export function Slot({component, slotProps={}, ...defProps}) {
+    const {component:Component=component, ...nProps} = slotProps;
+    const props = smartMerge(defProps, nProps);
+    return Component ? <Component {...props}/> : false;
 }

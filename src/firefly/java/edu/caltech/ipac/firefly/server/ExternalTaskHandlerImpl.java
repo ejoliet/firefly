@@ -2,6 +2,7 @@ package edu.caltech.ipac.firefly.server;
 
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
 import edu.caltech.ipac.firefly.server.util.Logger;
+import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.util.FileUtil;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
@@ -64,7 +65,7 @@ public class ExternalTaskHandlerImpl implements ExternalTaskHandler {
                 Object paramsResolved = ServerContext.convertFilePaths(parsedParams);
                 taskParams = JSONValue.toJSONString(paramsResolved);
 
-                jsonParamsFile = File.createTempFile(task, ".json", ServerContext.getTempWorkDir());
+                jsonParamsFile = File.createTempFile(task, ".json", QueryUtil.getTempDir());
                 FileUtil.writeStringToFile(jsonParamsFile, taskParams);
                 launcher.addParam("-i", jsonParamsFile);
             }
@@ -195,7 +196,7 @@ public class ExternalTaskHandlerImpl implements ExternalTaskHandler {
 
     public File getOutfile() throws DataAccessException {
         if (statusCode != ExternalTaskLauncher.NORMAL_EXIT) {
-            throw new DataAccessException("Failed to obtain data. " + getError());
+            throw new DataAccessException("Failed to obtain data. ", new Exception(getError()));
         } else {
             if (outfile == null) {
                 throw new DataAccessException("Output file is not returned from the task.");
@@ -211,7 +212,7 @@ public class ExternalTaskHandlerImpl implements ExternalTaskHandler {
 
     public String getResult() throws DataAccessException {
         if (statusCode != ExternalTaskLauncher.NORMAL_EXIT) {
-            throw new DataAccessException("Failed to obtain data. " + getError());
+            throw new DataAccessException("Failed to obtain data. ", new Exception(getError()));
         } else {
             return result;
         }

@@ -1,33 +1,33 @@
 /*
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
-
-
 import {isEmpty, isArray} from 'lodash';
 import {Band} from './Band.js';
-import {BandState} from './BandState.js';
-import CoordinateSys from './CoordSys.js';
+import {convertBandStateToJSON, makeBandState, makeBandStateWithJson} from './BandState.js';
 import Enum from 'enum';
 
 
 /**
+ * @typedef RotateType
  * The type of rotation
  * can be 'NORTH', 'ANGLE', 'UNROTATE'
+ * @prop NORTH
+ * @prop ANGLE
+ * @prop UNROTATE
+ * @type {Enum}
  * @public
  * @global
  * */
 export const RotateType= new Enum(['NORTH', 'ANGLE', 'UNROTATE']);
 
 /**
+ * @typedef Operation
  * can be 'ROTATE', 'CROP', 'FLIP_Y'
- *
+ * @prop CROP
+ * @prop FLIP_Y
+ * @type {Enum}
  */
 export const Operation= new Enum(['ROTATE', 'CROP', 'FLIP_Y']);
-
-
-
-
-
 
 
 export class PlotState {
@@ -35,25 +35,13 @@ export class PlotState {
     /**
      * @summary Contains data about the state of a plot.
      * This object is never created directly if is always instantiated from the json sent from the server.
-     * @prop {number} zoomLevel - the zoomlevel of the image
      * @prop {boolean} threeColor - is a three color plot
-     * @prop {number} colorTableId - the id of the color table in use
-     * @prop {boolean} flippedY - fliped on the y axis
-     * @prop {number} rotationAngle - if rotated by angle, then the angle  of the rotation
-     * @prop {RotateType} rotationType the type of rotations
      * @public
      */
     constructor() {
-
         this.bandStateAry= [null,null,null];
         this.ctxStr=null;
-        this.zoomLevel= 1;
         this.threeColor= false;
-        this.colorTableId= 0;
-        this.rotationType= RotateType.UNROTATE;
-        this.rotaNorthType= CoordinateSys.EQ_J2000;
-        this.flippedY= false;
-        this.rotationAngle= NaN;
         this.ops= [];
     }
 
@@ -81,9 +69,9 @@ export class PlotState {
         if (!this.usedBands) {
             this.usedBands= [];
             if (this.threeColor) {
-                if (this.get(Band.RED).hasRequest())   this.usedBands.push(Band.RED);
-                if (this.get(Band.GREEN).hasRequest()) this.usedBands.push(Band.GREEN);
-                if (this.get(Band.BLUE).hasRequest())  this.usedBands.push(Band.BLUE);
+                if (this.get(Band.RED).plotRequest)   this.usedBands.push(Band.RED);
+                if (this.get(Band.GREEN).plotRequest) this.usedBands.push(Band.GREEN);
+                if (this.get(Band.BLUE).plotRequest)  this.usedBands.push(Band.BLUE);
             }
             else {
                 this.usedBands.push(Band.NO_BAND);
@@ -102,30 +90,10 @@ export class PlotState {
     }
 
     /**
-     * Get the number of the color table
-     * @return {number}
-     */
-    getColorTableId() { return this.colorTableId; }
-
-    /**
      *
      * @return {boolean}
      */
     isThreeColor() { return this.threeColor; }
-
-
-    /**
-     *
-     * @return {number}
-     */
-    getZoomLevel() {return this.zoomLevel; }
-
-    /**
-     *
-     * @return {boolean}
-     */
-    isFlippedY() { return this.flippedY; }
-
 
     /**
      * @summary this method will make a copy of WebPlotRequest. Any changes to the WebPlotRequest object
@@ -134,50 +102,43 @@ export class PlotState {
      * @return {WebPlotRequest} the WebPlotRequest
      * @public
      */
-    getWebPlotRequest(band) { return this.get(band || this.firstBand()).getWebPlotRequest(); }
+    getWebPlotRequest(band) { return this.get(band || this.firstBand()).plotRequest; }
     /**
      * @summary if a cube, checkout how many images it contains
      * @param {Band} [band] the band check for, if not passed the used the primary band
      * @return {number} the WebPlotRequest
      * @public
      */
-    getCubeCnt(band) { return this.get(band || this.firstBand()).getCubeCnt(); }
+    getCubeCnt(band) { return this.get(band || this.firstBand()).cubeCnt; }
 
 
     getCubePlaneNumber(band) {
-        return this.get(band || this.firstBand()).getCubePlaneNumber();
+        return this.get(band || this.firstBand()).cubePlaneNumber;
     }
 
     /**
      * Get the range values for the plot.
-     * @param {band} [band] the band get range value for, parameter is unnecessary for non-three color plots
+     * @param {Band} [band] the band get range value for, parameter is unnecessary for non-three color plots
      * @return {RangeValues}
      */
-    getRangeValues(band) { return this.get(band || this.firstBand()).getRangeValues(); }
+    getRangeValues(band) { return this.get(band || this.firstBand()).rangeValues; }
 
-
-    /**
-     *
-     * @param band
-     * @return {ClientFitsHeader}
-     */
-    getDirectFileAccessData(band) { return this.get(band).getDirectFileAccessData(); }
-
+    setRangeValues(band,rv) { this.get(band).rangeValues= rv;}
 
     /**
      * @param band
      * @return {string}
      */
-    getWorkingFitsFileStr(band) { return band ? this.get(band).getWorkingFitsFileStr() : null; }
+    getWorkingFitsFileStr(band=undefined) { return this.get(band || this.firstBand()).workingFitsFileStr;}
 
     /**
      * @param band
      * @return {string}
      */
-    getOriginalFitsFileStr(band) { return band ? this.get(band).getOriginalFitsFileStr() : null; }
+    getOriginalFitsFileStr(band) { return this.get(band || this.firstBand()).originalFitsFileStr; }
 
 
-    getUploadFileName(band) { return band ? this.get(band).getUploadedFileName() : null; }
+    getUploadFileName(band) { return this.get(band || this.firstBand()).uploadFileNameStr; }
 
     /**
      *
@@ -188,7 +149,7 @@ export class PlotState {
         if (op.key) {
             newOp= op;
         }
-        else if (op.toString === 'function') {
+        else if (typeof op.toString === 'function') {
             newOp= Operation.get(op.toString());
         }
         else if (typeof op === 'string') {
@@ -219,7 +180,7 @@ export class PlotState {
             idx= b ? b.value : Band.NO_BAND.value;
         }
 
-        if (!this.bandStateAry[idx]) this.bandStateAry[idx]= BandState.makeBandState();
+        if (!this.bandStateAry[idx]) this.bandStateAry[idx]= makeBandState();
         return this.bandStateAry[idx];
     }
 
@@ -239,29 +200,32 @@ export class PlotState {
         return PlotState.makePlotStateWithJson(JSON.parse(jsonStr));
     }
 
-    static makePlotStateWithJson(psJson) {
-        if (!psJson) return null;
+    /**
+     * Create a plot state object from the json version of the object.
+     * @param psJson
+     * @param [overridePlotRequest] - if defined and not three color use this one instead of the on the the json object
+     * @param [overrideRV] - if defined and not three color use this one instead of the on the the json object
+     * @return {PlotState}
+     */
+    static makePlotStateWithJson(psJson, overridePlotRequest, overrideRV) {
+        if (!psJson) return;
         const state= PlotState.makePlotState();
+        // if not include used defaulted values
+        state.threeColor= Boolean(psJson.threeColor);
+        state.ops= psJson.ops?.map( (op) => Operation.get(op) ) ?? [];
 
-        if (isArray(psJson.bandStateAry)) {
-            state.bandStateAry= psJson.bandStateAry.map( (bJ) => BandState.makeBandStateWithJson(bJ));
+        const {bandStateAry}= psJson;
+        const ovPR= !state.threeColor ? overridePlotRequest : undefined;
+        const ovRV= !state.threeColor ? overrideRV : undefined;
+
+        if (isArray(bandStateAry)) {
+            state.bandStateAry= bandStateAry.map( (bJ) => makeBandStateWithJson(bJ, ovPR,ovRV));
         }
         else {
-            state.bandStateAry= [BandState.makeBandStateWithJson(psJson.bandStateAry)];
+            state.bandStateAry= [makeBandStateWithJson(bandStateAry, ovPR,ovRV)];
         }
 
         state.ctxStr=psJson.ctxStr;
-        state.zoomLevel= psJson.zoomLevel;
-        state.colorTableId= psJson.colorTableId || 0;
-
-        // if not include used defaulted values
-        state.multiImage= psJson.multiImage; // if multiImage is not default we don't care
-        state.rotationType= psJson.rotationType ? RotateType.get(psJson.rotationType) : RotateType.UNROTATE;
-        state.rotaNorthType= psJson.rotaNorthType ? CoordinateSys.parse(psJson.rotaNorthType) : CoordinateSys.EQ_J2000;
-        state.rotationAngle= psJson.rotationAngle ? psJson.rotationAngle : NaN;
-        state.flippedY= Boolean(psJson.flippedY);
-        state.threeColor= Boolean(psJson.threeColor);
-        state.ops= psJson.ops ? psJson.ops.map( (op) => Operation.get(op) ) :[];
 
         return state;
     }
@@ -272,31 +236,16 @@ export class PlotState {
      * @param {boolean} includeDirectAccessData include the includeDirectAccessData object
      */
     static convertToJSON(s, includeDirectAccessData= true) {
-        if (!s) return null;
+        if (!s) return undefined;
         const json= {};
         json.ctxStr=s.ctxStr;
-        json.zoomLevel= s.zoomLevel;
-        json.colorTableId= s.colorTableId;
-        // json.rotationType= s.rotationType.key;
-        // json.rotaNorthType= s.rotaNorthType.toString();
-        // json.ops= s.ops.map( (op) => op.key );
-        // json.threeColor= s.threeColor;
-        // json.flippedY= s.flippedY;
-        // json.rotationAngle= s.rotationAngle;
+        json.colorTableId= 0;
 
-
-        // if not defaulted values, don't include
-
-        if (s.multiImage) json.multiImage= s.multiImage;
-        if (s.rotationType!==RotateType.UNROTATE) json.rotationType= s.rotationType.key;
-        if (s.rotaNorthType!==CoordinateSys.EQ_J2000) json.rotaNorthType= s.rotaNorthType.toString();
         if (!isEmpty(s.ops)) json.ops= s.ops.map( (op) => op.key );
         if (s.threeColor) json.threeColor= true;
-        if (s.flippedY) json.flippedY= true;
-        if (!isNaN(s.rotationAngle)) json.rotationAngle= s.rotationAngle;
 
 
-        json.bandStateAry= s.bandStateAry.map( (bJ) => BandState.convertToJSON(bJ,includeDirectAccessData));
+        json.bandStateAry= s.bandStateAry.map( (bJ) => convertBandStateToJSON(bJ,includeDirectAccessData));
         return json;
     }
 
@@ -304,10 +253,9 @@ export class PlotState {
 
 export function makePlotStateShimForHiPS(wpRequest) {
     const plotState= PlotState.makePlotState();
-    const bandState= BandState.makeBandState();
-    bandState.plotRequestTmp= wpRequest;
+    const bandState= makeBandState();
+    bandState.plotRequest= wpRequest;
     plotState.bandStateAry= [bandState,null,null];
-    plotState.colorTableId=-1;
     return plotState;
 }
 

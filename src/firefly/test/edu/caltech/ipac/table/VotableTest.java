@@ -4,8 +4,7 @@
 package edu.caltech.ipac.table;
 
 import edu.caltech.ipac.firefly.ConfigTest;
-import edu.caltech.ipac.firefly.server.db.EmbeddedDbUtil;
-import edu.caltech.ipac.firefly.server.db.HsqlDbAdapter;
+import edu.caltech.ipac.firefly.server.db.DbAdapter;
 import edu.caltech.ipac.firefly.util.FileLoader;
 import edu.caltech.ipac.table.io.VoTableReader;
 import org.json.simple.JSONObject;
@@ -17,7 +16,6 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 
-import static edu.caltech.ipac.firefly.server.db.DbAdapter.MAIN_DB_TBL;
 import static edu.caltech.ipac.table.JsonTableUtil.getMetaFromAllMeta;
 import static edu.caltech.ipac.table.JsonTableUtil.getPathValue;
 
@@ -54,17 +52,17 @@ public class VotableTest extends ConfigTest {
     @Test
     public void dbIngestTest() {
         try {
-            DataGroup data = VoTableReader.voToDataGroups(testFile.getAbsolutePath())[0];
+            final DataGroup data = VoTableReader.voToDataGroups(testFile.getAbsolutePath())[0];
 
             // ingest data into db
-            HsqlDbAdapter dbAdapter = new HsqlDbAdapter();
-            EmbeddedDbUtil.createDbFile(dbFile,dbAdapter);
-            EmbeddedDbUtil.ingestDataGroup(dbFile, data, dbAdapter, MAIN_DB_TBL);
+            DbAdapter dbAdapter = DbAdapter.getAdapter(dbFile);
+            dbAdapter.initDbFile();
+            dbAdapter.ingestData(() -> data, dbAdapter.getDataTable());
 
             // get data back out
-            data = EmbeddedDbUtil.execQuery(dbAdapter, dbFile, "Select RA, \"Dec\", \"Name\", \"RVel\", \"e_RVel\", R from data", MAIN_DB_TBL);
+            DataGroup qdata = dbAdapter.execQuery("Select RA, \"Dec\", \"Name\", \"RVel\", \"e_RVel\", R from data", dbAdapter.getDataTable());
 
-            verifyTableData(data);
+            verifyTableData(qdata);
 
         } catch (Exception e) {
             Assert.fail("VotableTest.dbIngestTest failed with exception: " + e.getMessage());
@@ -122,7 +120,7 @@ public class VotableTest extends ConfigTest {
         Assert.assertEquals(1, groups.get(0).getParamInfos().size());
         Assert.assertEquals("cooframe", groups.get(0).getParamInfos().get(0).getKeyName());
         Assert.assertEquals("pos.frame", groups.get(0).getParamInfos().get(0).getUCD());
-        Assert.assertEquals("UTC-ICRS-TOPO", groups.get(0).getParamInfos().get(0).getValue());
+        Assert.assertEquals("UTC-ICRS-TOPO", groups.get(0).getParamInfos().get(0).getStringValue());
         Assert.assertEquals("char", groups.get(0).getParamInfos().get(0).getTypeDesc());
         Assert.assertEquals("stc:AstroCoords.coord_system_id", groups.get(0).getParamInfos().get(0).getUType());
     }
@@ -158,7 +156,7 @@ public class VotableTest extends ConfigTest {
         Assert.assertEquals("float", param.get("type"));
         Assert.assertEquals("phys.size;instr.tel", param.get("UCD"));
         Assert.assertEquals("m", param.get("units"));
-        Assert.assertEquals("3.6", param.get("value"));
+        Assert.assertEquals(3.6f, param.get("value"));
 
         // table links
         JSONObject link1 = (JSONObject) getPathValue(tm, "links", "0");

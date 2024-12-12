@@ -1,33 +1,59 @@
 /* eslint prefer-template:0 */
-import {get, isString, isFunction, isPlainObject, isArray, join, omit, pick, isObject} from 'lodash';
+import {get, isString, isFunction, isPlainObject, isArray, join, omit, pick, isObject, isUndefined} from 'lodash';
 import Enum from 'enum';
 import {ServerRequest} from '../data/ServerRequest.js';
 import {RequestType} from './RequestType.js';
 import {ZoomType} from './ZoomType.js';
-import Point from './Point.js';
 import {parseResolver} from '../astro/net/Resolver.js';
 import {RangeValues} from './RangeValues.js';
 import {PlotAttribute} from './PlotAttribute.js';
+import CoordinateSys from 'firefly/visualize/CoordSys.js';
 
 
 const DEFAULT_IMAGE_OVERLAYS= ['ACTIVE_TARGET_TYPE','POINT_SELECTION_TYPE', 'NORTH_UP_COMPASS_TYPE',
     'WEB_GRID_TYPE', 'OVERLAY_MARKER_TYPE', 'OVERLAY_FOOTPRINT_TYPE', 'REGION_PLOT_TYPE',
-    'HIPS_GRID_TYPE', 'MOC_PLOT_TYPE'];
+    ];
 
 const DEFAULT_HIPS_OVERLAYS= ['ACTIVE_TARGET_TYPE','POINT_SELECTION_TYPE', 'NORTH_UP_COMPASS_TYPE',
     'OVERLAY_MARKER_TYPE', 'OVERLAY_FOOTPRINT_TYPE', 'REGION_PLOT_TYPE', 'HIPS_GRID_TYPE', 'MOC_PLOT_TYPE'];
 
 /**
+ * @typedef ServiceType
  * @summary service type
  * @description can be 'IRIS', 'ISSA', 'DSS', 'SDSS', 'TWOMASS', 'MSX', 'WISE', 'ATLAS','ZTF', 'PTF', 'UNKNOWN'
+ *
+ * @prop IRIS
+ * @prop ISSA
+ * @prop DSS
+ * @prop SDSS
+ * @prop TWOMASS
+ * @prop MSX
+ * @prop WISE
+ * @prop ATLAS
+ * @prop ZTF
+ * @prop PTF
+ * @prop UNKNOWN
+ *
+ * @type {Enum}
  * @public
  * @global
  */
 export const ServiceType= new Enum(['IRIS', 'ISSA', 'DSS', 'SDSS', 'TWOMASS', 'MSX', 'WISE', 'ATLAS', 'ZTF', 'PTF', 'UNKNOWN'],
                                               { ignoreCase: true });
 /**
+ * @typedef {Object} TitleOptions
  * @summary title options
  * @description can be 'CLEARED', 'PLOT_DESC', 'FILE_NAME', 'HEADER_KEY', 'PLOT_DESC_PLUS', 'SERVICE_OBS_DATE'
+ *
+ * @prop NONE
+ * @prop CLEARED
+ * @prop PLOT_DESC
+ * @prop FILE_NAME
+ * @prop HEADER_KEY
+ * @prop PLOT_DESC_PLUS
+ * @prop SERVICE_OBS_DATE'
+ *
+ * @type {Enum}
  * @public
  * @global
  */
@@ -40,16 +66,27 @@ export const TitleOptions= new Enum([
     'SERVICE_OBS_DATE'
 ], { ignoreCase: true });
 
-export const AnnotationOps= new Enum([  // note - this is not completely implemented - only finder chart using it now
+/**
+ * @typedef {Object} AnnotationOps
+ * @prop INLINE
+ * @prop INLINE_BRIEF
+ *
+ * @type {Enum}
+ */
+
+/** @type AnnotationOps*/
+export const AnnotationOps= new Enum([
     'INLINE',    //default inline title full title and tools
-    'INLINE_BRIEF',  // inline brief title, no tools
-    'INLINE_BRIEF_TOOLS', // brief title w/ tools
-    'TITLE_BAR', // title full title and tools
-    'TITLE_BAR_BRIEF', // title bar brief title, no tools
-    'TITLE_BAR_BRIEF_TOOLS', // title bar brief with w/ tools
-    'TITLE_BAR_BRIEF_CHECK_BOX' // title bar brief title with a check box (used in planck)
+    'INLINE_BRIEF',  // inline brief title, details
 ], { ignoreCase: true });
 
+/**
+ * @typedef {Object} GridOnStatus
+ * @prop FALSE
+ * @prop TRUE
+ * @prop TRUE_LABELS_FALSE
+ * @type {Enum}
+ */
 export const GridOnStatus= new Enum(['FALSE','TRUE','TRUE_LABELS_FALSE'], { ignoreCase: true });
 
 export const DEFAULT_THUMBNAIL_SIZE= 70;
@@ -61,7 +98,6 @@ export const WPConst= {
     URLKEY : 'URL',
     SIZE_IN_DEG : 'SizeInDeg',
     SURVEY_KEY : 'SurveyKey',
-    SURVEY_KEY_ALT : 'SurveyKeyAlt',
     SURVEY_KEY_BAND : 'SurveyKeyBand',
     TYPE : 'Type',
     ZOOM_TYPE : 'ZoomType',
@@ -77,16 +113,7 @@ export const WPConst= {
     INIT_COLOR_TABLE : 'ColorTable',
     MULTI_IMAGE_IDX : 'MultiImageIdx',
     MULTI_IMAGE_EXTS: 'MultiImageExts',
-    ZOOM_TO_WIDTH : 'ZoomToWidth',
-    ZOOM_TO_HEIGHT : 'ZoomToHeight',
     ZOOM_ARCSEC_PER_SCREEN_PIX : 'ZoomArcsecPerScreenPix',
-    POST_CROP : 'PostCrop',
-    POST_CROP_AND_CENTER : 'PostCropAndCenter',
-    POST_CROP_AND_CENTER_TYPE : 'PostCropAndCenterType',
-    CROP_PT1 : 'CropPt1',
-    CROP_PT2 : 'CropPt2',
-    CROP_WORLD_PT1 : 'CropWorldPt1',
-    CROP_WORLD_PT2 : 'CropWorldPt2',
     OBJECT_NAME : 'ObjectName',
     RESOLVER : 'Resolver',
     PROGRESS_KEY : 'ProgressKey',
@@ -109,6 +136,9 @@ export const WPConst= {
     OVERLAY_IDS: 'PredefinedOverlayIds',
     HIPS_ROOT_URL: 'hipsRootUrl',
     HIPS_SURVEYS_ID: 'hipsSurveysId',
+    HIPS_USE_AITOFF_PROJECTION: 'hipsUseAitoffProjection',
+    HIPS_USE_COORDINATE_SYS: 'hipsCoordinateSys',
+    HIPS_ADDITIONAL_MOC_LIST: 'hipsAdditionalMocList',
 
     ANNOTATION_OPS : 'AnnotationOps',
     TITLE_OPTIONS : 'TitleOptions',
@@ -128,7 +158,7 @@ const paramKeys= Object.values(WPConst);
 const allKeys= new Enum([...paramKeys, ...plotAttKeys ], { ignoreCase: true });
 
 
-const clientSideKeys = [WPConst.PREFERENCE_COLOR_KEY, WPConst.ALLOW_IMAGE_SELECTION, WPConst.GRID_ON,
+const clientSideKeys = [WPConst.PREFERENCE_COLOR_KEY, WPConst.GRID_ON,
          WPConst.TITLE_OPTIONS, WPConst.POST_TITLE, WPConst.PRE_TITLE, WPConst.OVERLAY_POSITION,
          WPConst.PLOT_GROUP_ID, WPConst.DRAWING_SUB_GROUP_ID,
          WPConst.DOWNLOAD_FILENAME_ROOT, WPConst.PLOT_ID, WPConst.GROUP_LOCKED, WPConst.OVERLAY_IDS
@@ -146,7 +176,7 @@ const defParams= {
 };
 
 /**
- * @summary Web plot request. This object can be created by using the method of making survey request like *makexxxRequest*
+ * @summary Web plot request. This object can be created by using the method of making survey request like *makeXXXRequest*
  * and the method of setting the parameters.
  * @param {RequestType} type request type
  * @param {string} userDesc description
@@ -467,38 +497,6 @@ export class WebPlotRequest extends ServerRequest {
 //======================================================================
 
     /**
-     * Certain zoom types require the width of the viewable area to determine the zoom level
-     * used with ZoomType.FULL_SCREEN, ZoomType.TO_WIDTH
-     *
-     * @param {number} width the width in pixels
-     * @see {ZoomType}
-     */
-    setZoomToWidth(width) {
-        const w= Number(width);
-        if (!isNaN(w)) this.setParam(WPConst.ZOOM_TO_WIDTH, Math.round(w) + '');
-    }
-
-    getZoomToWidth() {
-        return this.containsParam(WPConst.ZOOM_TO_WIDTH) ? this.getIntParam(WPConst.ZOOM_TO_WIDTH) : 0;
-    }
-
-    /**
-     * Certain zoom types require the height of the viewable area to determine the zoom level
-     * used with ZoomType.FULL_SCREEN, ZoomType.TO_HEIGHT (to height, no yet implemented)
-     *
-     * @param height the height in pixels
-     * @see {ZoomType}
-     */
-    setZoomToHeight(height) {
-        const h= Number(height);
-        if (!isNaN(h)) this.setParam(WPConst.ZOOM_TO_HEIGHT, Math.round(h) + '');
-    }
-
-    getZoomToHeight() {
-        return this.containsParam(WPConst.ZOOM_TO_HEIGHT) ? this.getIntParam(WPConst.ZOOM_TO_HEIGHT) : 0;
-    }
-
-    /**
      * set the initialize zoom level, this is used with ZoomType.LEVEL
      *
      * @param {number} zl the zoom level, float
@@ -531,10 +529,7 @@ export class WebPlotRequest extends ServerRequest {
     setZoomType(zoomType) { if (zoomType) this.setParam(WPConst.ZOOM_TYPE, zoomType.key); }
 
     getZoomType() {
-        const w= this.getZoomToWidth();
-        const h= this.getZoomToHeight();
-        const defaultType= (w && h) ?  ZoomType.TO_WIDTH_HEIGHT : ZoomType.LEVEL;
-        return ZoomType.get(this.getParam(WPConst.ZOOM_TYPE)) || defaultType;
+        return ZoomType.get(this.getParam(WPConst.ZOOM_TYPE)) || ZoomType.TO_WIDTH_HEIGHT;
     }
 
     /**
@@ -546,6 +541,11 @@ export class WebPlotRequest extends ServerRequest {
      */
     setZoomArcsecPerScreenPix(arcsecSize) {
         this.setParam(WPConst.ZOOM_ARCSEC_PER_SCREEN_PIX, arcsecSize + '');
+    }
+
+    getZoomArcsecPerScreenPix() {
+        return this.containsParam(WPConst.ZOOM_ARCSEC_PER_SCREEN_PIX) ?
+            this.getFloatParam(WPConst.ZOOM_ARCSEC_PER_SCREEN_PIX) : 0;
     }
 
 //======================================================================
@@ -591,39 +591,6 @@ export class WebPlotRequest extends ServerRequest {
      * @param flipY boolean, true to flip, false not to flip
      */
     setFlipY(flipY) { this.setParam(WPConst.FLIP_Y,flipY+''); }
-
-//======================================================================
-//----------------------- Crop Settings --------------------------------
-// this is not really used right now from the client, we might later.
-// the FinderChart api uses post crop
-//======================================================================
-    /**
-     * Crop the image before returning it.  If rotation is set then the crop will happen post rotation.
-     * Note: setCropPt1 & setCropPt2 are required to crop
-     *
-     * @param postCrop boolean, do the post crop
-     */
-    setPostCrop(postCrop) { this.setParam(WPConst.POST_CROP, postCrop + ''); }
-
-    /**
-     * set the post crop
-     * @param postCrop boolean
-     */
-    setPostCropAndCenter(postCrop) { this.setParam(WPConst.POST_CROP_AND_CENTER, postCrop + ''); }
-
-    /**
-     * Set to coordinate system for crop and center, eq j2000 is the default
-     * @param csys CoordinateSys, the CoordinateSys, default CoordinateSys.EQ_J2000
-     */
-    setPostCropAndCenterType(csys) { this.setParam(WPConst.POST_CROP_AND_CENTER_TYPE, csys.toString()); }
-
-    setCropPt1(pt1) {
-        if (pt1) this.setParam((pt1.type===Point.W_PT) ? WPConst.CROP_WORLD_PT1 : WPConst.CROP_PT1, pt1.toString());
-    }
-
-    setCropPt2(pt2) {
-        if (pt2) this.setParam((pt2.type===Point.W_PT) ? WPConst.CROP_WORLD_PT2 : WPConst.CROP_PT2, pt2.toString());
-    }
 
 //======================================================================
 //----------------------- Retrieval Settings --------------------------------
@@ -702,16 +669,6 @@ export class WebPlotRequest extends ServerRequest {
     getSurveyKey() { return this.getParam(WPConst.SURVEY_KEY); }
 
     /**
-     * @param {string} key string
-     */
-    setSurveyKeyAlt(key) { this.setParam(WPConst.SURVEY_KEY_ALT, key); }
-
-    /**
-     * @return {string} key string
-     */
-    getSurveyKeyAlt() { return this.getParam(WPConst.SURVEY_KEY_ALT); }
-
-    /**
      * @return {string} key string
      */
     getSurveyBand() { return this.getParam(WPConst.SURVEY_KEY_BAND); }
@@ -742,7 +699,7 @@ export class WebPlotRequest extends ServerRequest {
 
     /**
      *
-     * @param {WorldPt} worldPt WorldPt
+     * @param {WorldPt|undefined} worldPt WorldPt
      */
     setWorldPt(worldPt) { if (worldPt) this.setParam(WPConst.WORLD_PT, worldPt.toString()); }
 
@@ -843,6 +800,19 @@ export class WebPlotRequest extends ServerRequest {
     setHipsRootUrl(url) { this.setSafeParam(WPConst.HIPS_ROOT_URL, url);}
     getHipsRootUrl() { return this.getSafeParam(WPConst.HIPS_ROOT_URL);}
 
+
+    setHipsUseAitoffProjection(useAitoff) { this.setParam(WPConst.HIPS_USE_AITOFF_PROJECTION, Boolean(useAitoff));}
+    getHipsUseAitoffProjection() { return this.getBooleanParam(WPConst.HIPS_USE_AITOFF_PROJECTION);}
+
+    setHipsUseCoordinateSys(csys) {
+        if (csys!==CoordinateSys.EQ_J2000 && csys!==CoordinateSys.GALACTIC) return;
+        this.setParam(WPConst.HIPS_USE_COORDINATE_SYS, csys.toString());
+    }
+
+    getHipsUseCoordinateSys() {
+        return CoordinateSys.parse(this.getParam(WPConst.HIPS_USE_COORDINATE_SYS));
+    }
+
     /**
      *
      * @param overlayIdList
@@ -853,8 +823,8 @@ export class WebPlotRequest extends ServerRequest {
      * @return {Array.<String>} array of string DrawLayerType IDs
      */
     getOverlayIds() {
-        if (this.containsParam(WPConst.OVERLAY_IDS)) {
-            return this.getParam(WPConst.OVERLAY_IDS).split(';');
+        if (!isUndefined(this.params[WPConst.OVERLAY_IDS])) {
+            return this.getParam(WPConst.OVERLAY_IDS).split(';').filter((s) => s);
         }
         else {
             return this.getRequestType()!==RequestType.HiPS ? DEFAULT_IMAGE_OVERLAYS : DEFAULT_HIPS_OVERLAYS;
@@ -943,16 +913,18 @@ export class WebPlotRequest extends ServerRequest {
      * @param {string} str the serialized WebPlotRequest
      * @return (WebPlotRequest) the deserialized WebPlotRequest
      */
-    static parse(str) { return ServerRequest.parse(str, new WebPlotRequest()); }
+    static parse(str) { return ServerRequest.parseAndAdd(str, new WebPlotRequest()); }
 
     static isWPR(o) {return isObject(o) && o.getRequestClass?.()===WEB_PLOT_REQUEST_CLASS;}
 
     /**
+     * @param {Object} [overrideParams] params to replace in the copy
      * @return {WebPlotRequest}
      */
-    makeCopy() {
+    makeCopy(overrideParams=undefined) {
         const retval = new WebPlotRequest();
         retval.copyFrom(this);
+        if (overrideParams) retval.setParams(cleanupObj(overrideParams));
         return retval;
     }
 }
@@ -1024,11 +996,14 @@ export function confirmPlotRequest(request,global={},fallbackGroupId,makePlotId)
 function makeDataOnlyRequestString(r) {
     if (!r) return '';
     r= r.makeCopy();
-    r.setZoomToWidth(1);
-    r.setZoomToHeight(1);
     r.setRequestKey('');
+    r.setPlotId('');
+    r.setPlotGroupId('');
     r.setInitialRangeValues();
     r.setInitialColorTable(getDefaultImageColorTable());
+    r.setAnnotationOps(AnnotationOps.INLINE);
+    r.setRotateNorth(false);
+    r.setRotate(0);
     return r.toString();
 }
 

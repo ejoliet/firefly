@@ -1,3 +1,5 @@
+import {isArrayBuffer} from 'lodash';
+import BrowserInfo from '../../util/BrowserInfo.js';
 import {getGpuJs} from './GpuJsConfig.js';
 import {getGPUOps} from './RawImageTilesGPU.js';
 import {createTransitionalTileWithCPU} from './RawImageTilesCPU.js';
@@ -5,20 +7,39 @@ import {
     AJAX_REQUEST, getGlobalObj,
     isGPUAvailableInWorker,
     isImageBitmap,
-    isOffscreenCanvas, MEG, K,
+    isOffscreenCanvas, MEG,
     REQUEST_WITH
 } from '../../util/WebUtil.js';
 import {getColorModel} from './rawAlgorithm/ColorTable.js';
-import {isArrayBuffer} from 'lodash';
+import {RawDataThreadActions} from 'firefly/threadWorker/WorkerThreadActions.js';
 
+export const HALF= 'HALF';
+export const QUARTER= 'QUARTER';
+export const FULL= 'FULL';
 
 const abortControllers= new Map(); // map of imagePlotId and AbortController
 export const TILE_SIZE = 3000;
-export const MAX_RAW_IMAGE_SIZE = 400*MEG; // 400 megs
-export const MAX_DIRECT_IMAGE_SIZE= 250*K;
-export const MAX_DIRECT_MASK_IMAGE_SIZE= 200*MEG;
+export const MAX_FULL_DATA_SIZE = 1500*MEG; //max size of byte data that can be loaded, file size will be 4x to 8x bigger
 const USE_GPU = true;
 
+export function shouldUseGpuInWorker() {
+    if (BrowserInfo.isSafari()) return false;
+    return isGPUAvailableInWorker();
+}
+
+/**
+ *
+ * @param rawTileDataAry
+ * @param colorModel
+ * @param {boolean} isThreeColor
+ * @param mask
+ * @param {String} maskColor
+ * @param {number} bias
+ * @param {number} contrast
+ * @param {boolean} bandUse
+ * @param {String} rootUrl
+ * @return {Promise}
+ */
 async function populateRawTileDataArray(rawTileDataAry, colorModel, isThreeColor, mask, maskColor, bias, contrast, bandUse, rootUrl) {
     const GPU = USE_GPU ? await getGpuJs(rootUrl) : undefined;
     const createTransitionalTile = USE_GPU ? getGPUOps(GPU).createTransitionalTileWithGPU : createTransitionalTileWithCPU;
@@ -27,7 +48,7 @@ async function populateRawTileDataArray(rawTileDataAry, colorModel, isThreeColor
 }
 
 export async function populateRawImagePixelDataInWorker(rawTileDataGroup, colorTableId, isThreeColor, mask, maskColor, bias, contrast, bandUse, rootUrl) {
-    if (isGPUAvailableInWorker() && !mask) {
+    if (shouldUseGpuInWorker() && !mask) {
         const colorModel = getColorModel(colorTableId);
         const rawTileDataAry = await populateRawTileDataArray(rawTileDataGroup.rawTileDataAry, colorModel, isThreeColor,  mask, maskColor, bias, contrast, bandUse, rootUrl);
 
@@ -51,7 +72,6 @@ export async function populateRawImagePixelDataInWorker(rawTileDataGroup, colorT
             }));
         const retRawTileDataGroup = {...localRawTileDataGroup};
         return {localRawTileDataGroup, retRawTileDataGroup};
-
     }
 }
 
@@ -76,7 +96,7 @@ export function makeFetchOptions(plotImageId, params) {
 
 export async function abortFetch({plotImageId}) {
     abortControllers.get(plotImageId)?.abort();
-    return {data:true};
+    return {data:{success:true, type: RawDataThreadActions.ABORT_FETCH}};
 }
 
 export function getTransferable(result) {
@@ -106,9 +126,37 @@ export function getTransferable(result) {
 
 }
 
+export function getRealDataDim( dataCompress, dataWidth, dataHeight) {
+
+    const tileSize= dataCompress===FULL ? TILE_SIZE : dataCompress===HALF ? TILE_SIZE/2 : TILE_SIZE/4;
+
+    let xPanels= Math.trunc(dataWidth / TILE_SIZE);
+    let yPanels= Math.trunc(dataHeight / TILE_SIZE);
+    if (dataWidth % TILE_SIZE > 0) xPanels++;
+    if (dataHeight % TILE_SIZE > 0) yPanels++;
+
+    let realDataWidth= dataWidth;
+    let realDataHeight= dataHeight;
+    if (dataCompress===QUARTER) {
+        realDataWidth = dataWidth % 4 === 0 ? Math.trunc(dataWidth / 4) : Math.trunc(dataWidth / 4) + 1;
+        realDataHeight = dataHeight % 4 === 0 ? Math.trunc(dataHeight / 4) : Math.trunc(dataHeight / 4) + 1;
+    }
+    else if (dataCompress===HALF) {
+        realDataWidth= dataWidth % 2 === 0 ? Math.trunc(dataWidth /2) : Math.trunc(dataWidth /2) + 1;
+        realDataHeight= dataHeight % 2 === 0 ? Math.trunc(dataHeight /2) : Math.trunc(dataHeight /2) + 1;
+    }
+
+    return {tileSize,xPanels,yPanels, realDataWidth, realDataHeight};
+
+}
+
+// export function getDataCompress(plotImageId) {
+//     return getEntry(plotImageId)?.rawTileDataGroup?.dataCompress;
+// }
+
 
 /**
- * @typedef RawTileData
+ * @typedef {Object} RawTileData
  *
  * @prop {number} x
  * @prop {number} y
@@ -125,5 +173,7 @@ export function getTransferable(result) {
 
 /**
  * @typedef RawTileDataGroup
+ * @prop {String} dataCompress - should be 'FULL' or 'HALF' or 'QUARTER'
+ * @prop {number} colorTableId
  * @prop {Array.<RawTileData>} rawTileData
  */

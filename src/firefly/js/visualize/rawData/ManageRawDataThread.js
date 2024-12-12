@@ -3,15 +3,10 @@ import {ServerParams} from '../../data/ServerParams.js';
 import {addRawDataToCache, getEntry, removeRawData} from './RawDataThreadCache.js';
 import PlotState from '../PlotState.js';
 import {RawDataThreadActions} from '../../threadWorker/WorkerThreadActions.js';
-import { getSizeAsString, lowLevelDoFetch, MEG, } from '../../util/WebUtil.js';
+import {lowLevelDoFetch} from '../../util/WebUtil.js';
 import {
-    abortFetch,
-    getTransferable,
-    makeFetchOptions,
-    populateRawImagePixelDataInWorker,
-    TILE_SIZE
-} from './RawDataCommon.js';
-// import {doStretchData, fetchRawDataArray, getFluxDirect} from './RawFloatData.js';
+    abortFetch, getRealDataDim, getTransferable,
+    makeFetchOptions, populateRawImagePixelDataInWorker, TILE_SIZE } from './RawDataCommon.js';
 
 const {FETCH_DATA, STRETCH, COLOR, GET_FLUX, REMOVE_RAW_DATA, FETCH_STRETCH_BYTE_DATA, ABORT_FETCH}= RawDataThreadActions;
 
@@ -23,18 +18,17 @@ export function doRawDataWork({type,payload}) {
 
         switch (type) {
             case ABORT_FETCH: return abortFetch(payload);
-            // case FETCH_DATA: return fetchRawDataArray(payload);
-            case FETCH_DATA: return console.log(`${type} is disabled`);
             case FETCH_STRETCH_BYTE_DATA: return fetchByteDataArray(payload);
-            // case STRETCH: return doStretchData(payload);
-            case STRETCH: return console.log(`${type} is disabled`);
             case COLOR: return doColorChange(payload);
-            // case GET_FLUX: return getFluxDirect(payload);
-            case GET_FLUX: return console.log(`${type} is disabled`);
             case REMOVE_RAW_DATA: {
                 abortFetch(payload);
-                return Promise.resolve({data:{entryCnt:removeRawData(payload.plotImageId)}});
+                return Promise.resolve({data:{type:REMOVE_RAW_DATA, entryCnt:removeRawData(payload.plotImageId)}});
             }
+
+            case FETCH_DATA:
+            case STRETCH:
+            case GET_FLUX:
+                return Promise.resolve({success:false, error:`${type} is disabled`});
         }
     }
     catch (error) {
@@ -56,8 +50,7 @@ async function doColorChange(payload) {
     const {plotImageId,plotState,colorTableId, threeColor, bias, contrast, rootUrl, useRed=true,useGreen=true,useBlue=true} = payload;
     const bandUse= {useRed,useGreen,useBlue};
     const result= await changeLocalRawDataColor(plotImageId,colorTableId,threeColor, bias, contrast, bandUse, plotState,rootUrl);
-    const transferable= getTransferable(result);
-    return {data:result, transferable};
+    return {data:{...result, type:COLOR, transferable: getTransferable(result)}};
 }
 
 
@@ -74,17 +67,20 @@ function convertToBits(ary) {
 
 async function fetchByteDataArray(payload) {
     const {plotImageId,plotStateSerialized, plotState, processHeader, dataWidth, dataHeight,
-        bias, contrast, cmdSrvUrl, rootUrl, mask= false, maskBits=0, maskColor=''} = payload;
+        bias, contrast, cmdSrvUrl, rootUrl, mask= false, maskBits=0, maskColor='',
+        veryLargeData= false, dataCompress='FULL', colorTableId} = payload;
 
     try {
-        const start= Date.now();
-        const allTileAry= await callStretchedByteData(plotImageId, plotStateSerialized, plotState,
-            dataWidth,dataHeight, mask, maskBits, cmdSrvUrl);
-        const rawTileDataGroup= createRawTileDataGroup(dataWidth,dataHeight);
+        // const start= Date.now();
+        const callResults= await callStretchedByteData(plotImageId, plotStateSerialized, plotState,
+            dataWidth,dataHeight, mask, maskBits, cmdSrvUrl, dataCompress, veryLargeData);
+        if (!callResults.success) {
+            return {data:{success:false, type: FETCH_STRETCH_BYTE_DATA, fatal: true, message: callResults.message}};
+        }
+
+        const {allTileAry}= callResults;
+        const rawTileDataGroup= createRawTileDataGroup(dataWidth,dataHeight, dataCompress);
         if (plotState.isThreeColor()) {
-            const bands= plotState.getBands();
-            // const colorCnt= bands.length;
-            // const tileLen= rawTileDataGroup.rawTileDataAry.length*colorCnt;
             let rt;
             let tileIdx=0;
             for(let i=0; (i<rawTileDataGroup.rawTileDataAry.length); i++) {
@@ -103,12 +99,8 @@ async function fetchByteDataArray(payload) {
             }
         }
         else {
-            if (mask) {
-                rawTileDataGroup.rawTileDataAry.forEach( (rt,idx) => rt.pixelDataStandard= convertToBits(allTileAry[idx]));
-            }
-            else {
-                rawTileDataGroup.rawTileDataAry.forEach( (rt,idx) => rt.pixelDataStandard= allTileAry[idx]);
-            }
+            rawTileDataGroup.rawTileDataAry.forEach( (rt,idx) =>
+                rt.pixelDataStandard= mask? convertToBits(allTileAry[idx]) : allTileAry[idx]);
         }
         let entry= getEntry(plotImageId);
         if (!entry) {
@@ -116,51 +108,89 @@ async function fetchByteDataArray(payload) {
             entry= getEntry(plotImageId);
         }
         const {retRawTileDataGroup, localRawTileDataGroup}=
-                await populateRawImagePixelDataInWorker(rawTileDataGroup, plotState.colorTableId, plotState.isThreeColor(),
+                await populateRawImagePixelDataInWorker(rawTileDataGroup, colorTableId, plotState.isThreeColor(),
                                                         mask, maskColor, bias, contrast, {}, rootUrl);
         entry.rawTileDataGroup= localRawTileDataGroup;
 
 
         // logging code - uncomment to log
-        const elapse= Date.now()-start;
-        const totalLen= allTileAry.reduce((total,tile) => total+tile.length, 0);
-        const mbPerSec= (totalLen/MEG) / (elapse/1000);
+        // const elapse= Date.now()-start;
+        // const totalLen= allTileAry.reduce((total,tile) => total+tile.length, 0);
+        // const mbPerSec= (totalLen/MEG) / (elapse/1000);
         // console.debug(`${plotImageId}: ${getSizeAsString(totalLen)}, ${elapse} ms, MB/Sec: ${mbPerSec}`);
-        const result= {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized};
+        const result= {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized, type: FETCH_STRETCH_BYTE_DATA};
         const transferable= getTransferable(result);
         return {data:result, transferable};
     }
     catch (e) {
-        console.log(e);
-        return {data:{success:false, messsage: 'call aborted'}};
+        console.log('fetchByteDataArray', e);
+        const result= {data:{success:false, fatal: false, type: FETCH_STRETCH_BYTE_DATA, messsage: 'call aborted: ' + e.toString()}};
+        return result;
     }
 }
 
+function getCompressParam(dataCompress, veryLargeData) {
+    switch (dataCompress) {
+        case 'FULL': return 'FULL';
+        case 'HALF': return dataCompress= veryLargeData ? 'HALF' : 'HALF_FULL';
+        case 'QUARTER': return dataCompress= veryLargeData ? 'QUARTER_HALF' : 'QUARTER_HALF_FULL';
+    }
+    return 'FULL';
+}
 
-export async function callStretchedByteData(plotImageId,plotStateSerialized,plotState, dataWidth,dataHeight,mask,maskBits,cmdSrvUrl) {
+/**
+ * @typedef StretchByteDataResults
+ * @prop {boolean} success
+ * @prop {string} message
+ * @prop {Array.<Uint8ClampedArray>} allTileAry
+ */
+
+/**
+ *
+ * @param {String} plotImageId
+ * @param plotStateSerialized
+ * @param plotState
+ * @param {number} dataWidth
+ * @param {number} dataHeight
+ * @param {boolean} mask
+ * @param {number} maskBits
+ * @param {String} cmdSrvUrl
+ * @param {String} dataCompress - should be 'FULL' or 'HALF' or 'QUARTER'
+ * @param {boolean} veryLargeData - if true and dataCompress is 'QUARTER' never request full size
+ * @return {Promise<StretchByteDataResults>}
+ */
+export async function callStretchedByteData(plotImageId,plotStateSerialized,plotState, dataWidth,dataHeight,
+                                            mask,maskBits,cmdSrvUrl, dataCompress= 'FULL', veryLargeData= false) {
 
     const options=  makeFetchOptions(plotImageId, {
         [ServerParams.COMMAND]: ServerParams.GET_BYTE_DATA,
-        [ServerParams.STATE] : plotStateSerialized,
         [ServerParams.TILE_SIZE] : TILE_SIZE,
+        [ServerParams.STATE] : plotStateSerialized,
         [ServerParams.MASK_DATA] : mask,
         [ServerParams.MASK_BITS] : maskBits,
-
+        [ServerParams.DATA_COMPRESS] : getCompressParam(dataCompress, veryLargeData)
     });
+
+    if (dataCompress!=='FULL' && dataCompress!=='HALF' && dataCompress!=='QUARTER') throw(new Error('dataCompress must be FULL or HALF or QUARTER'));
 
     const response= await lowLevelDoFetch(cmdSrvUrl, options, false );
     if (!response.ok) {
-        throw(new Error(`Error from Server for getStretchedByteData: code: ${response.status}, text: ${response.statusText}`));
+        return {
+            success:false,
+            message: `Fatal: Error from Server for getStretchedByteData: code: ${response.status}, text: ${response.statusText}`,
+            allTileAry:[]
+        };
     }
-    const arrayBuffer= await response.arrayBuffer();
-    const byte1d= new Uint8ClampedArray(arrayBuffer);
-    const tileSize= TILE_SIZE;
+    const byte1d= new Uint8ClampedArray(await response.arrayBuffer());
+    if (!byte1d.length) {
+        return {
+            success:false,
+            message: 'Fatal: No data returned from getStretchedByteData',
+            allTileAry:[]
+        };
+    }
 
-
-    let xPanels= Math.trunc(dataWidth / TILE_SIZE);
-    let yPanels= Math.trunc(dataHeight / TILE_SIZE);
-    if (dataWidth % TILE_SIZE > 0) xPanels++;
-    if (dataHeight % TILE_SIZE > 0) yPanels++;
+    const {tileSize,xPanels,yPanels, realDataWidth, realDataHeight} =  getRealDataDim(dataCompress,dataWidth,dataHeight);
 
     let pos= 0;
     let idx=0;
@@ -169,8 +199,8 @@ export async function callStretchedByteData(plotImageId,plotStateSerialized,plot
     for(let i= 0; i<xPanels; i++) {
         for (let j = 0; j < yPanels; j++) {
             for(let bandIdx=0; (bandIdx<colorCnt); bandIdx++) {
-                const width = (i < xPanels - 1) ? tileSize : ((dataWidth - 1) % tileSize + 1);
-                const height = (j < yPanels - 1) ? tileSize : ((dataHeight - 1) % tileSize + 1);
+                const width = (i < xPanels - 1) ? tileSize : ((realDataWidth - 1) % tileSize + 1);
+                const height = (j < yPanels - 1) ? tileSize : ((realDataHeight - 1) % tileSize + 1);
                 const len= width*height;
                 allTileAry[idx]= byte1d.slice(pos,pos+len);
                 idx++;
@@ -178,7 +208,7 @@ export async function callStretchedByteData(plotImageId,plotStateSerialized,plot
             }
         }
     }
-    return allTileAry;
+    return {success: true, message:'', allTileAry};
 }
 
 
@@ -190,8 +220,10 @@ export async function callStretchedByteData(plotImageId,plotStateSerialized,plot
  *   - set the color in the plot state
  * @param {string} plotImageId
  * @param {number} colorTableId
+ * @param {boolean} threeColor
  * @param {number} bias
  * @param {number} contrast
+ * @param {boolean} bandUse
  * @param {PlotState} plotState
  * @param {string} rootUrl
  * @return {Object}
@@ -201,12 +233,11 @@ async function changeLocalRawDataColor(plotImageId, colorTableId, threeColor, bi
     const bandEntry=entry?.[Band.NO_BAND.key];
     if (!bandEntry) return;
     const newPlotState = plotState.copy();
-    newPlotState.colorTableId = colorTableId;
     const {retRawTileDataGroup, localRawTileDataGroup}=
         await populateRawImagePixelDataInWorker(entry.rawTileDataGroup, colorTableId, threeColor, false, '',
             bias, contrast, bandUse, rootUrl);
     entry.rawTileDataGroup= localRawTileDataGroup;
-    return {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized: newPlotState.toJson(false)};
+    return {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized: newPlotState.toJson(true)};
 }
 
 
@@ -219,29 +250,24 @@ async function changeLocalRawDataColor(plotImageId, colorTableId, threeColor, bi
  *
  * @param {number} dataWidth
  * @param {number} dataHeight
+ * @param {String} dataCompress - should be 'FULL' or 'HALF' or 'QUARTER'
  * @param rgbIntensity
- * @param tileSize
- * @return {{rgbIntensity: RGBIntensity, rawTileDataAry: Array.<RawTileData>}}
+ * @return {RawTileData}
  */
-export function createRawTileDataGroup(dataWidth,dataHeight, rgbIntensity, tileSize= TILE_SIZE) {
-
-    let xPanels= Math.trunc(dataWidth / tileSize);
-    let yPanels= Math.trunc(dataHeight / tileSize);
-    if (dataWidth % tileSize > 0) xPanels++;
-    if (dataHeight % tileSize > 0) yPanels++;
-
+export function createRawTileDataGroup(dataWidth,dataHeight, dataCompress='FULL', rgbIntensity) {
+    const {tileSize,xPanels,yPanels, realDataWidth, realDataHeight} =  getRealDataDim(dataCompress,dataWidth,dataHeight);
     const rawTileDataAry= [];
-    const yIndexes= [];
+    // const yIndexes= [];
 
     for(let i= 0; i<xPanels; i++) {
         for(let j= 0; j<yPanels; j++) {
-            const width= (i<xPanels-1) ? tileSize : ((dataWidth-1) % tileSize + 1);
-            const height= (j<yPanels-1) ? tileSize : ((dataHeight-1) % tileSize + 1);
+            const width= (i<xPanels-1) ? tileSize : ((realDataWidth-1) % tileSize + 1);
+            const height= (j<yPanels-1) ? tileSize : ((realDataHeight-1) % tileSize + 1);
             rawTileDataAry.push(createImageTileData(tileSize*i,tileSize*j,width,height));
-            if (i===0) yIndexes.push(tileSize*j);
+            // if (i===0) yIndexes.push(tileSize*j);
         }
     }
-    return {rawTileDataAry, rgbIntensity};
+    return {rawTileDataAry, dataCompress, rgbIntensity};
 }
 
 

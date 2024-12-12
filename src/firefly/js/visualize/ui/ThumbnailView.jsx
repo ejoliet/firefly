@@ -2,10 +2,10 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {Box} from '@mui/joy';
 import React, {memo, useEffect, useRef, useState} from 'react';
 import PropTypes from 'prop-types';
-import {isPlotNorth,getCenterPtOfPlot} from '../VisUtil.js';
-import {encodeServerUrl, getRootURL} from '../../util/WebUtil.js';
+import {getCenterPtOfPlot, isPlotNorth} from '../WebPlotAnalysis';
 import {DrawerComponent} from '../draw/DrawerComponent.jsx';
 import {makeScreenPt,makeWorldPt, makeDevicePt} from '../Point.js';
 import {CysConverter} from '../CsysConverter.js';
@@ -19,7 +19,7 @@ import {dispatchProcessScroll} from '../ImagePlotCntlr.js';
 import {makeMouseStatePayload,fireMouseCtxChange} from '../VisMouseSync.js';
 import {makeTransform,makeThumbnailTransformCSS} from '../PlotTransformUtils.js';
 import {findScrollPtToCenterImagePt} from '../reducer/PlotView.js';
-import {getPixScaleDeg, isHiPS} from '../WebPlot.js';
+import {getPixScaleDeg, isCelestialImage, isHiPS} from '../WebPlot.js';
 import {getEntry} from '../rawData/RawDataCache.js';
 import {SimpleCanvas} from '../draw/SimpleCanvas.jsx';
 
@@ -58,12 +58,12 @@ export const ThumbnailView = memo(({plotView:pv, defSize=70, loadedSize= 70}) =>
     const onImageLoad= (e) => e && (e.onload= () => setDim( {imWidth: e.width, imHeight:e.height }));
 
     return (
-        <div style={s}>
+        <Box style={s}>
             {makeImageTag(pv, onImageLoad, size)}
             <DrawerComponent width={width} height={height} getDrawLayer={() => dataRef.current.drawData}
                              setSimpleUpdateNotify={setSimpleUpdateNotify} />
             <EventLayer width={width} height={height} transform={affTrans} eventCallback={eventCallBack} />
-        </div>
+        </Box>
     );
 });
 
@@ -118,38 +118,27 @@ function scrollPlot(pt,pv,width,height) {
 
 function makeImageTag(pv, onImageLoad,size) {
     const plot= primePlot(pv);
-    const {url, width=size,height=size}= plot.tileData?.thumbnailImage ?? {};
+    const {width=size,height=size}= plot.tileData?.thumbnailImage ?? {};
     const s= { position : 'absolute', left : 0, top : 0, width, height };
     const transFormCss= makeThumbnailTransformCSS(pv.rotation,pv.flipX, pv.flipY);
     
     if (transFormCss) s.transform= transFormCss;
+    if (!hasLocalStretchByteData(plot)) return <div/>;
 
-    let imageURL;
-    if (hasLocalStretchByteData(plot)) {
-        const thumbnailCanvas= getEntry(plot?.plotImageId)?.thumbnailEncodedImage;
+    const thumbnailCanvas= getEntry(plot?.plotImageId)?.thumbnailEncodedImage;
 
-        const drawOnCanvas= (targetCanvas) => {
-            if (!targetCanvas) return;
-            const ctx= targetCanvas.getContext('2d');
-            ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-            ctx.drawImage(thumbnailCanvas,0,0);
-        };
+    const drawOnCanvas= (targetCanvas) => {
+        if (!targetCanvas) return;
+        const ctx= targetCanvas.getContext('2d');
+        ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+        ctx.drawImage(thumbnailCanvas,0,0);
+    };
 
-        return (<div style={s}>
+    return (
+        <div style={s}>
             <SimpleCanvas drawIt={drawOnCanvas} width={thumbnailCanvas.width} height={thumbnailCanvas.height}
                           id={'thumbnail'}/>
         </div>);
-    }
-    else {
-        const params= {
-            file : url,
-            type : 'thumbnail',
-            state : plot.plotState.toJson(false)
-        };
-        imageURL= encodeServerUrl(getRootURL() + 'sticky/FireFly_ImageDownload', params);
-        return <img src={imageURL} style={s} ref={onImageLoad} /> ;
-    }
-
 }
 
 function getThumbZoomFact(plot, thumbW, thumbH) {
@@ -193,6 +182,19 @@ function makeDrawing(pv,width,height) {
     const wptC= getCenterPtOfPlot(plot);
     if (!wptC) return null;
 
+    const fp= getScrollBoxInfo(pv, width, height);
+    const scrollBox= FootprintObj.make([fp]);
+    scrollBox.renderOptions= {
+        shadow: {blur: 2, color: 'white', offX: 1, offY: 1}
+    };
+    scrollBox.style= Style.LIGHT;
+    scrollBox.color= COLOR_DRAW_2;
+
+    if (!isCelestialImage(plot)) {
+        return [undefined, undefined, scrollBox];
+    }
+
+    // E and N arrows
     const arrowLength= (Math.min(width,70)+Math.min(height,70))/3;
     const thumbZoomFact= getThumbZoomFact(plot,width,height);
     const cdelt1 = getPixScaleDeg(plot);
@@ -211,10 +213,10 @@ function makeDrawing(pv,width,height) {
     const spt3= cc.getScreenCoords(wpt3);
     // don't use spt3 because of funny effects near the celestial poles
     // the sign of the cross product of compass vectors tells us if the image is mirror-reversed from the sky
-    const cross_product= (spt3.x - sptC.x)*(sptN.y - sptC.y) -
-                       (spt3.y - sptC.y)*(sptN.x - sptC.x);
-    const [x, y] = [Math.sign(cross_product)*(sptN.y - sptC.y) + sptC.x,
-                    Math.sign(cross_product)*(-sptN.x + sptC.x)+sptC.y];
+    const cross_product= spt3 ? ((spt3.x - sptC.x)*(sptN.y - sptC.y) - (spt3.y - sptC.y)*(sptN.x - sptC.x)) : 1;
+    const sign= Math.sign(cross_product);
+
+    const [x, y] = [sign*(sptN.y - sptC.y) + sptC.x, sign*(-sptN.x + sptC.x)+sptC.y];
     const wptE2 = cc.getWorldCoords(makeScreenPt(x, y));
 
     const spt1= cc.getDeviceCoords(wpt1, thumbZoomFact, thumbnailTrans);
@@ -250,15 +252,5 @@ function makeDrawing(pv,width,height) {
     dataN.color= COLOR_DRAW_1;
     dataE.color= COLOR_DRAW_1;
 
-
-    const fp= getScrollBoxInfo(pv, width, height);
-    const scrollBox= FootprintObj.make([fp]);
-    scrollBox.renderOptions= {
-        shadow: {blur: 2, color: 'white', offX: 1, offY: 1}
-    };
-    scrollBox.style= Style.LIGHT;
-    scrollBox.color= COLOR_DRAW_2;
     return [dataN,dataE,scrollBox];
 }
-
-

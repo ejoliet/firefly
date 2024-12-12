@@ -5,7 +5,7 @@ import {get, isArray, isUndefined, uniqueId, isNil} from 'lodash';
 import {getTblById, getColumns, getColumn, doFetchTable, stripColumnNameQuotes} from '../../tables/TableUtil.js';
 import {cloneRequest, makeSubQueryRequest, MAX_ROW} from '../../tables/TableRequestUtil.js';
 import {dispatchChartUpdate, dispatchError, getChartData, getTraceSymbol, hasUpperLimits, hasLowerLimits} from '../ChartsCntlr.js';
-import {formatColExpr, getDataChangesForMappings, updateHighlighted, updateSelected, isScatter2d, getMaxScatterRows, getMinScatterGLRows} from '../ChartUtil.js';
+import {formatColExpr, getDataChangesForMappings, updateHighlighted, updateSelection, isScatter2d, getMaxScatterRows, getMinScatterGLRows} from '../ChartUtil.js';
 import {getTraceTSEntries as heatmapTSGetter} from './FireflyHeatmap.js';
 import {errorTypeFieldKey} from '../ui/options/Errors.jsx';
 
@@ -15,7 +15,10 @@ const numberOrArrayProps = ['marker.size'];
 /**
  * This function creates table source entries to get plotly chart data from the server
  * For the non-firefly plotly chart types
- * @param traceTS
+ * @param p parameters
+ * @param p.traceTS
+ * @param p.chartId
+ * @param p.traceNum
  * @returns {{options: *, fetchData: fetchData}}
  */
 export function getTraceTSEntries({traceTS, chartId, traceNum}) {
@@ -85,8 +88,11 @@ async function fetchData(chartId, traceNum, tablesource) {
         addOtherChanges({changes, chartId, traceNum, tablesource, tableModel: originalTableModel});
 
         dispatchChartUpdate({chartId, changes});
-        updateHighlighted(chartId, traceNum, highlightedRow);
-        updateSelected(chartId, selectInfo);
+        const {activeTrace} = getChartData(chartId);
+        if (isUndefined(activeTrace) || activeTrace === traceNum) {
+            updateHighlighted(chartId, traceNum, highlightedRow);
+            updateSelection(chartId, selectInfo);
+        }
     } else {
         dispatchError(chartId, traceNum, 'No data');
     }
@@ -148,6 +154,48 @@ export function addOtherChanges({changes, chartId, traceNum, tablesource, tableM
     }
 }
 
+function setupAxisInfo({changes, tableModel, mappings, fireflyData, layout, data, traceNum}) {
+
+    const xColumn = getColumn(tableModel, stripColumnNameQuotes(get(mappings, 'x')));
+    const xUnit = xColumn?.units || fireflyData?.[traceNum]?.xUnit || '';
+    const yColumn = getColumn(tableModel, stripColumnNameQuotes(get(mappings, 'y')));
+    const yUnit = yColumn?.units || fireflyData?.[traceNum]?.yUnit || '';
+
+    // default axes labels (remove surrounding quotes, if any)
+    const xLabel = stripColumnNameQuotes(get(mappings, 'x'));
+    const yLabel = stripColumnNameQuotes(get(mappings, 'y'));
+
+    const xaxis = (data?.[traceNum]?.xaxis ?? 'x').replace('x', 'xaxis') ;  // plotly convention.. 'x', 'x2' => 'xaxis', 'xaxis2'
+    const yaxis = (data?.[traceNum]?.yaxis ?? 'y').replace('y', 'yaxis') ;
+
+    let xAxisLabel = get(layout, `${xaxis}.title.text`);
+    let yAxisLabel = get(layout, `${yaxis}.title.text`);
+
+    if (!xAxisLabel) {
+        xAxisLabel = xLabel + (xUnit ? ` (${xUnit})` : '');
+        changes[`layout.${xaxis}.title.text`] = xAxisLabel;
+    }
+
+    if (!yAxisLabel) {
+        yAxisLabel = yLabel + (yUnit ? ` (${yUnit})` : '');
+        changes[`layout.${yaxis}.title.text`] = yAxisLabel;
+    }
+
+    // point tooltip labels
+    let xTipLabel = xLabel?.length <= 20 ? xLabel : 'x';
+    let yTipLabel = yLabel?.length <= 20 ? yLabel : 'y';
+
+    const {xTTLabelSrc, yTTLabelSrc} = get(fireflyData, traceNum, {});
+    if (xTTLabelSrc) {
+        xTipLabel = (xTTLabelSrc === 'axis') ? (xAxisLabel || 'x') : 'x';
+    }
+    if (yTTLabelSrc) {
+        yTipLabel = (yTTLabelSrc === 'axis') ? (yAxisLabel || 'y') : 'y';
+    }
+
+    return {xTipLabel, yTipLabel, xUnit, yUnit};
+}
+
 /**
  * Firefly added scatter changes
  * @param {Object} p - parameters
@@ -160,14 +208,7 @@ export function addOtherChanges({changes, chartId, traceNum, tablesource, tableM
 export function addScatterChanges({changes, chartId, traceNum, tablesource, tableModel}) {
 
     const {mappings} = tablesource;
-    const xColumn = getColumn(tableModel, stripColumnNameQuotes(get(mappings, 'x')));
-    const xUnit = get(xColumn, 'units', '');
-    const yColumn = getColumn(tableModel, stripColumnNameQuotes(get(mappings, 'y')));
-    const yUnit = get(yColumn, 'units', '');
-
-    // default axes labels for the first trace (remove surrounding quotes, if any)
-    const xLabel = stripColumnNameQuotes(get(mappings, 'x'));
-    const yLabel = stripColumnNameQuotes(get(mappings, 'y'));
+    const {layout, data, fireflyData} = getChartData(chartId) || {};
 
     const colors = get(changes, [`data.${traceNum}.marker.color`]);
     let cTipLabel = isArray(colors) ? get(mappings, 'marker.color') : '';
@@ -175,32 +216,13 @@ export function addScatterChanges({changes, chartId, traceNum, tablesource, tabl
         cTipLabel = 'c';
     }
 
-
-    const {layout, data, fireflyData} = getChartData(chartId) || {};
-
     // legend group is used to show/hide traces together
     // highlight and selected traces should have the same legend group as the active scatter
     if (!get(data, `${traceNum}.legendgroup`)) {
         changes[`data.${traceNum}.legendgroup`] = uniqueId('grp');
     }
 
-    // set default title if it's the first trace
-    // and no title is set by the user
-    let xAxisLabel = get(layout, 'xaxis.title.text');
-    let yAxisLabel = get(layout, 'yaxis.title.text');
-    if (data && data.length === 1) {
-        if (!xAxisLabel) {
-            xAxisLabel = xLabel + (xUnit ? ` (${xUnit})` : '');
-            changes['layout.xaxis.title.text'] = xAxisLabel;
-        }
-
-        if (!yAxisLabel) {
-            yAxisLabel = yLabel + (yUnit ? ` (${yUnit})` : '');
-            changes['layout.yaxis.title.text'] = yAxisLabel;
-        }
-    }
-
-
+    const {xTipLabel, yTipLabel, xUnit, yUnit} = setupAxisInfo({changes, tableModel, mappings, fireflyData, layout, data, traceNum});
 
     const x = get(changes, [`data.${traceNum}.x`]);
     if (!x) return;
@@ -208,17 +230,6 @@ export function addScatterChanges({changes, chartId, traceNum, tablesource, tabl
     const traceType = (isArray(x) && x.length > getMinScatterGLRows()) ? 'scattergl' : 'scatter';
     changes[`data.${traceNum}.type`] = traceType;
 
-    // point tooltip labels
-    let xTipLabel = xLabel.length > 20 ? 'x' : xLabel;
-    let yTipLabel = yLabel.length > 20 ? 'y' : yLabel;
-
-    const {xTTLabelSrc, yTTLabelSrc} = get(fireflyData, traceNum, {});
-    if (xTTLabelSrc) {
-        xTipLabel = (xTTLabelSrc === 'axis') ? (xAxisLabel || 'x') : 'x';
-    }
-    if (yTTLabelSrc) {
-        yTipLabel = (yTTLabelSrc === 'axis') ? (yAxisLabel || 'y') : 'y';
-    }
 
     // handle limits: update new or erase old
     const annotations = [];
@@ -318,7 +329,7 @@ export function addScatterChanges({changes, chartId, traceNum, tablesource, tabl
     }
     const hasXErrors = xErrLow.length > 0 || xErr.length > 0;
     const xErrorType = get({fireflyData}, errorTypeFieldKey(traceNum, 'x'));
-    changes[`data.${traceNum}.error_x.visible`] = hasXErrors && xErrorType !== 'none';
+    // changes[`data.${traceNum}.error_x.visible`] = hasXErrors && xErrorType !== 'none';
     changes[`data.${traceNum}.error_x.symmetric`] = xErrorType==='sym' || xErr.length > 0;
 
     let yErr = get(changes, [`data.${traceNum}.error_y.array`], []);
@@ -335,7 +346,7 @@ export function addScatterChanges({changes, chartId, traceNum, tablesource, tabl
     }
     const hasYErrors =  yErrLow.length > 0 || yErr.length > 0;
     const yErrorType = get({fireflyData}, errorTypeFieldKey(traceNum, 'y'));
-    changes[`data.${traceNum}.error_y.visible`] = hasYErrors && yErrorType !== 'none';
+    // changes[`data.${traceNum}.error_y.visible`] = hasYErrors && yErrorType !== 'none';
     changes[`data.${traceNum}.error_y.symmetric`] = yErrorType==='sym' || yErr.length > 0;
 
     // set tooltips

@@ -1,8 +1,8 @@
 /*
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
-import {isEmpty} from 'lodash';
-import React, {memo, useEffect} from 'react';
+import {isEmpty, set} from 'lodash';
+import React, {memo, useContext, useEffect, useState} from 'react';
 import PropTypes from 'prop-types';
 import shallowequal from 'shallowequal';
 import {flux} from '../../core/ReduxFlux.js';
@@ -14,21 +14,18 @@ import {getLayouInfo, dispatchSetLayoutMode, getGridView, getGridViewColumns,
 import {TablesContainer} from '../../tables/ui/TablesContainer.jsx';
 import {ChartsContainer} from '../../charts/ui/ChartsContainer.jsx';
 import {getExpandedChartProps} from '../../charts/ChartsCntlr.js';
+import {AppPropertiesCtx} from '../../ui/AppPropertiesCtx.jsx';
 import {visRoot} from '../../visualize/ImagePlotCntlr.js';
 import {getMultiViewRoot, findViewerWithItemId, PLOT2D} from '../../visualize/MultiViewCntlr.js';
 import {ImageExpandedMode} from '../../visualize/iv/ImageExpandedMode.jsx';
 import {startTTFeatureWatchers} from '../common/ttFeatureWatchers.js';
-import {Menu} from '../../ui/Menu.jsx';
-import {Banner} from '../../ui/Banner.jsx';
 import {RenderTreeIdCtx} from '../../ui/RenderTreeIdCtx.jsx';
-import {warningDivId} from '../../ui/LostConnection';
 import {AppInitLoadingMessage} from '../../ui/AppInitLoadingMessage.jsx';
-import {DropDownContainer} from '../../ui/DropDownContainer.jsx';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {startLayoutManager} from './FireflySlateManager.js';
 import {GridLayoutPanel} from './GridLayoutPanel.jsx';
 
-import FFTOOLS_ICO from 'html/images/fftools-logo-offset-small-75x75.png';
+import App from 'firefly/ui/App.jsx';
 
 
 function getNextState(prevS, renderTreeId) {
@@ -55,18 +52,22 @@ function getNextState(prevS, renderTreeId) {
  * <li><b>menu</b>:  menu is an array of menu items {label, action, icon, desc, type}.  Leave type blank for dropdown.
  * If type='COMMAND', it will fire the action without triggering dropdown.</li>
  * <li><b>appTitle</b>:  The title of the FireflyViewer.  It will appears at top left of the banner. Defaults to 'Firefly'. </li>
- * <li><b>appIcon</b>:  A url string to the icon to appear on the banner. </li>
+ * <li><b>appIcon</b>:  A react element rendered at where appIcon should appear. </li>
  * <li><b>footer</b>:   A react elements to place on the footer when the menu drop down. </li>
  * <li><b>dropdownPanels</b>:  An array of additional react elements which are mapped to a menu item's action. </li>
  * @param props
  *
  */
-export const FireflySlate= memo(( {initLoadingMessage, appTitle= 'Firefly', appIcon=FFTOOLS_ICO, altAppIcon,
-                                      footer, style, renderTreeId, menu:menuItems, showBgMonitor=false}) => {
-    const [state]= useStoreConnector( (prevState) => getNextState(prevState,renderTreeId));
-    const {isReady, mode={}, gridView= [], gridColumns=1, menu={}, dropDown={}, layoutInfo, initLoadCompleted, dropdownPanels} = state;
+export const FireflySlate= memo(( {renderTreeId, menu:menuItems, showBgMonitor=false}) => {
+
+
+    const {initLoadingMessage, appTitle, appIcon, appFromApi, slotProps={}} = useContext(AppPropertiesCtx);
+    const state= useStoreConnector( (prevState) => getNextState(prevState,renderTreeId));
+    const [appRef,setAppRef]= useState(undefined);
+
+
+    const {mode={}, gridView= [], gridColumns=1, menu={}, layoutInfo, initLoadCompleted, ...appProps} = state;
     const {expanded} = mode;
-    const {visible, view, initArgs} = dropDown;
 
     useEffect(() => {
         startTTFeatureWatchers();
@@ -75,20 +76,20 @@ export const FireflySlate= memo(( {initLoadingMessage, appTitle= 'Firefly', appI
         return () => void (stopLayoutManager());
     },[]);
 
-    if (!isReady) return (<div style={{top: 0}} className='loading-mask'/>);
     if (showBgMonitor) menu.showBgMonitor= showBgMonitor;
+
+
+    set(slotProps, 'drawer.containerElement', appRef);
+    set(slotProps, 'banner.enableVersionDialog', true);
     return (
         <RenderTreeIdCtx.Provider value={{renderTreeId}}>
-            <div id='App' className='rootStyle' style={style}>
-                <header>
-                    <BannerSection {...{menu, appTitle, appIcon, altAppIcon}}/>
-                    <div id={warningDivId} data-decor='full' className='warning-div center'/>
-                    <DropDownContainer key='dropdown' footer={footer} visible={!!visible}
-                        selected={view} initArgs={initArgs} {...{dropdownPanels} } />
-                </header>
-                <main style={{height:'100%'}}>
-                    {mainView({expanded, gridView, gridColumns, initLoadingMessage, initLoadCompleted})}
-                </main>
+            <div {...{ref:(c) => {
+                    if (appFromApi) setAppRef(c);
+                }
+            }}>
+            <App slotProps={slotProps} {...{appTitle, appIcon, ...appProps}}>
+                {mainView({expanded, gridView, gridColumns, initLoadingMessage, initLoadCompleted})}
+            </App>
             </div>
         </RenderTreeIdCtx.Provider>
     );
@@ -97,14 +98,13 @@ export const FireflySlate= memo(( {initLoadingMessage, appTitle= 'Firefly', appI
 /**
  * menu is an array of menu items {label, action, icon, desc, type}.
  * dropdownPanels is an array of additional react elements which are mapped to a menu item's action.
- * @type {{title: *, menu: *, appTitle: *, appIcon: *, altAppIcon: *, dropdownPanels: *}}
+ * @type {{title: *, menu: *, appTitle: *, appIcon: *, dropdownPanels: *}}
  */
 FireflySlate.propTypes = {
     title: PropTypes.string,
     menu: PropTypes.arrayOf(PropTypes.object),
     appTitle: PropTypes.string,
-    appIcon: PropTypes.string,
-    altAppIcon: PropTypes.string,
+    appIcon: PropTypes.element,
     footer: PropTypes.element,
     dropdownPanels: PropTypes.arrayOf(PropTypes.element),
     style: PropTypes.object,
@@ -114,7 +114,6 @@ FireflySlate.propTypes = {
     rightButtons: PropTypes.arrayOf( PropTypes.func ),
     renderTreeId: PropTypes.string,
     showBgMonitor: PropTypes.bool,
-    initLoadingMessage: PropTypes.string,
 };
 
 
@@ -163,10 +162,6 @@ const EmptyMessage= () => (
             </div>
         </div> );
 
-const BannerSection= ({menu, appIcon, ...rest}) => (
-    <Banner {...{key:'banner', appIcon, enableVersionDialog:true, ...rest,
-        menu: <Menu menu={menu}/>,
-    }}/> );
 
 function onReady(menuItems, layoutInfo={}) {
     if (menuItems) dispatchSetMenu({menuItems});

@@ -1,17 +1,16 @@
-import React, {useEffect} from 'react';
+import React, {useContext, useEffect, useState} from 'react';
 import PropTypes from 'prop-types';
 import {get} from 'lodash';
-import shallowequal from 'shallowequal';
 
 import {FormPanel} from './../../ui/FormPanel.jsx';
 import {getFieldVal} from '../../fieldGroup/FieldGroupUtils.js';
 import {RadioGroupInputFieldView} from './../../ui/RadioGroupInputFieldView.jsx';
-import {SimpleComponent, useStoreConnector} from './../../ui/SimpleComponent.jsx';
+import {useStoreConnector} from './../../ui/SimpleComponent.jsx';
 import {getChartData, dispatchChartTraceRemove, dispatchChartUpdate} from '../ChartsCntlr.js';
 import {NewTracePanel, getNewTraceType, getSubmitChangesFunc, addNewTrace} from './options/NewTracePanel.jsx';
 import {PopupPanel} from './../../ui/PopupPanel.jsx';
-import {isSpectralOrder, isScatter2d} from '../ChartUtil.js';
-import {basicOptions, BasicOptions} from './options/BasicOptions.jsx';
+import {isSpectralOrder, isScatter2d, getTblIdFromChart} from '../ChartUtil.js';
+import {BasicOptions, useBasicOptions} from './options/BasicOptions.jsx';
 import {ScatterOptions} from './options/ScatterOptions.jsx';
 import {HeatmapOptions} from './options/HeatmapOptions.jsx';
 import {SpectrumOptions} from './options/SpectrumOptions.jsx';
@@ -20,6 +19,7 @@ import {RenderTreeIdCtx} from '../../ui/RenderTreeIdCtx.jsx';
 import {DEFAULT_PLOT2D_VIEWER_ID} from '../../visualize/MultiViewCntlr.js';
 import {dispatchHideDialog, dispatchShowDialog} from '../../core/ComponentCntlr.js';
 import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
+import {Box, Divider, Stack, Typography} from '@mui/joy';
 
 
 export const [CHART_ADDNEW, CHART_TRACE_ADDNEW, CHART_TRACE_MODIFY, CHART_TRACE_REMOVE ] =
@@ -44,14 +44,6 @@ function getChartActions({chartId, tbl_id}) {
                 // can add trace
                 chartActions.push(CHART_TRACE_ADDNEW);
             }
-
-            // TODO: adding charts to non-default viewer does not work from charts options dialog
-            // to be able to add charts to any viewer, we need to pass viewerId to addNewTrace
-            // and eventually to dispatchChartAdd in BasicOptions.jsx
-            if (!viewerId || viewerId === DEFAULT_PLOT2D_VIEWER_ID) {
-                // can add chart
-                chartActions.push(CHART_ADDNEW);
-            }
         }
     } else {
         if (tbl_id) {
@@ -65,6 +57,9 @@ function getChartActions({chartId, tbl_id}) {
 
 function onChartAction({chartAction, tbl_id, chartId, hideDialog, renderTreeId}) {
     return (fields) => {
+        const {activeTrace, data, fireflyData} = getChartData(chartId);
+        tbl_id = tbl_id || getTblIdFromChart(chartId, activeTrace);
+
         switch (chartAction) {
             case CHART_ADDNEW:
                 addNewTrace({fields, tbl_id, hideDialog, renderTreeId}); // no chart id
@@ -73,7 +68,6 @@ function onChartAction({chartAction, tbl_id, chartId, hideDialog, renderTreeId})
                 addNewTrace({fields, tbl_id, chartId, hideDialog});
                 break;
              case CHART_TRACE_MODIFY:
-                const {activeTrace, data, fireflyData} = getChartData(chartId);
                 const type = get(data, `${activeTrace}.type`, 'scatter');
                 let ftype = get(fireflyData, `${activeTrace}.dataType`);
                 const scatterOrHeatmap = get(fireflyData, [activeTrace, 'scatterOrHeatmap']);
@@ -84,8 +78,7 @@ function onChartAction({chartAction, tbl_id, chartId, hideDialog, renderTreeId})
                 break;
             case CHART_TRACE_REMOVE:
                 hideDialog();
-                const {activeTrace:traceNum} = getChartData(chartId);
-                dispatchChartTraceRemove(chartId, traceNum);
+                dispatchChartTraceRemove(chartId, activeTrace);
                 break;
             default:
                 console.log(`onChartAction - unsupported action ${chartAction}`);
@@ -106,64 +99,60 @@ function getGroupKey(chartId, chartAction) {
     }
 }
 
+export function ChartSelectPanel({tbl_id, chartId, chartAction, inputStyle={}, hideDialog, sx={}}) {
+    const {renderTreeId} = useContext(RenderTreeIdCtx);
+    const showActionOptions= chartAction!==CHART_ADDNEW;
 
-export class ChartSelectPanel extends SimpleComponent {
-    constructor(props) {
-        super(props);
+    const chartActions =  showActionOptions ?  getChartActions({chartId, tbl_id}) : [CHART_ADDNEW];
+    const [chartActionState, setChartActionState] = useState(
+        (chartActions.includes(chartAction)) ? chartAction : chartActions[0]);
 
-        const {chartId, tbl_id, chartAction} = this.props;
-        let newChartAction = chartAction;
-        const chartActions = getChartActions({chartId, tbl_id});
+    const groupKey = getGroupKey(chartId, chartActionState);
 
-        if (!newChartAction || !chartActions.includes(newChartAction)) {
-            newChartAction = chartActions[0];
-        }
+    const chartActionChanged = (chartAction) => setChartActionState(chartAction);
 
-        this.state = {chartAction: newChartAction};
-    }
+    return (
+        <FormPanel
+            groupKey={groupKey}
+            onSuccess={onChartAction({chartAction: chartActionState,
+                tbl_id, chartId, hideDialog, renderTreeId})}
+            onCancel={hideDialog}
+            completeText={chartActionState===CHART_TRACE_MODIFY ? 'Apply' : 'OK'}
+            cancelText='Close'
+            help_id = 'plots.changing'
+            sx={{m: 1, mt: 0, ...sx}}
+            slotProps={{
+                input: {sx:inputStyle},
+            }}>
 
-    render() {
-        const {tbl_id, chartId, inputStyle={}, hideDialog} = this.props;
-        const {renderTreeId}= this.context;
-
-        const chartActions = getChartActions({chartId, tbl_id});
-        const {chartAction} = this.state;
-        const groupKey = getGroupKey(chartId, chartAction);
-
-        const chartActionChanged = (chartAction) => { this.setState({chartAction}); };
-
-        return (
-            <div style={{padding: 10}}>
-                <FormPanel
-                    groupKey={groupKey}
-                    submitText={chartAction===CHART_TRACE_MODIFY ? 'Apply' : 'OK'}
-                    onSuccess={onChartAction({chartAction, tbl_id, chartId, hideDialog, renderTreeId})}
-                    cancelText='Close'
-                    onError={() => {}}
-                    onCancel={hideDialog}
-                    inputStyle = {inputStyle}
-                    changeMasking={this.changeMasking}>
-                    <ChartAction {...{chartId, chartActions, chartAction, chartActionChanged}}/>
-                    <ChartActionOptions {...{chartAction, tbl_id, chartId, groupKey, hideDialog}}/>
-                </FormPanel>
-            </div>
-        );
-    }
+            <Stack spacing={2}>
+                {showActionOptions  &&
+                    <ChartAction {...{chartId, chartActions, chartAction: chartActionState, chartActionChanged}}/>}
+                {showActionOptions && <Divider/>}
+                <Box py={1} overflow={'auto'} maxHeight={'60vh'} minWidth={'30rem'}>
+                    <ChartActionOptions {...{chartAction: chartActionState, tbl_id, chartId, groupKey, hideDialog}}/>
+                </Box>
+                <Divider/>
+            </Stack>
+        </FormPanel>
+    );
 }
+
 
 ChartSelectPanel.propTypes = {
     tbl_id: PropTypes.string,
     chartId: PropTypes.string,
     chartAction: PropTypes.string, // suggested chart action
     hideDialog: PropTypes.func,
-    inputStyle: PropTypes.object
+    inputStyle: PropTypes.object,
+    sx: PropTypes.object
 };
-ChartSelectPanel.contextType= RenderTreeIdCtx;
+
 
 function ChartAction({chartId, chartActions, chartAction, chartActionChanged}) {
 
-    const [activeTrace=0] = useStoreConnector(() => getChartData(chartId)?.activeTrace);
-    const {ChooseTrace} = basicOptions({chartId, activeTrace});
+    const activeTrace = useStoreConnector(() => getChartData(chartId)?.activeTrace ?? 0);
+    const {ChooseTrace} = useBasicOptions({chartId, activeTrace});
 
     const options = [];
 
@@ -191,21 +180,21 @@ function ChartAction({chartId, chartActions, chartAction, chartActionChanged}) {
         };
 
         return (
-            <div style={{marginTop:-10}}>
+            <Stack spacing={1}>
                 <RadioGroupInputFieldView
                     options={options}
-                    alignment={'horizontal'}
+                    orientation={'horizontal'}
                     value={chartAction}
                     onChange={onChartActionChange}
-                    wrapperStyle={{padding: 5}}
                 />
-                <ChooseTrace style={{marginLeft: 11}}/>
-            </div>
+                <ChooseTrace/>
+            </Stack>
         );
     }
 }
 
 ChartAction.propTypes = {
+    chartId: PropTypes.string,
     chartActions: PropTypes.arrayOf(PropTypes.string),
     chartAction: PropTypes.string,
     chartActionChanged: PropTypes.func
@@ -221,21 +210,17 @@ function ChartActionOptions(props) {
         return (<NewTracePanel key={chartAction} {...{groupKey, tbl_id, chartId, hideDialog}}/>);
     }
     if (chartAction === CHART_TRACE_MODIFY) {
-        return (
-            <div style={{padding: 10, maxHeight: 600, overflow: 'auto', borderBottom: 'solid 1px #cccccc', borderTop: 'solid 1px #cccccc'}}>
-                <SyncedOptionsUI {...{chartId, groupKey}}/>
-            </div>
-        );
+        return (<SyncedOptionsUI {...{chartId, groupKey}}/>);
     } else if (chartAction === CHART_TRACE_REMOVE) {
         const {data=[], activeTrace} = getChartData(chartId);
         const traceName = get(data, `${activeTrace}.name`) || `trace ${activeTrace}`;
         return (
-            <div style={{padding: 10}}>
+            <Typography>
                 {`Remove ${traceName} (active trace) of the chart?`}
-            </div>
+            </Typography>
         );
     } else {
-        return (<div style={{padding: 10}}>Unsupported chart action</div>);
+        return (<Typography>Unsupported chart action</Typography>);
     }
 }
 
@@ -244,14 +229,14 @@ ChartActionOptions.propTypes = {
     tbl_id: PropTypes.string,
     chartId: PropTypes.string,
     groupKey: PropTypes.string,
-    hideDialog: PropTypes.func
+    hideDialog: PropTypes.func,
 };
 
 function SyncedOptionsUI (props) {
     // based on chartData, determine what options to display
 
     const {chartId, groupKey} = props;
-    const [{useSpectrum, dataType, type, activeTrace}] = useStoreConnector.bind({comparator: shallowequal})(() =>  {
+    const {useSpectrum, dataType, type, activeTrace} = useStoreConnector(() =>  {
         const {data, fireflyData, activeTrace=0} = getChartData(chartId);
         const dataType = fireflyData?.[activeTrace]?.dataType;
         const fval = getFieldVal(groupKey, `fireflyData.${activeTrace}.useSpectrum`);
@@ -259,6 +244,7 @@ function SyncedOptionsUI (props) {
         const type = get(data, [activeTrace, 'type'], 'scatter');
         return {useSpectrum, dataType, type, activeTrace};
     });
+
     const {fireflyData} = getChartData(chartId);
 
     useEffect( ()=> {
@@ -300,18 +286,18 @@ SyncedOptionsUI.propTypes = {
  * Creates and shows the modal dialog with chart options.
  * @param {string} chartId
  */
-export function showChartsDialog(chartId) {
+export function showChartsDialog(chartId,chartAction, tbl_id) {
     const {data, fireflyData, activeTrace} = getChartData(chartId);
-    const tbl_id = get(data, `${activeTrace}.tbl_id`) || get(fireflyData, `${activeTrace}.tbl_id`);
+    const workingTblId = tbl_id ?? (get(data, `${activeTrace}.tbl_id`) || get(fireflyData, `${activeTrace}.tbl_id`));
 
     const popupId ='chartOptionsDialog';
     const dialogContent= (
-        <PopupPanel title='Plot Parameters' modal={true}>
+        <PopupPanel title={chartAction===CHART_ADDNEW?'Add New Chart' : 'Plot Parameters'} modal={true}>
             <ChartSelectPanel {...{
-                tbl_id,
+                tbl_id:workingTblId,
                 chartId,
-                chartAction: CHART_TRACE_MODIFY,
-                inputStyle: {backgroundColor:'none', padding: 3, border: 'none', borderBottom: 'solid 1px #a5a5a'},
+                chartAction,
+                inputStyle: {padding: 'none', marginBottom: 8}, //TODO: this should be sx in FormPanel
                 hideDialog: ()=>dispatchHideDialog(popupId)}}/>
         </PopupPanel>
     );

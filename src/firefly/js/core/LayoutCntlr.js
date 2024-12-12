@@ -4,23 +4,52 @@
 
 import {take} from 'redux-saga/effects';
 
-import {get, isEqual, isEmpty, filter, pick, uniqBy} from 'lodash';
+import {get, isEqual, isEmpty, filter, pick, uniqBy, flatten} from 'lodash';
 import Enum from 'enum';
+import {DATA_PRODUCT_ID_PREFIX, dataProductRoot} from '../metaConvert/DataProductsCntlr.js';
+import {getBackgroundInfo} from './background/BackgroundUtil.js';
 import {flux} from './ReduxFlux';
 import {clone} from '../util/WebUtil.js';
-import {smartMerge, getActiveTableId} from '../tables/TableUtil.js';
-import {getDropDownNames} from '../ui/Menu.jsx';
-import ImagePlotCntlr from '../visualize/ImagePlotCntlr.js';
-import {TBL_RESULTS_ADDED, TBL_RESULTS_REMOVE, TABLE_REMOVE} from '../tables/TablesCntlr.js';
-import {CHART_ADD, CHART_REMOVE} from '../charts/ChartsCntlr.js';
-import {REPLACE_VIEWER_ITEMS} from '../visualize/MultiViewCntlr.js';
-import {REINIT_APP} from './AppDataCntlr.js';
+import {
+    smartMerge, getActiveTableId, getTblById, findGroupByTblId, getTblIdsByGroup,
+} from '../tables/TableUtil.js';
+import ImagePlotCntlr, {visRoot} from '../visualize/ImagePlotCntlr.js';
+import { TBL_RESULTS_ADDED, TBL_RESULTS_REMOVE, TABLE_REMOVE, TABLE_SPACE_PATH, TBL_RESULTS_ACTIVE, TABLE_LOADED
+} from '../tables/TablesCntlr.js';
+import {CHART_ADD, CHART_REMOVE, CHART_SPACE_PATH} from '../charts/ChartsCntlr.js';
+import {
+    DEFAULT_FITS_VIEWER_ID, getMultiViewRoot, getViewer, PINNED_CHART_VIEWER_ID, REPLACE_VIEWER_ITEMS
+} from '../visualize/MultiViewCntlr.js';
+import {COMMAND, getMenu, REINIT_APP} from './AppDataCntlr.js';
 import {getDefaultChartProps} from '../charts/ChartUtil.js';
+import {getPlotViewAry, getPlotViewById} from 'firefly/visualize/PlotViewUtil.js';
+import {MetaConst} from 'firefly/data/MetaConst';
 
 export const LAYOUT_PATH = 'layout';
 
 // this enum is flaggable, therefore you can use any combination of the 3, i.e. 'tables | images'.
+/**
+ * @typedef LO_VIEW
+ * @type {Enum}
+ * @prop none
+ * @prop tables
+ * @prop images
+ * @prop xyPlots
+ * @prop tableImageMeta
+ * @prop coverageImage
+ * @prop {Function} get
+ */
+
+/** @type LO_VIEW */
 export const LO_VIEW = new Enum(['none', 'tables', 'images', 'xyPlots', 'tableImageMeta', 'coverageImage'], { ignoreCase: true });
+
+/**
+ * @typedef LO_MODE
+ * @type {Enum}
+ * @prop expanded
+ * @prop standard
+ */
+/** @type LO_MODE */
 export const LO_MODE = new Enum(['expanded', 'standard']);
 export const SPECIAL_VIEWER = new Enum(['tableImageMeta', 'coverageImage'], { ignoreCase: true });
 
@@ -30,10 +59,23 @@ export const UPDATE_LAYOUT     = `${LAYOUT_PATH}.updateLayout`;
 export const UPDATE_GRID_VIEW  = `${LAYOUT_PATH}.updateGridView`;
 export const SET_LAYOUT         = `${LAYOUT_PATH}.setLayout`;
 export const SET_LAYOUT_MODE    = `${LAYOUT_PATH}.setLayoutMode`;
+export const TRIVIEW_LAYOUT    = `${LAYOUT_PATH}.triviewLayout`;
 export const SHOW_DROPDOWN      = `${LAYOUT_PATH}.showDropDown`;
 export const ADD_CELL           = `${LAYOUT_PATH}.addCell`;
 export const REMOVE_CELL        = `${LAYOUT_PATH}.removeCell`;
 export const ENABLE_SPECIAL_VIEWER= `${LAYOUT_PATH}.enableSpecialViewer`;
+export const MENU_UPDATE      = `${LAYOUT_PATH}.menuUpdate`;
+
+
+export const TRIVIEW_ICov_Ch_T= 'TRIVIEW_ICov_Ch_T'; //top left: image/cov, top right: charts, bottom: tables
+export const TRIVIEW_I_ChCov_T= 'TRIVIEW_I_ChCov_T';//top left: image, top right: charts/cov, bottom: tables
+export const BIVIEW_ICov_Ch= 'BIVIEW_ICov_Ch'; //left: image/cov, right: charts
+export const BIVIEW_I_ChCov= 'BIVIEW_I_ChCov'; //left: image, right: charts/cov
+export const BIVIEW_T_IChCov= 'BIVIEW_T_IChCov'; //left: tables, right: image/charts/cov
+export const BIVIEW_IChCov_T= 'BIVIEW_IChCov_T'; //left: image/charts/cov, right: tables
+
+
+
 
 /*---------------------------- Reducers ----------------------------*/
 
@@ -53,10 +95,13 @@ export function reducer(state={}, action={}) {
             return updateGridView(state, action.payload);
         case SET_LAYOUT_MODE :
             return smartMerge(state, {mode: {[mode]: view}});
-
+        case TRIVIEW_LAYOUT :
+            return updateTriviewLayout(state, action);
         case SHOW_DROPDOWN :
-            const {visible = !state.disableDefaultDropDown, initArgs={}} = action.payload;
-            return smartMerge(state, {dropDown: {visible, view: getSelView(state, action.payload), initArgs}});
+            const {visible = !state.disableDefaultDropDown, menuItem, initArgs={}} = action.payload;
+            const newState= {...state};
+            if (newState?.dropDown?.initArgs) newState.dropDown.initArgs= undefined;
+            return smartMerge(state, {dropDown: {visible, view: getSelView(state, action.payload), menuItem, initArgs}});
         case ADD_CELL :
             return addCell(state, action.payload);
         case REMOVE_CELL :
@@ -72,6 +117,47 @@ export function reducer(state={}, action={}) {
 }
 
 /*---------------------------- Reducer helpers -----------------------------*/
+
+
+function updateTriviewLayout(state,action) {
+    const {triviewLayout=TRIVIEW_ICov_Ch_T}= action.payload;
+    const triViewKey= 'images | tables | xyplots';
+    const imgXyKey= 'images | xyplots';
+    const tblXyKey= 'tables | xyplots';
+    const xYTblKey= 'xyplots | tables';
+    const LEFT= 'LEFT';
+    const RIGHT= 'RIGHT';
+
+    const newObj={};
+
+    switch (triviewLayout) {
+        case TRIVIEW_ICov_Ch_T:
+            newObj.mode= {[LO_MODE.standard]: triViewKey};
+            newObj.coverageSide= LEFT;
+            break;
+        case TRIVIEW_I_ChCov_T:
+            newObj.mode= {[LO_MODE.standard]: triViewKey};
+            newObj.coverageSide= RIGHT;
+            break;
+        case BIVIEW_ICov_Ch:
+            newObj.mode= {[LO_MODE.standard]: imgXyKey};
+            newObj.coverageSide= LEFT;
+            break;
+        case BIVIEW_I_ChCov:
+            newObj.mode= {[LO_MODE.standard]: imgXyKey};
+            newObj.coverageSide= RIGHT;
+            break;
+        case BIVIEW_T_IChCov:
+            newObj.mode= {[LO_MODE.standard]: tblXyKey};
+            newObj.coverageSide= RIGHT;
+            break;
+        case BIVIEW_IChCov_T:
+            newObj.mode= {[LO_MODE.standard]: xYTblKey};
+            newObj.coverageSide= RIGHT;
+            break;
+    }
+    return smartMerge(state, newObj);
+}
 
 function enableSpecialViewer(state,payload) {
     const {viewerType, cellId}= payload;
@@ -135,6 +221,15 @@ export function dispatchSetLayoutMode(mode=LO_MODE.standard, view) {
 }
 
 /**
+ * change triview layout
+ * @param {Object} payload
+ * @param payload.triviewLayout - one of TRIVIEW_ICov_Ch_T, TRIVIEW_I_ChCov_T, BIVIEW_ICov_Ch, BIVIEW_I_ChCov, BIVIEW_T_IChCov, BIVIEW_IChCov_T,
+ */
+export function dispatchTriviewLayout({triviewLayout}) {
+    flux.process({type: TRIVIEW_LAYOUT, payload: {triviewLayout}});
+}
+
+/**
  * update the layout info of the application.  data will be merged.
  * @param layoutInfo data to be updated
  */
@@ -163,11 +258,21 @@ export function dispatchSetLayoutInfo(layoutInfo) {
 
 /**
  * show the drop down container
- * @param view name of the component to display in the drop-down container
- * @param {Object} initArgs - init args to pass to the view
+ * @param {object} p     parameters
+ * @param {string} p.view name of the component to display in the drop-down container
+ * @param {string} [p.menuItem] the menuItem associated with this view
+ * @param {Object} [p.initArgs] - init args to pass to the view
  */
-export function dispatchShowDropDown({view, initArgs}) {
-    flux.process({type: SHOW_DROPDOWN, payload: {visible: true, view, initArgs}});
+export function dispatchShowDropDown({view, menuItem, initArgs}) {
+    flux.process({type: SHOW_DROPDOWN, payload: {visible: true, view, menuItem, initArgs}});
+}
+
+/**
+ * update menu with the new one
+ * @param menu the new menu object
+ */
+export function dispatchUpdateMenu(menu) {
+    flux.process({ type : MENU_UPDATE, payload: {menu} });
 }
 
 /**
@@ -225,7 +330,7 @@ export function getStandardMode() {
 }
 
 export function getDropDownInfo() {
-    return get(flux.getState(), 'layout.dropDown', {visible: false});
+    return get(flux.getState(), 'layout.dropDown', {});
 }
 
 export function getGridCell(cellId, renderTreeId='DEFAULT') {
@@ -242,9 +347,10 @@ export function getLayoutRoot() {
  * @returns {LayoutInfo} returns the layout information of the application
  */
 export function getLayouInfo() {
-    const layout = get(flux.getState(), 'layout', {initLoadCompleted:false});
-    const hasImages = get(flux.getState(), 'allPlots.plotViewAry.length') > 0;
-    const hasTables = !isEmpty(get(flux.getState(), 'table_space.results.main.tables', {}));
+    const state= flux.getState() ?? {};
+    const layout = state[LAYOUT_PATH] ?? {initLoadCompleted:false};
+    const hasImages = getPlotViewAry(visRoot()).some( (pv) => pv.plotViewCtx.useForSearchResults);
+    const hasTables = !isEmpty(state[TABLE_SPACE_PATH]?.results?.main?.tables);
     /*
       to make plot area disappear if it's not possible to create a plot use
          hasXyPlots = getChartIdsInGroup(getActiveTableId()).length > 0 ||
@@ -253,10 +359,30 @@ export function getLayouInfo() {
       the drawback is that the layout changes for tables with no numeric data or no data
     */
     // keep plot area in place if any table has a related chart
-    const hasXyPlots = !isEmpty(get(flux.getState(), 'charts.data', {})) || (hasTables && !isEmpty(getDefaultChartProps(getActiveTableId())));
-    return {...layout, hasImages, hasTables, hasXyPlots,
-                      initLoadCompleted:layout.initLoadCompleted||hasImages||hasTables||hasXyPlots};
+
+    const mainChartCnt= Object.values(state[CHART_SPACE_PATH]?.data ?? {})
+        ?.filter( (c) => !c.groupId.startsWith(DATA_PRODUCT_ID_PREFIX))?.length ?? 0;
+    const hasXyPlots =  mainChartCnt || (hasTables && !isEmpty(getDefaultChartProps(getActiveTableId())));
+    const initLoadCompleted= layout.initLoadCompleted||hasImages||hasTables||hasXyPlots;
+
+    // we should not make a new object unless something has changed
+    return (hasImages===layout.hasImages && hasTables===layout.hasTables &&
+            hasXyPlots===layout.hasXyPlots && layout.initLoadCompleted) ?
+        layout : {...layout, hasImages, hasTables, hasXyPlots, initLoadCompleted};
 }
+
+
+/**
+ * returns an array of drop down actions from menu items
+ * @returns {*}
+ */
+export function getDropDownNames() {
+    const menuItems = getMenu()?.menuItems;
+    if (!Array.isArray(menuItems)) return [];
+    return menuItems.filter((mi) => mi.type !== COMMAND)
+        .map((mi) => mi.action);
+}
+
 
 function getSelView(state, dropDown) {
     var {visible=!state.disableDefaultDropDown, view} = dropDown || {};
@@ -266,6 +392,35 @@ function getSelView(state, dropDown) {
     return view;
 }
 
+/**
+ *
+ * @return {{bgTableCnt: number, tableCnt: number, haveResults: boolean, imageCnt: number, pinChartCnt: number)}
+ */
+export function getResultCounts() {
+    const layoutInfo= getLayouInfo();
+    const haveResults = filter(pick(layoutInfo, ['showTables', 'showXyPlots', 'showImages'])).length>0 ||
+            !isEmpty(layoutInfo.gridViewsData) ;
+    const tblIds= getTblIdsByGroup('main') ?? [];
+    const tableCnt= tblIds?.length;
+    const tableLoadingCnt= tblIds.filter( (id) => getTblById(id)?.isFetching).length;
+
+    const imViewAry= dataProductRoot()
+        .map( (entry) => entry.activateParams?.imageViewerId)
+        .map( (viewId) => getViewer(getMultiViewRoot(), viewId)?.itemIdAry ?? []);
+
+
+    const defPvIdAry= getViewer(getMultiViewRoot(), DEFAULT_FITS_VIEWER_ID)?.itemIdAry ?? [];
+    const pvIdAry= [...defPvIdAry,  ...flatten(imViewAry)];
+
+
+    const imageCnt= pvIdAry?.length;
+    const imageLoadingCnt= pvIdAry.filter( (id) => getPlotViewById(visRoot(),id)?.serverCall==='working').length;
+    const pinChartCnt= getViewer(getMultiViewRoot(), PINNED_CHART_VIEWER_ID)?.itemIdAry?.length ?? 0;
+    const {jobs={}}= getBackgroundInfo() ?? {};
+    const bgTableCnt= Object.values(jobs)
+        .filter((job) => job.jobInfo?.monitored && job.jobInfo?.type !== 'PACKAGE')?.length ?? 0;
+    return {haveResults,tableCnt,tableLoadingCnt,imageCnt,imageLoadingCnt,pinChartCnt,bgTableCnt};
+}
 
 /**
  * This handles the general use case of the drop-down panel.
@@ -277,26 +432,30 @@ function getSelView(state, dropDown) {
  */
 export function dropDownHandler(layoutInfo, action) {
     // calculate dropDown when new UI elements are added or removed from results
-    const count = filter(pick(layoutInfo, ['showTables', 'showXyPlots', 'showImages'])).length;
     switch (action.type) {
         case CHART_ADD:
         case TBL_RESULTS_ADDED:
+        case TBL_RESULTS_ACTIVE:
+        case TABLE_LOADED:
+            const tbl_id= action.type === CHART_ADD ? action.payload.groupId : action.payload.tbl_id;
+            if (findGroupByTblId(tbl_id)!=='main' || getTblById(tbl_id)?.request?.META_INFO?.[MetaConst.UPLOAD_TABLE]) {
+                return layoutInfo;
+            }
+            return smartMerge(layoutInfo, {dropDown: {visible: false}});
         case REPLACE_VIEWER_ITEMS :
         case ImagePlotCntlr.PLOT_IMAGE :
-        case ImagePlotCntlr.PLOT_IMAGE_START :
             return smartMerge(layoutInfo, {dropDown: {visible: false}});
-            break;
-        case CHART_REMOVE:
-        case SHOW_DROPDOWN:
-        case TABLE_REMOVE:
-        case TBL_RESULTS_REMOVE:
-        case ImagePlotCntlr.DELETE_PLOT_VIEW:
-            if (!get(layoutInfo, 'dropDown.visible', false)) {
-                if (count===0) {
-                    return smartMerge(layoutInfo, {dropDown: {visible: true}});
-                }
+        case ImagePlotCntlr.PLOT_IMAGE_START :
+            const VISUALIZED_TABLE_IDS = action.payload?.attributes?.VISUALIZED_TABLE_IDS;
+            if (VISUALIZED_TABLE_IDS?.length) {
+                const lastId = VISUALIZED_TABLE_IDS[VISUALIZED_TABLE_IDS.length - 1];
+                // Check if the last entry contains 'Upload_Tbl' - and return layoutInfo as is if it does
+                const containsUploadTbl = lastId.includes('Upload_Tbl');
+                if (containsUploadTbl) return layoutInfo;
             }
-            break;
+            const {useForSearchResults= true, useForCoverage}= action.payload.pvOptions;
+            const visible= (!useForCoverage && !useForSearchResults) && layoutInfo.dropDown.visible;
+            return smartMerge(layoutInfo, {dropDown: {visible}});
     }
     return layoutInfo;
 }

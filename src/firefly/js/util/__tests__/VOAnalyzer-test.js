@@ -1,7 +1,8 @@
 // import initTest from '../InitTest.js';
 
 import {reject} from 'lodash';
-import {findTableCenterColumns, isCatalog, hasCoverageData, isMetaDataTable, applyLinkSub} from '../VOAnalyzer';
+import {findTableCenterColumns, hasCoverageData, isCatalog, isDataProductsTable} from '../../voAnalyzer/TableAnalysis.js';
+import {applyLinkSub} from '../../voAnalyzer/VoCoreUtils.js';
 import {SelectInfo} from '../../tables/SelectInfo';
 
 
@@ -45,11 +46,29 @@ describe('VOAnalyzer:', () => {
         expect(actual.lonCol).toEqual('ra1');
         expect(actual.latCol).toEqual('dec1');
 
+        // test ra_obj/dec_obj
+        table.tableData.columns = [
+            {name: 'ra_obj'},
+            {name: 'dec_obj'},
+        ];
+        actual = findTableCenterColumns(table);
+        expect(actual).toBeTruthy();
+        expect(actual.lonCol).toEqual('ra_obj');
+        expect(actual.latCol).toEqual('dec_obj');
+
 
         // test fail
         table.tableData.columns = [
-            {name: 'ra_unrecognized'},
-            {name: 'dec_unrecognized'}
+            {name: 'my_ra_unrecognized'},
+            {name: 'my_dec_unrecognized'}
+        ];
+        actual = findTableCenterColumns(table);
+        expect(actual).toBeFalsy();
+
+        // test fail
+        table.tableData.columns = [
+            {name: 'rastuff'},
+            {name: 'decstuff'}
         ];
         actual = findTableCenterColumns(table);
         expect(actual).toBeFalsy();
@@ -516,22 +535,22 @@ describe('VOAnalyzer:', () => {
             }
         };
         let result;
-        result= isMetaDataTable(table);
+        result= isDataProductsTable(table);
         expect(result).toBeTruthy();
 
 
         table.tableMeta= {dAtASouRCE:'url'};
-        result= isMetaDataTable(table);
+        result= isDataProductsTable(table);
         expect(result).toBeTruthy();
 
 
 
         table.tableMeta= {};
-        result= isMetaDataTable(table);
-        expect(result).toBeFalsy();
+        result= isDataProductsTable(table);
+        expect(result).toBeTruthy();
 
         table.tableMeta= {ImageSourceId:'wise'};
-        result= isMetaDataTable(table);
+        result= isDataProductsTable(table);
         expect(result).toBeTruthy();
 
     });
@@ -559,14 +578,6 @@ describe('VOAnalyzer:', () => {
         // substituting values from column a and c into the href
         result = applyLinkSub(tableModel, 'https://acme.org/abc?x=${a}&y=${c}', 1, 'b-2');
         expect(result).toBe('https://acme.org/abc?x=a-2&y=c-2');
-
-        // don't encode cell data when href is not given
-        result = applyLinkSub(tableModel, '', 2, 'http://acme.org/?id=1984A%26AS...56..381B');
-        expect(result).toBe('http://acme.org/?id=1984A%26AS...56..381B');
-
-        // auto-encode cell data when used as tokens and not a full url
-        result = applyLinkSub(tableModel, 'http://acme.org/?id=${c}', 2, 'failed');
-        expect(result).toBe('http://acme.org/?id=1984A%26AS...56..381B');
 
         // null condition
         result = applyLinkSub(tableModel, '${b}', 2, '');

@@ -3,18 +3,18 @@
  */
 
 import React, {PureComponent, useEffect, useRef} from 'react';
-import ReactDOM from 'react-dom';
 import PropTypes from 'prop-types';
+import {Box, Button, Link, Sheet, Stack, Typography} from '@mui/joy';
 import {isEmpty, cloneDeep, get} from 'lodash';
 import SplitPane from 'react-split-pane';
-import Tree, { TreeNode } from 'rc-tree';
+import Tree from 'rc-tree';
 import 'rc-tree/assets/index.css';
 
 import {BasicTableViewWithConnector} from './BasicTableView.jsx';
 import {SelectInfo} from '../SelectInfo.js';
 import {createInputCell} from './TableRenderer.js';
 import {FILTER_CONDITION_TTIPS, FILTER_TTIPS, FilterInfo, getFiltersAsSql} from '../FilterInfo.js';
-import {sortTableData, calcColumnWidths, getTableUiByTblId, getTableUiById, getSqlFilter} from  '../TableUtil.js';
+import {sortTableData, calcColumnWidths, getTableUiByTblId, getTableUiById, getSqlFilter, DOC_FUNCTIONS_URL} from '../TableUtil.js';
 import {InputAreaField} from '../../ui/InputAreaField.jsx';
 import {toBoolean} from '../../util/WebUtil.js';
 import {NOT_CELL_DATA} from './TableRenderer.js';
@@ -25,11 +25,11 @@ import {insertAtCursor} from '../../ui/tap/AdvancedADQL.jsx';
 import {dispatchMultiValueChange} from '../../fieldGroup/FieldGroupCntlr.js';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {getFieldVal} from '../../fieldGroup/FieldGroupUtils.js';
+import {CopyToClipboard} from '../../visualize/ui/MouseReadout';
 
 import RIGHT_ARROW from 'html/images/right-arrow-in-16x16.png';
+import {applyFilterChanges} from 'firefly/tables/TableConnector';
 
-const wrapperStyle = {display: 'block', flexGrow: 0};
-const style = {display: 'block', width: '100%', resize: 'none', boxSizing: 'border-box'};
 
 export class FilterEditor extends PureComponent {
     constructor(props) {
@@ -50,31 +50,24 @@ export class FilterEditor extends PureComponent {
         const renderers = makeRenderers(callbacks.onFilter, tbl_id);
         
         return (
-            <div style={{height: '100%', display: 'flex', flexDirection: 'column'}}>
-                <div style={{flexGrow: 1, position: 'relative'}}>
-                    <div style={{position: 'absolute', top:0, bottom:5, left:0, right:0, backgroundColor: 'white'}}>
-                        <BasicTableViewWithConnector
-                            columns={cols}
-                            rowHeight={24}
-                            selectable={selectable}
-                            {...{data, selectInfoCls, sortInfo, callbacks, renderers, tbl_ui_id: `${tbl_ui_id}_FilterEditor`}}
-                        />
-                    </div>
-                </div>
+            <Stack spacing={1} flexGrow={1} overflow='hidden'>
+                <BasicTableViewWithConnector
+                    columns={cols}
+                    rowHeight={26}
+                    selectable={selectable}
+                    {...{data, selectInfoCls, sortInfo, callbacks, renderers, tbl_ui_id: `${tbl_ui_id}_FilterEditor`}}
+                />
                 <InputAreaField
                     value={filterInfo}
                     label='Filters:'
                     validator={FilterInfo.validator.bind(null,columns)}
                     tooltip={FILTER_TTIPS}
-                    inline={false}
-                    rows={3}
+                    minRows={3}
                     onChange={callbacks.onAllFilter}
                     actOn={['blur', 'enter']}
-                    wrapperStyle={wrapperStyle}
-                    style={style}
                     showWarning={false}
                 />
-            </div>
+            </Stack>
         );
     }
 }
@@ -124,9 +117,7 @@ function prepareOptionData(columns, sortInfo, filterInfo, selectable, allowUnits
     data.forEach( (v, idx) => {
         selectInfoCls.setRowSelect(idx, get(v, '4', true));
     } );
-    var tableRowCount = data.length;
-
-    return {cols, data, tableRowCount, selectInfoCls};
+    return {cols, data, selectInfoCls};
 }
 
 function makeCallbacks(onChange, columns, data, orgFilterInfo='') {
@@ -204,13 +195,9 @@ function makeRenderers(onFilter, tbl_id) {
 }
 
 
-
-
-
-
 /*----------------------------------------------  Advanced Filter panel -----------------------------------------------*/
 
-const code = {style: {color: 'green', whiteSpace: 'pre', fontFamily: 'monospace', display: 'inline-block'}};
+export const code = {style: {color: 'green', whiteSpace: 'pre', fontFamily: 'monospace', display: 'inline-block'}};
 const sqlKey = 'SqlTableFilter-sql';
 const opKey =  'SqlTableFilter-op';
 const groupKey = 'sqltablefilter';
@@ -222,11 +209,11 @@ export function setSqlFilter(op, sql) {
                         ]);
 }
 
-export function SqlTableFilter({tbl_ui_id, tbl_id, onChange}) {
+export function SqlTableFilter({tbl_ui_id, tbl_id, onChange, style={}, samples, usages, inputLabel, placeholder}) {
 
 
     const sqlEl = useRef(null);                                                // using a useRef hook
-    const [uiState] = useStoreConnector(() => getTableUiById(tbl_ui_id));
+    const uiState = useStoreConnector(() => getTableUiById(tbl_ui_id));
 
     useEffect(() => {
         const {op='AND', sql=''} = getSqlFilter(tbl_id);
@@ -234,49 +221,54 @@ export function SqlTableFilter({tbl_ui_id, tbl_id, onChange}) {
     }, [tbl_id]);     // run only once
 
     const {columns, error} = uiState;
-    const treeNodes = cloneDeep(columns)
+    const treeData = cloneDeep(columns)
                         .filter( (c) => c.visibility !== 'hidden')
                         .sort( (c1,c2) => (c1.label || c1.name).localeCompare(c2.label || c2.name) )
-                        .map((c) => <TreeNode style={{marginLeft: -10}} key={c.name} title={`  ${c.label || c.name} (${c.type || '---'})`} isLeaf={true}/>);
+                        .map((c) => ({
+                            style:{marginLeft: -10},
+                            key:c.name,
+                            title:`  ${c.label || c.name} (${c.type || '---'})`,
+                            isLeaf:true
+                        }));
 
     const onApply = () => {
-        const sqlVal = getFieldVal(groupKey, sqlKey);
-        const opVal = getFieldVal(groupKey, opKey);
-        const sqlFilter = sqlVal ? `${opVal}::${sqlVal}` : '';
-        onChange({sqlFilter});
+        const sql = getFieldVal(groupKey, sqlKey);
+        const op = getFieldVal(groupKey, opKey);
+        onChange?.({op, sql});
     };
 
     const onNodeClick = (skeys, {node}) => {
-        const textArea = get(ReactDOM.findDOMNode(sqlEl.current), 'firstChild');
+        const textArea = document.getElementById('advFilterInput');
         const key = get(node, 'props.eventKey');
         insertAtCursor(textArea, ` "${key}" `, sqlKey, groupKey);
     };
 
     const colFilters = getFiltersAsSql(tbl_id);
-    const sqlLabel = colFilters ? 'Additional Constraints (SQL):' : 'Constraints (SQL):';
+    inputLabel = inputLabel || (colFilters ? 'Additional Constraints (SQL):' : 'Constraints (SQL):');
     const iconGen = () => <img width="14" height="14" src={RIGHT_ARROW}/> ;
 
-    const errStyle = error ? {borderColor: 'red'} : {};
+    usages = usages || <Usages/>;
+    samples = samples || <Samples/>;
+    placeholder = placeholder || 'e.g., "ra" > 180 AND "ra" < 185';
+
     return (
-        <SplitPane split='vertical' defaultSize={200} style={{display: 'inline-flex'}}>
+        <SplitPane split='vertical' defaultSize={200} style={{display: 'inline-flex', ...style}}>
             <SplitContent style={{display: 'flex', flexDirection: 'column'}}>
-                <b>Columns (sorted)</b>
-                <div  style={{overflow: 'auto', flexGrow: 1}}>
-                    <Tree defaultExpandAll showLine onSelect={onNodeClick} icon={iconGen} >
-                        {treeNodes}
-                    </Tree>
-                </div>
+                <Typography level='title-md'>Columns (sorted)</Typography>
+                <Box  style={{overflow: 'auto', flexGrow: 1}}>
+                    <Tree defaultExpandAll showLine onSelect={onNodeClick} icon={iconGen} treeData={treeData}/>
+                </Box>
             </SplitContent>
             <SplitContent style={{overflow: 'auto'}}>
-                <div className='flex-full' style={{height: '100%', overflow: 'hidden'}}>
-                    <ColumnFilter {...{colFilters, onChange}}/>
-                    <div style={{display: 'inline-flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                        <h3>{sqlLabel}</h3>
-                            <div style={{display: 'inline-flex', alignItems: 'center'}}>
-                            <button className='button std' title='Apply the constraints' style={{height: 24}} onClick={onApply}>Apply</button>
+                <Stack height={1} spacing={1} overflow='hidden'>
+                    <ColumnFilter {...{colFilters, tbl_id}}/>
+                    <Stack direction='row' justifyContent='space-between' alignItems='center'>
+                        <Typography level='title-md'>{inputLabel}</Typography>
+                        <Stack direction='row' alignItems='center' spacing={1}>
+                            <Button title='Apply the constraints' onClick={onApply}>Apply</Button>
                             {colFilters &&
-                                <div style={{display: 'inline-flex', alignItems: 'center'}}>
-                                    <label style={{margin: '0 5px'}}> with: </label>
+                                <Stack direction='row' alignItems='center' spacing={1}>
+                                    <Typography> with: </Typography>
                                     <RadioGroupInputField
                                         fieldKey={opKey}
                                         groupKey={groupKey}
@@ -285,46 +277,27 @@ export function SqlTableFilter({tbl_ui_id, tbl_id, onChange}) {
                                             {label: 'AND', value: 'AND'},
                                             {label: 'OR', value: 'OR'}
                                         ]}/>
-                                </div>
+                                </Stack>
                             }
-                        </div>
-                    </div>
+                        </Stack>
+                    </Stack>
                     <InputAreaFieldConnected
                         ref={sqlEl}
-                        style={{width: 'calc(100% - 9px)', resize: 'none', backgroundColor: 'white', ...errStyle}} rows={7}
                         validator={FilterInfo.validator.bind(null,columns)}
                         groupKey={groupKey}
                         fieldKey={sqlKey}
                         tooltip='Additional filter to apply to the table'
-                        placeholder='e.g., "ra" > 180 AND "ra" < 185'
+                        placeholder={placeholder}
+                        slotProps={{
+                            textArea: {id: 'advFilterInput'}
+                        }}
                     />
                     {error && <li style={{color: 'red', fontStyle: 'italic'}}>{error}</li>}
-                    <div style={{color: '#4c4c4c', overflow: 'auto', flexGrow: 1}}>
-                        <h4>Usage</h4>
-                        <div style={{marginLeft: 5}}>
-                            <div>Input should follow the syntax of an SQL WHERE clause.</div>
-                            <div>Click on a Column name to insert the name into the SQL Filter input box.</div>
-                            <div style={{marginTop: 5}}>Standard SQL-like operators can be used where applicable.
-                                Supported operators are:
-                                <span {...code}>{'  +, -, *, /, =, >, <, >=, <=, !=, LIKE, IN, IS NULL, IS NOT NULL'}</span>
-                            </div>
-                            <div style={{marginTop: 5}}>
-                                You may use functions as well.  A few of the common functions are listed below.
-                                For a list of all available functions, click <a href='http://hsqldb.org/doc/2.0/guide/builtinfunctions-chapt.html' target='_blank'>here</a>
-                            </div>
-                            <div style={{marginLeft: 5}}>
-                                <li style={{whiteSpace: 'nowrap'}}>String functions: <span {...code}>CONCAT(s1,s2[,...]]) INSTR(s,pattern[,offset]) LENGTH(s) SUBSTR(s,offset,length)</span></li>
-                                <li style={{whiteSpace: 'nowrap'}}>Numeric functions: <span {...code}>LOG10(x)/LG(x) LN(x)/LOG(x) DEGREES(x) ABS(x) COS(x) SIN(x) TAN(x) POWER(x,y)</span></li>
-                            </div>
-                        </div>
-
-                        <h4>Sample Filters</h4>
-                        <div style={{marginLeft: 5}}>
-                            <li style={{whiteSpace: 'nowrap'}}><div {...code}>{'("ra" > 185 AND "ra" < 185.1) OR ("dec" > 15 AND "dec" < 15.1) AND "band" IN (1,2)'}</div></li>
-                            <li style={{whiteSpace: 'nowrap'}}><div {...code}>{'POWER("v",2) / POWER("err",2) > 4 AND "band" = 3'}</div></li>
-                        </div>
-                    </div>
-                </div>
+                    <Stack spacing={1} overflow='auto'>
+                        {usages}
+                        {samples}
+                    </Stack>
+                </Stack>
             </SplitContent>
         </SplitPane>
     );
@@ -337,18 +310,55 @@ SqlTableFilter.propTypes= {
     onOptionReset: PropTypes.func
 };
 
-function ColumnFilter({colFilters, onChange}) {
-    const clearFilters = () => onChange({filterInfo: ''});
+function ColumnFilter({colFilters, tbl_id}) {
+    const clearFilters = () => applyFilterChanges({tbl_id, filterInfo: ''});
 
     if (colFilters){
         return (
-            <div >
-                <div style={{fontWeight: 'bold', display: 'inline-flex', margin: '5px 0'}}>
-                    <div>Current Constraints: </div>
-                    <div style={{marginLeft: 5}} className='ff-href' onClick={clearFilters}>Clear</div>
-                </div>
-                <div className='TablePanelOptions__filters' title={colFilters}>{colFilters}</div>
-            </div>
+            <Stack>
+                <Stack direction='row' spacing={1} alignItems='center'>
+                    <Typography level='title-md'>Current Constraints: </Typography>
+                    <Link onClick={clearFilters}>Clear</Link>
+                    <CopyToClipboard value={colFilters}/>
+                </Stack>
+                <Sheet variant='soft' title={colFilters}>
+                    <Typography color='warning' level='body-sm'><code>{colFilters}</code></Typography>
+                </Sheet>
+            </Stack>
         );
     } else return null;
 }
+
+const Usages = () => {
+    return (
+        <Sheet>
+            <Typography level='title-md'>Usage</Typography>
+            <Typography level='body-sm' sx={{code:{ml:1, whiteSpace:'nowrap'}}}>
+                Input should follow the syntax of an SQL WHERE clause. <br/>
+                Click on a Column name to insert the name into the SQL Filter input box. <br/>
+                Standard SQL-like operators can be used where applicable. <br/>
+                Supported operators are: <br/>
+                <code>{'  +, -, *, /, =, >, <, >=, <=, !=, LIKE, IN, IS NULL, IS NOT NULL'}</code> <br/><br/>
+
+                You may use functions as well.  A few of the common functions are listed below. <br/>
+                For a list of all available functions, click <Link href={DOC_FUNCTIONS_URL} target='_blank'>here</Link> <br/>
+                String functions: <br/>
+                <code>CONCAT(s1,s2[,...]]) INSTR(s,pattern[,offset]) LENGTH(s) SUBSTR(s,offset,length)</code> <br/>
+                Numeric functions: <br/>
+                <code>LOG10(x)/LG(x) LN(x)/LOG(x) DEGREES(x) ABS(x) COS(x) SIN(x) TAN(x) POWER(x,y)</code>
+            </Typography>
+        </Sheet>
+    );
+};
+
+const Samples = () => {
+    return (
+        <Sheet>
+            <Typography level='title-md'>Sample Filters</Typography>
+            <Typography level='body-sm' sx={{code:{ml:1, whiteSpace:'nowrap'}}}>
+                <code>{'("ra" > 185 AND "ra" < 185.1) OR ("dec" > 15 AND "dec" < 15.1) AND "band" IN (1,2)'}</code> <br/>
+                <code>{'POWER("v",2) / POWER("err",2) > 4 AND "band" = 3'}</code>
+            </Typography>
+        </Sheet>
+    );
+};

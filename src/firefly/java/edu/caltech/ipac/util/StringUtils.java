@@ -3,8 +3,11 @@
  */
 package edu.caltech.ipac.util;
 
+import edu.caltech.ipac.firefly.server.util.Logger;
+
 import javax.validation.constraints.NotNull;
-import java.io.UnsupportedEncodingException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -15,6 +18,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -39,46 +43,19 @@ public class StringUtils {
     public static final long MEG_TENTH    = MEG / 10;
     public static final long GIG_HUNDREDTH= GIG / 100;
     public static final long K            = 1024;
-    public static String DASH_1;
-    public static String DASH_2;
-    public static String DASH_3;
-    public static String DOUBLE_QUOTATION_MARK_1;
-    public static String DOUBLE_QUOTATION_MARK_2;
-    public static String DOUBLE_QUOTATION_MARK_3;
-    public static String DOUBLE_QUOTATION_MARK_4;
 
-    static {
-        try { // jdk 1.1 and up supports public String(byte[] bytes, java.lang.String s)
-            DASH_1= new String (new byte[]{-30,-128,-102,-61,-124,-61,-82},"UTF-8");
-            DASH_2= new String (new byte[]{-30,-128,-102,-61,-124,-61,-84},"UTF-8");
-            DASH_3= new String (new byte[]{-30,-128,-109},"UTF-8");
-            DOUBLE_QUOTATION_MARK_1= new String (new byte[]{-30,-128,-99},"UTF-8");
-            DOUBLE_QUOTATION_MARK_2= new String (new byte[]{-30,-128,-100},"UTF-8");
-            DOUBLE_QUOTATION_MARK_3= new String (new byte[]{-30,-128,-102,-61,-124,-61,-71},"UTF-8");
-            DOUBLE_QUOTATION_MARK_4= new String (new byte[]{-30,-128,-102,-61,-124,-61,-70},"UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            //rare case, only happens if UTF-8 is not supported.
-            DASH_1=new String (new byte[]{-30,-128,-108});
-            DASH_2=new String (new byte[]{-30,-128,-109});
-            DASH_3=new String (new byte[]{-48});
-            DOUBLE_QUOTATION_MARK_1=new String (new byte[]{-45});
-            DOUBLE_QUOTATION_MARK_2=new String (new byte[]{-46});
-            DOUBLE_QUOTATION_MARK_3=new String (new byte[]{-30,-128,-99});
-            DOUBLE_QUOTATION_MARK_4=new String (new byte[]{-30,-128,-100});
-        }
-    }
+    private static final Logger.LoggerImpl logger = Logger.getLogger();
 
     public static String[] groupMatch(String regex, String val) {
         return groupMatch(regex, val, 0);
     }
 
     /**
-     * This is used for capturing groups.  If matches, it'll return all of the matching groups as
-     * an array of strings, otherwise null.
-     * @param regex pattern to match
+     * Entire string matching with capturing groups.
+     * @param regex pattern to match the full string
      * @param val   string value to match with
      * @param flags Match flags, a bit mask
-     * @return return all of the matching groups as an array of strings, otherwise null.
+     * @return return all the matching groups as an array of strings, otherwise null.
      */
     public static String[] groupMatch(String regex, String val, int flags) {
         return groupMatch(Pattern.compile(regex, flags), val);
@@ -100,28 +77,65 @@ public class StringUtils {
         }
     }
 
-
     /**
-     * applies the consumer's logic if v is not null or is an empty string
-     * @param v a value to check against
-     * @param f the consumer function to apply if v is not empty
+     * Find all occurrences that matches the regex within the given string.
+     * If matches, it'll return occurrences as an array of strings, otherwise null.
+     * @param regex pattern to find
+     * @param val   string value to match with
+     * @param flags Match flags, a bit mask
+     * @return return all the matching occurrences as an array of strings, otherwise null.
      */
-    public static <T> void applyIfNotEmpty(T v, Consumer<T> f){
-        if (!isEmpty(v)) f.accept(v);
+    public static String[] groupFind(String regex, String val, int flags) {
+        return groupFind(Pattern.compile(regex, flags), val);
     }
 
-    public static String shrink(String s, int size) {
-        if (s == null || s.length() <= size) return s;
-        size = size <=0 ? 1 : size;
-        if (size < 4) {
-            char[] str = new char[size];
-            Arrays.fill(str, '.');
-            return String.valueOf(str);
-        } else {
-            String pre = s.substring(0, size/2 - 1);
-            String suf = s.substring(s.length() - (size/2-2));
-            return pre + "..." + suf;
+    public static String[] groupFind(String regex, String val) {
+        return groupFind(Pattern.compile(regex, 0), val);
+    }
+
+     /**
+     * When performance matters, use this to save the time it takes to compile the reqex.
+     */
+    public static String[] groupFind(Pattern pattern, String val) {
+        Matcher m = pattern.matcher(val);
+        ArrayList<String> res = new ArrayList<>();
+        while ( m.find() ) {
+            res.add(m.group());
         }
+        return res.size() > 0 ? res.toArray(new String[0]) : null;
+    }
+
+    /**
+     * Replaces all occurrences of oldVal with newVal, ignoring cases where they are inside quotes.
+     *
+     * @param input  The input string to process.
+     * @param oldVal The value to search for.
+     * @param newVal The value to replace with.
+     * @return The modified string.
+     */
+    public static String replaceUnquoted(String input, String oldVal, String newVal) {
+        newVal = " %s ".formatted(newVal);
+        StringBuilder result = new StringBuilder();
+        Pattern quotePattern = Pattern.compile("(['\"]).*?\\1"); // Matches anything inside single or double quotes
+        Matcher matcher = quotePattern.matcher(input);
+
+        int lastIndex = 0;
+        while (matcher.find()) {
+            // Replace oldVal in the text before this quoted section
+            String beforeQuote = input.substring(lastIndex, matcher.start());
+            result.append(beforeQuote.replaceAll("(?i)\\s%s\\s".formatted(oldVal), newVal));
+
+            // Append the quoted section unchanged
+            result.append(matcher.group());
+
+            // Update lastIndex to continue after the quoted section
+            lastIndex = matcher.end();
+        }
+
+        // Replace oldVal in the text after the last quoted section
+        result.append(input.substring(lastIndex).replaceAll("(?i)\\s%s\\s".formatted(oldVal), newVal));
+
+        return result.toString();
     }
 
     /**
@@ -135,6 +149,31 @@ public class StringUtils {
         String msg = String.valueOf(o);
         msg = msg.length() < max ? msg : msg.substring(0, max) + "...(more)";
         return msg;
+    }
+
+    /**
+     * Splits the input string into multiple lines using newline characters. Ensures that each line
+     * does not exceed the specified maxLength. If a line exceeds maxLength, it is further broken
+     * into smaller lines.
+     *
+     * @param input         the input string
+     * @param maxLength     the maximum length of each line
+     * @return a list of strings, each with a length no greater than maxLength
+     */
+    public static List<String> breakIntoMultipleLines(String input, int maxLength) {
+        List<String> result = new ArrayList<>();
+        String[] lines = input.split("\n"); // split the input into lines
+        for (String line : lines) {
+            while (line.length() > maxLength) {
+                int breakAt = line.lastIndexOf(' ', maxLength);     // find the last space within the maxLength range
+                if (breakAt == -1)  breakAt = maxLength;                // if there's no space, break at the maxLength
+                // Add the broken line segment to the result list
+                result.add(line.substring(0, breakAt));
+                line = line.substring(breakAt).trim(); // remove leading spaces from the next segment
+            }
+            result.add(line); // add the remaining part or a short line
+        }
+        return result;
     }
 
     public static String pad(int length, String str) {
@@ -161,29 +200,13 @@ public class StringUtils {
 
     }
 
-    /**
-     * Converts a string of integers separated by the given regular expression into an array of int.
-     * @param str
-     * @param regExp
-     * @return
-     * @throws NumberFormatException
-     */
-    public static int[] convertToArrayInt(String str, String regExp) throws NumberFormatException {
-        String[] reqkeys = str.split(regExp);
-        int[] intAry = new int[reqkeys.length];
-        for (int i = 0; i < reqkeys.length; i++) {
-            intAry[i] = new Integer(reqkeys[i].trim());
-        }
-        return intAry;
-    }
-
     @NotNull
     public static List<Integer> convertToListInteger(String str, String regExp) throws NumberFormatException {
         if (isEmpty(str)) return new ArrayList<>();
         String[] reqkeys = str.split(regExp);
         ArrayList<Integer> list = new ArrayList<Integer>(reqkeys.length);
         for (int i = 0; i < reqkeys.length; i++) {
-            list.add( new Integer(reqkeys[i].trim()));
+            list.add( Integer.parseInt(reqkeys[i].trim()));
         }
         return list;
     }
@@ -310,29 +333,6 @@ public class StringUtils {
         return retval;
     }
 
-
-
-    /**
-     *
-     * @param s a string
-     * @return  Return true if the given string contains letters.
-     */
-    public static boolean containsLetters(String s) {
-        boolean retval = false;
-
-        if (s==null) return retval;
-
-        int     length = s.length();
-        for (int i=0; i<length; i++) {
-            if (Character.isLetter(s.charAt(i))) {
-                retval = true;
-                break;
-            }
-        }
-        return retval;
-    }
-
-
     /**
      * Returns true is the given string is either null, or an empty string.
      * A string of white spaces is also considered empty.
@@ -340,7 +340,7 @@ public class StringUtils {
      * @return Returns true is the given string is either null, or an empty string.
      */
     public static boolean isEmpty(String s) {
-        return s == null || trim(s).length() == 0;
+        return s == null || s.trim().length() == 0;
     }
 
     public static boolean isAnyEmpty(String... sAry) {
@@ -349,15 +349,6 @@ public class StringUtils {
         }
         return false;
     }
-
-
-
-    public static boolean hasContent(String s) {
-        return !isEmpty(s);
-    }
-
-
-
 
 
     /**
@@ -496,19 +487,13 @@ public class StringUtils {
     }
 
     public static String[] split(String source, String delimiter) {
-        return split(source, delimiter, Integer.MAX_VALUE);
+        return split(source, delimiter, 0);
     }
 
     public static String[] split(String source, String delimiter, int limit) {
-        ArrayList<String> rvals = new ArrayList<String>();
-        StringTokenizer vals = new StringTokenizer(source, delimiter);
-        while (vals.hasMoreToken()) {
-            if (rvals.size() >= limit) {
-                break;
-            }
-            rvals.add(trim(vals.nextToken()));
-        }
-        return rvals.toArray(new String[rvals.size()]);
+        if (source == null) return null;
+        return Arrays.stream(source.split(delimiter, limit))
+                .map(String::trim).toArray(String[]::new);
     }
 
     public static List<String> split(String source, int chunkSize) {
@@ -517,39 +502,7 @@ public class StringUtils {
                 .mapToObj(index -> source.substring(index * chunkSize, Math.min((index + 1) * chunkSize, source.length())))
                 .collect(Collectors.toList());
     }
-
-
-    /**
-     * this implementation is much faster than GWt's String.trim() once
-     * compiled into javascript, especially in Firefox
-     * @param str
-     * @return
-     */
-    public static String trim(String str) {
-        if (str == null || str.length() == 0) return str;
-
-        String whitespace = " \t\n\f\r";
-        int i = 0; int len = str.length();
-        for (; i < str.length(); i++) {
-            if (whitespace.indexOf(str.charAt(i)) == -1) {
-                str = str.substring(i);
-                break;
-            }
-        }
-        if (i == len) {
-            // empty string...
-            return "";
-        }
-
-        for (i = str.length() - 1; i >= 0; i--) {
-            if (whitespace.indexOf(str.charAt(i)) == -1) {
-                str = str.substring(0, i + 1);
-                break;
-            }
-        }
-        return str;
-    }
-
+    
     /**
      * returns the length of the given string.
      * 0 if str is null
@@ -700,15 +653,6 @@ public class StringUtils {
             StringBuilder sb= new StringBuilder(200);
             sb.append(str);
             str = convertExtendedAscii(sb);
-            /*
-            str= str.replaceAll(DASH_1, "-");
-            str= str.replaceAll(DASH_2, "-");
-            str= str.replaceAll(DASH_3, "-");
-            str= str.replaceAll(DOUBLE_QUOTATION_MARK_1,"\"");
-            str= str.replaceAll(DOUBLE_QUOTATION_MARK_2, "\"");
-            str= str.replaceAll(DOUBLE_QUOTATION_MARK_3, "\"");
-            str= str.replaceAll(DOUBLE_QUOTATION_MARK_4, "\"");*/
-            
         }
         return str;
     }
@@ -763,68 +707,94 @@ public class StringUtils {
         }
         return sbOriginal.toString();
     }
-    public static String convertDashedToCamel(String s) {
-        StringBuilder sb= new StringBuilder(s.length());
-        boolean nextCap= false;
-        for(char c : s.toCharArray()) {
-            if (c=='-') {
-                nextCap= true;
-            }
-            else {
-                sb.append(nextCap ? Character.toUpperCase(c) : c);
-                nextCap= false;
-            }
-        }
-        return sb.toString();
+
+//====================================================================
+//  functional helpers
+//====================================================================
+
+    /**
+     * applies the consumer's logic if v is not null or is an empty string
+     * @param v a value to check against
+     * @param f the consumer function to apply if v is not empty
+     */
+    public static <T> void applyIfNotEmpty(T v, Consumer<T> f){
+        if (!isEmpty(v)) f.accept(v);
     }
 
-    public static String escapeQuotes(String s) {
-        StringBuilder sb= new StringBuilder(s.length()+30);
-        for(char c : s.toCharArray()) {
-            if (c=='"' || c=='\'' || c=='\\') {
-                sb.append('\\');
-            }
-            sb.append(c);
-        }
-        return sb.toString();
+    /**
+     * A supplier that throws exception
+     * @param <R>  the return type of this function
+     */
+    public interface FuncWithEx<R> {
+        R get() throws Exception;
     }
 
-    public static Map<String,String> createStringMap(String... sAry) {
-        Map<String,String> map= new HashMap<String, String>(sAry.length+7);
-        if (sAry.length>=2) {
-            int max= sAry.length - (sAry.length %2);
-            for(int i= 0; (i<max); i+=2) {
-                map.put(sAry[i], sAry[i+1]);
-            }
-        }
-        return map;
+    /**
+     * @param func a function to execute
+     * @return the value from executing this func.  Null if func produces exception
+     */
+    public static <R> R getSafe(FuncWithEx<R> func) {
+        return getSafe(func, null);
     }
 
-    //=========================================================================================
-    //---------- File string utilities copied from FileUtil to be used in gwt ---------------
-    //=========================================================================================
-
-
-    public static String getFileBase(String s) {
-        String base;
-        int i = s.lastIndexOf('.');
-        if (i==-1 || i==0) {
-            base= s;
+    /**
+     * @param func a function to execute
+     * @param defaultVal  return defaultVal if func produces an exception or the value is null
+     * @return the value from executing this func
+     */
+    public static <R> R getSafe(FuncWithEx<R> func, R defaultVal) {
+        try {
+            R v = func.get();
+            return v == null ? defaultVal : v;
+        } catch (Exception e) {
+            return defaultVal;
         }
-        else {
-            base = s.substring(0, i);
-        }
-        return base;
     }
 
-    public static String stripFilePath(String path) {
-        String base;
-        char slash= '/';
-        int i = path.lastIndexOf(slash);
-        if (i == -1 || i == 0)  base = path;
-        else                    base = path.substring(i + 1, path.length());
-        return base;
+    /**
+     * Execute the given function and return the value if it passes test
+     * @param func  the function to execute
+     * @param test  test the returned value
+     * @param defaultValue returns when encountering exception or test fail
+     * @return the value of func if it passes test.  otherwise, return null
+     */
+    public static <R> R getWith(FuncWithEx<R> func, Predicate<R> test, R defaultValue) {
+        try {
+            var result = func.get();
+            if (test.test(result)) return result;
+        } catch (Exception e) {
+            logger.info("returning (%s) because %s failed: %s".formatted(defaultValue, func.toString(), e.getMessage()));
+        }
+        return defaultValue;
     }
+
+    /**
+     * Execute the given function and return the value if it passes test
+     * @param func  the function to execute
+     * @param test  test the returned value
+     * @param tries the number of times to try
+     * @return the value of func if it passes test.  otherwise, return null
+     */
+    public static <R> R getWith(FuncWithEx<R> func, Predicate<R> test, int tries) {
+        for (int i = 0; i < tries; i++) {
+            R v = getWith(func, test, null);
+            if (v != null) return v;
+        }
+        return null;
+    }
+
+    /**
+     * Return a URL if the input can be successfully parsed as a URL; otherwise, return null.
+     * @param urlString  URL string
+     * @return
+     */
+    public static URL toUrl(String urlString) {
+        try {
+            new URL(urlString);
+        } catch (MalformedURLException ignored) {}
+        return null;
+    }
+
 
     //=========================================================================================
     //---------- HandSerialize support methods- might break into another class  ---------------

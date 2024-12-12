@@ -3,17 +3,16 @@
  */
 package edu.caltech.ipac.table.io;
 import edu.caltech.ipac.table.*;
+
+import static edu.caltech.ipac.table.DataType.*;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
-import java.util.Date;
 import edu.caltech.ipac.table.TableUtil;
 
 import edu.caltech.ipac.util.StringUtils;
@@ -67,27 +66,22 @@ public class VoTableWriter {
         FitsFactory.useThreadLocalSettings(false);
     }
 
+    /**
+     * @param typeDesc  String description of column's data type
+     * @return VoTable type for the given Firefly's Type
+     */
+    private static String mapToVoType(String typeDesc) {
+        if (typeDesc.equals(DATE))      return "char";
+        if (typeDesc.equals(LOCATION))  return "char";
+        if (typeDesc.equals(REAL))      return "double";
+
+        return typeDesc;
+    }
 
     private static class DataGroupXML {
         private List<DataGroup.Attribute> tableMeta;
         private DataGroup dataGroup;
         private String tagDesc = "DESCRIPTION";
-        private static final Map<Class, String> dataTypeMap = new HashMap<>();
-
-        // not included: "bit", "unicodeCode", "floatComplex", "doubleComplex"
-        static {
-            dataTypeMap.put(Boolean.class, "boolean");
-            dataTypeMap.put(Byte.class, "unsignedByte");
-            dataTypeMap.put(Short.class, "short");
-            dataTypeMap.put(Integer.class, "int");
-            dataTypeMap.put(Long.class, "long");
-            dataTypeMap.put(String.class, "char");
-            dataTypeMap.put(Character.class, "char");
-            dataTypeMap.put(Float.class, "float");
-            dataTypeMap.put(Double.class, "double");
-            dataTypeMap.put(Date.class, "char");
-        }
-
 
         DataGroupXML(DataGroup dg) {
             this.dataGroup = dg;
@@ -97,21 +91,41 @@ public class VoTableWriter {
         public String xmlINFOs() {
             List<DataGroup.Attribute> metaList = infosInTable(tableMeta);
 
-            if (metaList.size() == 0) {
-                return "";
-            }
-
-            return metaList.size() == 0 ? "" : metaList.stream()
-                                                .map( oneAtt -> "<INFO" +
-                                                        VOSerializer.formatAttribute(TableMeta.NAME, oneAtt.getKey()) +
-                                                        VOSerializer.formatAttribute("value", oneAtt.getValue()) + "/>" )
-                                                .collect(Collectors.joining("\n"));
+            return metaList.isEmpty() ? ""
+                    : metaList.stream()
+                        .map( oneAtt -> "<INFO" +
+                                VOSerializer.formatAttribute(TableMeta.NAME, oneAtt.getKey()) +
+                                VOSerializer.formatAttribute("value", oneAtt.getValue()) + "/>" )
+                        .collect(Collectors.joining("\n"));
         }
 
         private String xmlDESCRIPTION() {
             String descVal = dataGroup.getAttribute(TableMeta.DESC);
 
             return isEmpty(descVal) ? "" : "<"+tagDesc+">" + descVal + "</"+tagDesc+">";
+        }
+
+        private String xmlTABLE() {
+            long nrow = dataGroup.size();
+            String tname = dataGroup.getTableMeta().getAttribute(TableMeta.NAME);
+            String res = "<TABLE";
+            String ucd = dataGroup.getTableMeta().getAttribute(TableMeta.UCD);
+            String utype = dataGroup.getTableMeta().getAttribute(TableMeta.UTYPE);
+
+            if (!StringUtils.isEmpty(tname)) {
+                res += VOSerializer.formatAttribute(TableMeta.NAME, tname.trim());
+            }
+            if (nrow > 0) {
+                res += VOSerializer.formatAttribute("nrows", Long.toString(nrow));
+            }
+            if (ucd != null) {
+                res += VOSerializer.formatAttribute(TableMeta.UCD, ucd);
+            }
+            if (utype != null) {
+                res += VOSerializer.formatAttribute(TableMeta.UTYPE, utype);
+            }
+            res += ">";
+            return res;
         }
 
         private String xmlLINK(LinkInfo link) {
@@ -163,7 +177,7 @@ public class VoTableWriter {
             String atts = elementAtt(TableMeta.ID, dt.getID()) +
                           elementAtt(TableMeta.NAME, dt.getKeyName()) +
                           elementAtt(TableMeta.UCD, dt.getUCD()) +
-                          elementAtt("datatype", dataTypeMap.get(dt.getDataType())) +
+                          elementAtt("datatype", mapToVoType(dt.getTypeDesc())) +
                           elementAtt("width", width) +
                           elementAtt("precision",
                                      (!isEmpty(prec) && prec.startsWith("G")) ? prec.substring(1) : prec) +
@@ -197,7 +211,7 @@ public class VoTableWriter {
         }
 
         private String xmlPARAM(ParamInfo pInfo) {
-            String paramAtts = xmlColumnAtt(pInfo) + elementAtt("value", pInfo.getValue());
+            String paramAtts = xmlColumnAtt(pInfo) + elementAtt("value", pInfo.getStringValue());
             String descriptionTag = tagElement(tagDesc, pInfo.getDesc());
             String linkTag = xmlLINKs(pInfo.getLinkInfos());
             String childElements = (isEmpty(descriptionTag) ? "" : descriptionTag + "\n") +
@@ -346,12 +360,12 @@ public class VoTableWriter {
 
                 VOSerializer serializer = VOSerializer.makeSerializer( getDataFormat(), getVotableVersion(), startab );
 
-                /* Begin TABLE element including FIELDs etc. */
-                serializer.writePreDataXML( writer );
-
                 /* Now add our additional info */
-                DataGroupXML dgXML = new DataGroupXML( dataGroup);
+                DataGroupXML dgXML = new DataGroupXML(dataGroup);
+                //note: in accordance with the IVOA standard for VOTable, the order of the tags below needs to be maintained
+                outputElement(writer, dgXML.xmlTABLE());     // TABLE tag
                 outputElement(writer, dgXML.xmlDESCRIPTION());     // DESCRIPTION tag
+                serializer.writeFields(writer);     // FIELDS tags
                 outputElement(writer, dgXML.xmlGROUPs(dataGroup.getGroupInfos()));          // GROUP
                 outputElement(writer, dgXML.xmlPARAMs(dataGroup.getParamInfos())); // PARAM
                 outputElement(writer, dgXML.xmlLINKs(dataGroup.getLinkInfos()));

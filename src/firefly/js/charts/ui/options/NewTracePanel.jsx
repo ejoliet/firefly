@@ -7,14 +7,15 @@ import {FieldGroup} from '../../../ui/FieldGroup.jsx';
 import {ValidationField} from '../../../ui/ValidationField.jsx';
 import {ListBoxInputField} from '../../../ui/ListBoxInputField.jsx';
 import {getFieldVal} from '../../../fieldGroup/FieldGroupUtils.js';
-import {SimpleComponent} from '../../../ui/SimpleComponent.jsx';
+import {useStoreConnector} from '../../../ui/SimpleComponent.jsx';
 import {ScatterOptions, submitChangesScatter} from './ScatterOptions.jsx';
 import {HeatmapOptions, submitChangesHeatmap} from './HeatmapOptions.jsx';
 import {submitChangesSpectrum} from './SpectrumOptions.jsx';
 import {FireflyHistogramOptions, submitChangesFFHistogram} from './FireflyHistogramOptions.jsx';
 import {LayoutOptions, basicFieldReducer, submitChanges} from './BasicOptions.jsx';
+import {Stack} from '@mui/joy';
+import {CollapsibleGroup} from 'firefly/ui/panel/CollapsiblePanel';
 
-const fieldProps = {labelWidth: 62, size: 15};
 
 export function getSubmitChangesFunc(traceType, fireflyType) {
     const type = fireflyType || traceType;
@@ -52,10 +53,16 @@ function getOptionsComponent({traceType, chartId, activeTrace, groupKey, tbl_id}
             return (<FireflyHistogramOptions {...{chartId, activeTrace, groupKey, tbl_id}}/>);
         default:
             return (
-                <FieldGroup className='FieldGroup__vertical' keepState={false} groupKey={groupKey} reducerFunc={fieldReducer({chartId, activeTrace})}>
-                    <ValidationField fieldKey={`_tables.data.${activeTrace}.x`}/>
-                    <ValidationField fieldKey={`_tables.data.${activeTrace}.y`}/>
-                    <LayoutOptions {...{chartId, activeTrace, groupKey, tbl_id, noColor}}/>
+                <FieldGroup keepState={false} groupKey={groupKey} reducerFunc={fieldReducer({chartId, activeTrace})}>
+                    <Stack spacing={2} sx={{
+                        '.MuiFormLabel-root': {width: '8rem'},
+                    }}>
+                        <ValidationField fieldKey={`_tables.data.${activeTrace}.x`}/>
+                        <ValidationField fieldKey={`_tables.data.${activeTrace}.y`}/>
+                        <CollapsibleGroup>
+                            <LayoutOptions {...{chartId, activeTrace, groupKey, tbl_id, noColor}}/>
+                        </CollapsibleGroup>
+                    </Stack>
                 </FieldGroup>
             );
     }
@@ -84,38 +91,27 @@ export function addNewTrace({chartId, tbl_id, fields, hideDialog, renderTreeId})
     submitChangesFunc({chartId, activeTrace, fields, tbl_id, renderTreeId});
 }
 
-export class NewTracePanel extends SimpleComponent {
 
-    getNextState(np) {
-        const {chartId} = np || this.props;
-        const {data=[]} = getChartData(chartId);
-        const activeTrace = data.length;        //setting activeTrace to next available index.
-        const type = getFieldVal('new-trace', 'type') || 'scatter';
-        return {activeTrace, type};
-    }
+export function NewTracePanel({tbl_id, chartId, groupKey}) {
+    const {activeTrace, traceType} = useStoreConnector(() => ({
+        activeTrace: getChartData(chartId)?.data?.length ?? 0, // next available index in data array
+        traceType: getFieldVal('new-trace', 'type') || 'scatter'}), [chartId]);
 
-    render() {
-        const {tbl_id, chartId, groupKey} = this.props;
-        const {activeTrace, type} = this.state;
-
-        return (
-            <div style={{padding: 10, maxHeight: 550, overflow: 'auto', borderBottom: 'solid 1px #cccccc', borderTop: 'solid 1px #cccccc'}}>
-                <FieldGroup className='FieldGroup__vertical' keepState={true} groupKey='new-trace'>
-                    <ListBoxInputField fieldKey='type' tooltip='Select plot type' label='Plot Type:'
-                        options={[
-                            {label: 'Scatter', value: 'scatter'},
-                            {label: 'Heatmap', value: 'fireflyHeatmap'},
-                            {label: 'Histogram', value: 'fireflyHistogram'}
-                        ]}
-                        {...fieldProps} />
-                </FieldGroup>
-                <br/>
-                {getOptionsComponent({traceType:type, chartId, activeTrace, groupKey, tbl_id})}
-
-            </div>
-        );
-    }
+    return (
+        <Stack spacing={2}>
+            <FieldGroup keepState={true} groupKey='new-trace'>
+                <ListBoxInputField fieldKey='type' tooltip='Select plot type' label='Plot Type:'
+                                   options={[
+                                       {label: 'Scatter', value: 'scatter'},
+                                       {label: 'Heatmap', value: 'fireflyHeatmap'},
+                                       {label: 'Histogram', value: 'fireflyHistogram'}
+                                   ]}/>
+            </FieldGroup>
+            {getOptionsComponent({traceType, chartId, activeTrace, groupKey, tbl_id})}
+        </Stack>
+    );
 }
+
 
 function fieldReducer({chartId, activeTrace}) {
     const basicReducer = basicFieldReducer({chartId, activeTrace});
@@ -125,14 +121,12 @@ function fieldReducer({chartId, activeTrace}) {
             value: '',
             tooltip: 'X axis',
             label: 'X:',
-            ...fieldProps
         },
         [`_tables.data.${activeTrace}.y`]: {
             fieldKey: `_tables.data.${activeTrace}.y`,
             value: '',
             tooltip: 'Y axis',
             label: 'Y:',
-            ...fieldProps
         },
         ...basicReducer(null)
     };

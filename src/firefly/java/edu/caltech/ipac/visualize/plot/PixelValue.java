@@ -2,282 +2,185 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.visualize.plot;
-import edu.caltech.ipac.firefly.visualize.ClientFitsHeader;
-import nom.tam.fits.BasicHDU;
-import nom.tam.fits.Fits;
-import nom.tam.fits.FitsException;
-import nom.tam.fits.Header;
 
-import java.io.FileNotFoundException;
+import edu.caltech.ipac.firefly.visualize.DirectFitsAccessData;
+import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 
 public class PixelValue {
 
-    public static void main(String[] args) 
-    {
+	/**
+	 * Read a FITS pixel value directly from the file on disk. That is, open the file and read one value and close.
+	 * @param f - the FITS file
+	 * @param pt - point, the x,y of the location to read
+	 * @param h - the direct file access data, mostly from the fits header
+	 * @return - the read result
+	 */
+	public static Result getPixelValue(File f, ImagePt pt, DirectFitsAccessData h) {
+		if (h == null || !f.canRead()) return Result.makeUnavailable();
 
-	if (args.length != 3)
-	{
-	    System.out.println(
-	    "usage:  java edu.caltech.ipac.visualize.plot.PixelValue <FITSfilename> <x> <y>");
-	    System.out.println("   where the first pixel in the file is x=0 y=0");
-	    System.exit(1);
-	}
-	int bitpix;
-	double bscale, bzero, blank_value;
-	int naxis;
-	int naxis1;
-	int naxis2;
-	int naxis3;
-	double cdelt2;
-	long HDU_offset;
-	long header_size;
-	Fits myFits = null;
-	BasicHDU[] myHDUs = null;
-
-	try 
-	{
-	    myFits = new Fits(args[0]);
-	    myHDUs = myFits.read();
-	} 
-	catch (FitsException e) 
-	{
-	    System.out.println("Caught exception e: "+e);
-	    e.printStackTrace();
-	    System.exit(1);
-	}
-	if (myHDUs == null)
-	{
-	    System.out.println("no HDUs in file - apparently not a FITS file");
-	    System.exit(1);
+		try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
+			if (h.bitpix()==64 && ((h.bZero()==0 && h.bScale()==1))) {
+				return pixelValLongResult(raf,pt,h);
+			}
+			else {
+				return pixelValDoubleResult(raf,pt,h);
+			}
+		} catch (IOException e) {
+			return Result.makeUnavailable();
+		}
 	}
 
-       
-        for (int i=0; i<myHDUs.length; i++) 
-	{
-	    HDU_offset =  myHDUs[i].getFileOffset();
-	    System.out.println("getFileOffset = " + myHDUs[i].getFileOffset());
-            myHDUs[i].info(System.out);
-	    Header header = myHDUs[i].getHeader();
-	    header_size = header.getOriginalSize();
-	    System.out.println("header.getSize() = " + header.getSize());
-	    System.out.println("header.getOriginalSize() = " + header.getOriginalSize());
-	    //header.dumpHeader(System.out);
+	private static Result pixelValDoubleResult(RandomAccessFile raf, ImagePt pt, DirectFitsAccessData header) throws IOException {
+		double v= pixelValDouble(raf,pt,header);
+		int bitpix= header.bitpix();
 
-	    /* In the real code, the values are obtained from ImageHeader:
-	    *
-	    * ImageHeader image_header
-	    * data_offset = image_header.data_offset;
-	    * plane_number  = image_header.plane_number;
-	    * bitpix = image_header.bitpix;
-	    * naxis  = image_header.naxis;
-	    * naxis1 = image_header.naxis1;
-	    * naxis2 = image_header.naxis2;
-	    * naxis3 = image_header.naxis3;
-	    * bscale = image_header.bscale;
-	    * bzero  = image_header.bzero;
-	    * blank_value = image_header.blank_value;
-	    * cdelt2 = image_header.cdelt2;
-	    *
-	    *
-	    */
-
-	    long data_offset = HDU_offset + header_size;
-
-	    //data_offset = 23440;  // DEBUG ONLY
-
-	    System.out.println("data_offset = " + data_offset);
-	    //header.dumpHeader(System.out);
-	    bitpix = header.getIntValue("BITPIX",0);
-	    naxis  = header.getIntValue("NAXIS",0);
-	    naxis1 = header.getIntValue("NAXIS1",0);
-	    naxis2 = header.getIntValue("NAXIS2",0);
-	    naxis3 = header.getIntValue("NAXIS3",1);
-	    bscale = header.getDoubleValue("BSCALE",1);
-	    bzero = header.getDoubleValue("BZERO",0);
-	    cdelt2 = header.getDoubleValue("CDELT2",0);
-	    blank_value = header.getDoubleValue("BLANK", Double.NaN);
-	    System.out.println("naxis3 = " + naxis3);
-	    RandomAccessFile fits_file = null;
-
-	    //int xcenter = 49; 
-	    //int ycenter = 34;
-	    int xcenter = Integer.parseInt(args[1]); 
-	    int ycenter = Integer.parseInt(args[2]);
-	    int plane_number = 1;
-	    int x = xcenter;
-	    int y = ycenter;
-
-	    /*
-	    for (y = ycenter-1; y <= ycenter+1; y++)
-	    {
-	    for (x = xcenter-1; x <= xcenter+1; x++)
-	    {
-	    */
-
-
-	    try
-	    {
-		fits_file = new RandomAccessFile(args[0], "r");
-	    }
-	    catch (FileNotFoundException e) 
-	    {
-		System.out.println("Caught exception e: "+e);
-		e.printStackTrace();
-		System.exit(1);
-	    }
-
-	    double pixel_data = Double.NaN;
-	    System.out.println("Fetching value for x = " + x + "  y = " + y);
-	    try
-	    {
-        ClientFitsHeader miniHeader= new ClientFitsHeader(plane_number,bitpix,naxis1,naxis2,
-                                                 cdelt2,bscale,bzero,blank_value,data_offset);
-		pixel_data = PixelValue.pixelVal(fits_file, x, y, miniHeader);
-		fits_file.close();
-	    } 
-	    catch (IOException e) 
-	    {
-		System.out.println("Caught exception e: "+e);
-		e.printStackTrace();
-		System.exit(1);
-	    }
-	    catch (PixelValueException e) 
-	    {
-		System.out.println("Caught exception e: "+e);
-		System.exit(1);
-	    }
-	    System.out.println("x = " + x + "  y = " + y +  
-		"  plane_number = " + plane_number +
-		"   pixel_data = " + pixel_data);
-
-	    /*
-	    }
-	    }
-	    */
+		if (bitpix<64) {
+			String base16= switch (bitpix) {
+				case 8, 16, 32 -> getIntBase16String((int)v, bitpix);
+				case -32 -> getIntBase16String(Float.floatToIntBits((float)v),bitpix);
+				case -64 -> getLongBase16String(Double.doubleToLongBits(v));
+				default -> "";
+			};
+			String resultType= isInt(header) ? Result.TYPE_DECIMAL_INT : Result.TYPE_FLOAT;
+			String status= getValStatus(v,isInt(header));
+			return new Result(status,resultType,scaleValue(v,header)+"",base16);
+		}
+		else {
+			return !Double.isNaN(v) ?
+					getLongResult((long)v,Result.STATUS_VALUE) : getLongResult((long)v,Result.STATUS_UNDEFINED);
+		}
 	}
 
-    }
-
-    static public double pixelVal(RandomAccessFile fits_file, int x, int y,
-                                  ClientFitsHeader header)
-            throws IOException, PixelValueException
-    {
-
-
-    int plane_number   = header.getPlaneNumber();
-    int bitpix         = header.getBixpix();
-    int naxis1         = header.getNaxis1();
-    int naxis2         = header.getNaxis2();
-    double cdelt2      = header.getCDelt2();
-    double bscale      = header.getBScale();
-    double bzero       = header.getBZero();
-    double blank_value = header.getBlankValue();
-    long data_offset   = header.getDataOffset();
-
-
-	int plane_offset= plane_number>-1 ? plane_number: 0;
-
-	if (cdelt2 < 0)
-	{
-	    y = naxis2 -1 -y;
+	private static String getValStatus(double v, boolean isInt) {
+		if (isInt) return !Double.isNaN(v) ? Result.STATUS_VALUE : Result.STATUS_UNDEFINED;
+		else return !Double.isNaN(v) ? Result.STATUS_VALUE : Result.STATUS_NAN;
 	}
 
-	long pixel_offset = (naxis1 * naxis2 * plane_offset) + (y * naxis1 + x);
-	double retval;
-	int bytes_per_pixel;
-	long file_pointer;
-	double file_value= Double.NaN;
-
-	switch(bitpix)
-	{
-	    case 8:
-		bytes_per_pixel = 1;
-		file_pointer = data_offset + pixel_offset * bytes_per_pixel;
-		fits_file.seek(file_pointer);
-		file_value = fits_file.readUnsignedByte();
-		if (file_value == blank_value)
-		    throw new PixelValueException("No flux available");
-		retval = file_value * bscale + bzero;
-		break;
-	    case 16:
-		bytes_per_pixel = 2;
-		file_pointer = data_offset + pixel_offset * bytes_per_pixel;
-		fits_file.seek(file_pointer);
-		file_value = fits_file.readShort();
-		if (file_value == blank_value)
-		    throw new PixelValueException("No flux available");
-		retval = file_value * bscale + bzero;
-		break;
-	    case 32:
-		bytes_per_pixel = 4;
-		file_pointer = data_offset + pixel_offset * bytes_per_pixel;
-		fits_file.seek(file_pointer);
-		file_value = fits_file.readInt();
-		if (file_value == blank_value)
-		    throw new PixelValueException("No flux available");
-		retval = file_value * bscale + bzero;
-		break;
-	    case -32:
-		bytes_per_pixel = 4;
-		file_pointer = data_offset + pixel_offset * bytes_per_pixel;
-		fits_file.seek(file_pointer);
-        file_value = fits_file.readFloat();
-		retval = file_value * bscale + bzero;
-		/*if (Double.isNaN(retval))
-		    throw new PixelValueException("No flux available");*/
-		break;
-	    case -64:
-		bytes_per_pixel = 8;
-		file_pointer = data_offset + pixel_offset * bytes_per_pixel;
-		fits_file.seek(file_pointer);
-		file_value = fits_file.readDouble();
-		retval = file_value * bscale + bzero;
-		/*
-		System.out.println("file_value = " + file_value +
-		    "  file_pointer = " + file_pointer +
-		    "  bscale = " + bscale + "  bzero = " + bzero +
-		    "  retval = " + retval);
-		*/
-		/*if (Double.isNaN(retval))
-		    throw new PixelValueException("No flux available");*/
-		break;
-		case 64:
-		bytes_per_pixel = 8;
-		file_pointer = data_offset + pixel_offset * bytes_per_pixel;
-		fits_file.seek(file_pointer);
-		file_value = fits_file.readLong();
-		retval = file_value * bscale + bzero;
-		break;
-	    default:
-		retval = Double.NaN;
-		break;
+	private static Result pixelValLongResult(RandomAccessFile raf, ImagePt pt, DirectFitsAccessData header) throws IOException {
+		long v= pixelValLong(raf, pt, header);
+		String vUnsignedStr= Long.toUnsignedString(v);
+		try {
+			String bV= Long.toUnsignedString(Long.parseUnsignedLong(header.blankValue()));
+			String status= !vUnsignedStr.equals(bV) ? Result.STATUS_VALUE : Result.STATUS_UNDEFINED;
+			return getLongResult(v,status);
+		} catch (NumberFormatException ignore) {
+			return getLongResult(v,Result.STATUS_VALUE);
+		}
 	}
 
+	private static String getIntBase16String(int v, int bitpix) {
+		return switch (bitpix) {
+			case 8 -> String.format("0x%02x",(byte)v);
+			case 16 ->String.format("0x%04x",(short)v);
+			default ->String.format("0x%08x",v);
+		};
+	}
 
-       // if we are a palomar fits file then to special things to it.
-    if (header.getStringHeader(ImageHeader.ORIGIN).startsWith(ImageHeader.PALOMAR_ID)  ) {
+	private static String getLongBase16String(long v) { return String.format("0x%016x",v); }
 
-        if (header.containsKey(ImageHeader.AIRMASS) &&
-            header.containsKey(ImageHeader.EXTINCT) &&
-            header.containsKey(ImageHeader.IMAGEZPT) &&
-            header.containsKey(ImageHeader.EXPTIME) ) {
+	private static Result getLongResult(long v, String status) {
+		return new Result(status, Result.TYPE_DECIMAL_INT, Long.toString(v,10), getLongBase16String(v));
+	}
 
-            double airmass= header.getDoubleHeader(ImageHeader.AIRMASS);
-            double extinct= header.getDoubleHeader(ImageHeader.EXTINCT);
-            double imagezpt= header.getDoubleHeader(ImageHeader.IMAGEZPT);
-            double exptime= header.getDoubleHeader(ImageHeader.EXPTIME);
-            retval = !Double.isNaN(file_value)?  -2.5 * .43429 * Math.log(file_value / exptime) +
-                    imagezpt + extinct * airmass:Double.NaN;
+	private static long pixelValLong(RandomAccessFile fits_file, ImagePt pt, DirectFitsAccessData header) throws IOException {
+		return readValueLong(fits_file, getFitsFilePointer(header,pt));
+	}
 
-        }
+	private static long getFitsFilePointer(DirectFitsAccessData h, ImagePt pt) {
+		int x= (int)pt.getX();
+		int y= (int)pt.getY();
+		double cdelt2    = h.cDelt2();
+		long naxis1      = h.naxis1();
+		long naxis2      = h.naxis2();
+		long data_offset = h.dataOffset();
+		int plane_number = h.planeNumber();
+		int bytesPerPixel= getBytePerPixel(h.bitpix());
 
+		long yLong = cdelt2 < 0 ? naxis2 - 1 - y : y;
+		int plane_offset = plane_number > -1 ? plane_number : 0;
+		long pixel_offset  = (naxis1 * naxis2 * plane_offset) + (yLong * naxis1 + x);
+		return data_offset + pixel_offset * bytesPerPixel;
+	}
 
-    }
+	private static double pixelValDouble(RandomAccessFile fits_file, ImagePt pt, DirectFitsAccessData header)
+			throws IOException{
+		double blankValueDouble= Double.NaN;
+		try {
+			blankValueDouble = Double.parseDouble(header.blankValue());
+		}
+		catch (NumberFormatException ignore) { }
 
+		return readValue(fits_file,getFitsFilePointer(header,pt), header, blankValueDouble);
+	}
 
+	private static double scaleValue(double v, DirectFitsAccessData h) {
+		return !isPalomar(h) ? v * h.bScale() + h.bZero() : convertToPolomar(v,h);
+	}
 
-	return (retval);
-    }
+	private static double convertToPolomar(double fileValue, DirectFitsAccessData header) {
+		// todo- this code should never have been here, but we are stuck with it for now
+		// If this is a Palomar Transient Factory single-epoch FITS image, then
+		// convert pixel values to magnitudes and apply photometric and airMass corrections.
+		// (200x-era request from PTF scientists)
+		// See other uses of PALOMAR_ID elsewhere in Firefly for other pieces of this.
+		double airMass= header.getDoubleHeader(ImageHeader.AIRMASS);
+		double extinct= header.getDoubleHeader(ImageHeader.EXTINCT);
+		double imageZpt= header.getDoubleHeader(ImageHeader.IMAGEZPT);
+		double expTime= header.getDoubleHeader(ImageHeader.EXPTIME);
+		return !Double.isNaN(fileValue)?  -2.5 * .43429 * Math.log(fileValue/ expTime) +
+				imageZpt + extinct * airMass:Double.NaN;
+	}
+
+	private static boolean isPalomar(DirectFitsAccessData h) {
+		// Identify Palomar Transient Factory single-epoch images based on FITS headers
+		return h.getStringHeader(ImageHeader.ORIGIN,"").startsWith(ImageHeader.PALOMAR_ID)  &&
+               h.containsKey(ImageHeader.AIRMASS) && h.containsKey(ImageHeader.EXTINCT) &&
+               h.containsKey(ImageHeader.IMAGEZPT) && h.containsKey(ImageHeader.EXPTIME);
+	}
+
+	private static int getBytePerPixel(int bitpix) {
+		return switch (bitpix) {
+			case 8 -> 1;
+			case 16 -> 2;
+			case 32, -32 -> 4;
+			case 64, -64 -> 8;
+			default -> 0;
+		};
+	}
+
+	private static boolean isInt(DirectFitsAccessData h) { return h.bitpix()>0;}
+
+	private static double readValue(RandomAccessFile fits_file, long file_pointer, DirectFitsAccessData h, double blankValueDouble)
+			throws IOException{
+		fits_file.seek(file_pointer);
+		double value= switch (h.bitpix()) {
+			case 8 ->   fits_file.readUnsignedByte();
+			case 16 ->  fits_file.readShort();
+			case 32 ->  fits_file.readInt();
+			case -32 -> fits_file.readFloat();
+			case -64 -> fits_file.readDouble();
+			case  64 -> fits_file.readLong();
+			default ->  blankValueDouble;
+		};
+		return (isInt(h) && value == blankValueDouble) ? Double.NaN : value;
+	}
+
+	private static long readValueLong(RandomAccessFile fits_file, long file_pointer) throws IOException{
+		fits_file.seek(file_pointer);
+		return fits_file.readLong();
+	}
+
+	public record Result(String status, String type, String valueBase10, String valueBase16) {
+		public static final String STATUS_UNAVAILABLE= "UNAVAILABLE";
+		public static final String STATUS_NAN= "NaN";
+		public static final String STATUS_UNDEFINED= "UNDEFINED";
+		public static final String STATUS_VALUE= "VALUE";
+		public static final String TYPE_EMPTY= "EMPTY";
+		public static final String TYPE_DECIMAL_INT = "DECIMAL_INT";
+		public static final String TYPE_FLOAT= "FLOAT";
+		private static final Result unavailable= new Result(STATUS_UNAVAILABLE,TYPE_EMPTY,"","");
+		public static Result makeUnavailable() {return unavailable;}
+	};
 }

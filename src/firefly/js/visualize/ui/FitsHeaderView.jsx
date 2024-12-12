@@ -2,10 +2,11 @@
  L. Zhang Initial version 3/16/16
  DM-4494:FITS Visualizer porting: Show FITS Header
  */
+import {Stack, Typography} from '@mui/joy';
 import React from 'react';
 import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
-import {PopupPanel} from '../../ui/PopupPanel.jsx';
-import {primePlot, getPlotViewById} from '../PlotViewUtil.js';
+import {LayoutType, PopupPanel} from '../../ui/PopupPanel.jsx';
+import {primePlot, getPlotViewById, isImageCube, getCubePlaneCnt} from '../PlotViewUtil.js';
 import {Tabs, Tab} from '../../ui/panel/TabPanel.jsx';
 import {TablePanel} from '../../tables/ui/TablePanel.jsx';
 import {dispatchShowDialog, dispatchHideDialog, isDialogVisible} from '../../core/ComponentCntlr.js';
@@ -15,121 +16,90 @@ import {getSizeAsString} from '../../util/WebUtil.js';
 import HelpIcon from '../../ui/HelpIcon.jsx';
 import {getPixScaleArcSec} from '../WebPlot.js';
 import {Band} from '../Band.js';
-import {get} from 'lodash';
 import {dispatchAddActionWatcher} from '../../core/MasterSaga.js';
-import {sprintf} from '../../externalSource/sprintf.js';
 import ImagePlotCntlr, {visRoot} from '../ImagePlotCntlr.js';
 import {getTblById} from '../../tables/TableUtil.js';
 import {TABLE_SORT, TABLE_REPLACE, dispatchTableSort} from '../../tables/TablesCntlr.js';
 import {getHDU, isThreeColor} from '../PlotViewUtil';
-import {getHeader, getHeaderDesc} from '../FitsHeaderUtil.js';
+import { getAllValuesOfHeader, } from '../FitsHeaderUtil.js';
 
-const popupIdRoot = 'directFileAccessData';
-const popupPanelResizableStyle = {
-    width: 550,
-    minWidth: 448,
-    height: 400,
-    minHeight: 300,
-    resize: 'both',
-    overflow: 'hidden',
-    position: 'relative'
-};
+const popupPanelResizableSx = {
+    width: 550, minWidth: 448, height: 400, minHeight: 300, resize: 'both', overflow: 'hidden', position: 'relative'};
 
-//const rgba='rgba(238, 238, 238, 0.25)';
-const bgColor= '#e3e3e3';
-
-//define the first label column in the textStyle div
-const labelColumn1 = { paddingTop:5, width:80, textAlign: 'right', color: 'Black', fontWeight: 'bold', display: 'inline-block'};
-//define the second label column in the textStyle div
-const labelColumn2 = { paddingTop:5, width:70, textAlign: 'right',display: 'inline-block', color: 'Black', fontWeight: 'bold'};
-//define the text data style
-const textStyle={ paddingTop:5,paddingLeft:3, width:140, color: 'Black', fontWeight: 'normal', display: 'inline-block'};
 
 //define the display style for the file size and pixel information and the table in the same div
-const tableAndTitleInfoStyle = {width: '100%', height: 'calc(100% - 40px)', display: 'flex', resize:'none'};
 
 //define the table style only in the table div
-const tableStyle = {boxSizing: 'border-box', paddingLeft:5,paddingRight:5, width: '100%', height: 'calc(100% - 70px)', overflow: 'hidden', flexGrow: 1, resize:'none'};
+const tableStyle = {boxSizing: 'border-box', paddingLeft:5,paddingRight:5, width: '100%', overflow: 'hidden', flexGrow: 1, resize:'none'};
 
 const tableOnTabStyle = {boxSizing: 'border-box',paddingLeft:5,paddingRight:5, width: '100%', height: 'calc(100% - 30px)', overflow: 'hidden', flexGrow: 1, display: 'flex', resize:'none'};//
-//define the size of the text on the tableInfo style in the title div
-
-//define the complete button
-export const closeButtonStyle = {'textAlign': 'center', display: 'inline-block', height:40, marginTop:10, width: '90%'};
-//define the helpButton
-export const helpIdStyle = {'textAlign': 'center', display: 'inline-block', height:40, marginRight: 20};
+//define the size of the text on the} tableInfo style in the title div
 
 
 //3-color styles
-const tabStyle =  {width: '100%',height:'100%', display: 'inline-block', background:bgColor};
+const tabStyle =  {width: '100%',height:'100%'};
 
 const FITSHEADERCONTENT = 'fitsHeader';
 let currentSortInfo = '';
 
+export const FITS_HEADER_POPUP_ID = 'FITS_HEADER_POPUP_ID';
 
 function popupForm(plot, fitsHeaderInfo, popupId) {
-
-
-    if (fitsHeaderInfo && plot.plotState.getBands().length===1 ) {
-        return renderSingleBandFitsHeader(plot, fitsHeaderInfo, popupId);
-    }
-    else {
-        return renderColorBandsFitsHeaders(plot, fitsHeaderInfo, popupId);
-    }
+    return (fitsHeaderInfo && plot.plotState.getBands().length===1) ?
+        renderSingleBandFitsHeader(plot, fitsHeaderInfo, popupId) :
+        renderColorBandsFitsHeaders(plot, fitsHeaderInfo, popupId);
 }
 
-const FITSHEADER_DIALOGID = popupIdRoot+'_fitsHeader';
 
-function showFitsHeaderPopup(plot, fitsHeaderInfo, element) {
-    const popupId = FITSHEADER_DIALOGID;
+
+function showFitsHeaderPopup(plot, fitsHeaderInfo, element, initLeft, initTop, onMove) {
 
     const getTitle =  (p) => {
          const pv = getPlotViewById(visRoot(), p.plotId);
          let   title;
-
          if (pv.plots.length === 1) {
              title = p.title;
          } else {
              const EXT = ': - ext.';
              const idx = p.title ? p.title.indexOf(EXT) : -1;
-
              title = (idx >= 0 ?  p.title.slice(0, idx) : p.title) + ' - ' + (pv.primeIdx+1);
          }
          return 'FITS Header : ' + title;
     };
 
-    const getPopup = (aPlot, fitsHeaderTbl) => {
-        return (<PopupPanel title={getTitle(aPlot)}>
-                {popupForm(aPlot, fitsHeaderTbl, popupId)}
+    const getPopup = (aPlot, fitsHeaderTbl, initLeft, initTop) => {
+        return (<PopupPanel title={getTitle(aPlot)}
+                            onMove={onMove}
+                            initLeft={initLeft} initTop={initTop}
+                            layoutPosition={isNaN(initLeft)||isNaN(initTop)?LayoutType.TOP_CENTER:LayoutType.USER_POSITION} >
+                {popupForm(aPlot, fitsHeaderTbl, FITS_HEADER_POPUP_ID)}
             </PopupPanel>
         );
     };
 
     const updatePopup = (p, tableInfo) => {
-        return () => {
-            DialogRootContainer.defineDialog(popupId, getPopup(p, tableInfo), element);
-            dispatchShowDialog(popupId, p.plotId);
-        };
+        DialogRootContainer.defineDialog(FITS_HEADER_POPUP_ID, getPopup(p, tableInfo, initLeft, initTop), element);
+        dispatchShowDialog(FITS_HEADER_POPUP_ID, p.plotId);
     };
 
 
     // update table sort when active image is changed
     const watchActivePlotChange = (action, cancelSelf, params) => {
         let {displayedPlotId, displayedHdu} = params;
-        if (!isDialogVisible(popupId)) {
+        if (!isDialogVisible(FITS_HEADER_POPUP_ID)) {
             cancelSelf();
         } else {
             const crtPlot = primePlot(visRoot());
             const newTableInfo = createFitsHeaderTable(null, crtPlot);
+            if (!newTableInfo) return {displayedPlotId, displayedHdu};
 
             Object.keys(newTableInfo).reduce((prev, oneBand) => {
-                prev = prev | updateTableSort(newTableInfo[oneBand]);
-
+                prev = prev || updateTableSort(newTableInfo[oneBand]);
                 return prev;
             }, false);
 
             if (action.type===ImagePlotCntlr.PLOT_IMAGE || isThreeColor(plot) || displayedPlotId!==crtPlot.plotId || displayedHdu!==getHDU(crtPlot) ) {
-                updatePopup(crtPlot, newTableInfo)();
+                updatePopup(crtPlot, newTableInfo);
             }
             displayedPlotId= crtPlot.plotId;
             displayedHdu= getHDU(crtPlot);
@@ -138,18 +108,16 @@ function showFitsHeaderPopup(plot, fitsHeaderInfo, element) {
         return {displayedPlotId, displayedHdu};
     };
 
-    const isFitsHeaderTable = (tbl) => {
-        return tbl&&(get(tbl, ['tableMeta', 'content'], '') === FITSHEADERCONTENT);
-    };
+    const isFitsHeaderTable = (tbl) => tbl?.tableMeta?.content === FITSHEADERCONTENT;
 
     // update table sort info when there 'sort' happens, update table sort on new table
     const watchActiveTableChange = (action, cancelSelf) => {
-        if (!isDialogVisible(popupId)) {
+        if (!isDialogVisible(FITS_HEADER_POPUP_ID)) {
             cancelSelf();
         } else {
             let tblModel;
             if (action.type === TABLE_SORT) {
-                const {sortInfo='', tbl_id} = get(action.payload, ['request']) || {};
+                const {sortInfo='', tbl_id} = action.payload?.request ?? {};
                 tblModel = getTblById(tbl_id);
 
                 if (isFitsHeaderTable(tblModel)) {
@@ -166,142 +134,101 @@ function showFitsHeaderPopup(plot, fitsHeaderInfo, element) {
     };
 
 
-    if (!isDialogVisible(popupId)) {
+    if (!isDialogVisible(FITS_HEADER_POPUP_ID)) {
         dispatchAddActionWatcher({actions: [ImagePlotCntlr.CHANGE_ACTIVE_PLOT_VIEW,
                                             ImagePlotCntlr.CHANGE_PRIME_PLOT,
                                             ImagePlotCntlr.PLOT_IMAGE,
                                             ImagePlotCntlr.DELETE_PLOT_VIEW],
-                                  callback:  watchActivePlotChange});
-        dispatchAddActionWatcher({actions: [TABLE_SORT, TABLE_REPLACE],
-                                  callback:  watchActiveTableChange});
-
-        updatePopup(plot, fitsHeaderInfo)();
+                                  callback:  watchActivePlotChange,
+                                  id: 'fits-header-view-watch-active-plot-change'
+        });
+        dispatchAddActionWatcher({
+            actions: [TABLE_SORT, TABLE_REPLACE],
+            callback:  watchActiveTableChange,
+            id: 'fits-header-view-watch-active-table-change'
+        });
+        updatePopup(plot, fitsHeaderInfo);
     }
 }
 
 // update table sort when table tab is changed
 const onBandSelected = (fitsHeaderInfo) => {
-    return (index, id, name) => {
+    return (name) => {
         const tableModel = fitsHeaderInfo[name];
-
-        if (tableModel) {   // already in store, then sort it if needed
-            updateTableSort(tableModel);
-        }
+        if (tableModel) updateTableSort(tableModel);   // already in store, then sort it if needed
     };
 };
 
 function renderSingleBandFitsHeader(plot, fitsHeaderInfo, popupId){
     const band = plot.plotState.getBands()[0];
     return (
-        <div style={ popupPanelResizableStyle}>
+        <Stack sx={ popupPanelResizableSx}>
             { renderFileSizeAndPixelSize(plot, band, fitsHeaderInfo)}
             { renderTable( band,fitsHeaderInfo, false)}
             { renderCloseAndHelpButtons(popupId)}
-        </div>
+        </Stack>
     );
-
 }
 
 
 function renderColorBandsFitsHeaders(plot, fitsHeaderInfo, popupId) {
 
     const bands = plot.plotState.getBands();
-
-    let colorBandTabs;
-    switch (bands.length){
-        case 2:
-        colorBandTabs = (
-                <Tabs defaultSelected={0} useFlex={true} style={{flexGrow:1}} onTabSelect={onBandSelected(fitsHeaderInfo)}>
-                    {renderSingleTab(plot, bands[0],fitsHeaderInfo )}
-                    {renderSingleTab(plot, bands[1],fitsHeaderInfo )}
-            </Tabs>
-         );
-            break;
-        case 3:
-            colorBandTabs = (
-                <Tabs defaultSelected={0} useFlex={true} style={{flexGrow:1}} onTabSelect={onBandSelected(fitsHeaderInfo)}>
-                    {renderSingleTab(plot, bands[0],fitsHeaderInfo )}
-                    {renderSingleTab(plot, bands[1],fitsHeaderInfo )}
-                    {renderSingleTab(plot, bands[2],fitsHeaderInfo )}
-                </Tabs>
-            );
-            break;
-    }
-
     return (
-        <div style={ popupPanelResizableStyle} >
-          <div style = {tableAndTitleInfoStyle}>
-              {colorBandTabs}
-        </div>
+        <Stack sx={ popupPanelResizableSx} >
+          <Stack {...{width:1, height:1, direction: 'row', resize:'none'}}>
+              <Tabs {...{sx:{width:1}, onTabSelect:onBandSelected(fitsHeaderInfo) }}>
+                  {renderSingleTab(plot, bands[0],fitsHeaderInfo )}
+                  {renderSingleTab(plot, bands[1],fitsHeaderInfo )}
+                  {bands.length===3 && renderSingleTab(plot, bands[2],fitsHeaderInfo )}
+              </Tabs>
+          </Stack>
             { renderCloseAndHelpButtons(popupId)}
-        </div>
-
-
+        </Stack>
     );
-
 }
 
 function renderSingleTab(plot, band, fitsHeaderInfo) {
-
     return (
-    <Tab name = {band.key}  >
-        <div style={{position:'relative', flexGrow:1}}>
-            <div style={{position:'absolute', top:0, bottom:0, left:0, right:0}}>
-                <div style={tabStyle}>
-                    { renderFileSizeAndPixelSize(plot, band, fitsHeaderInfo)}
-                    { renderTable( band,fitsHeaderInfo,true)}
+        <Tab name = {band.key}  >
+            <div style={{position:'relative', flexGrow:1}}>
+                <div style={{position:'absolute', top:0, bottom:0, left:0, right:0}}>
+                    <div style={tabStyle}>
+                        { renderFileSizeAndPixelSize(plot, band, fitsHeaderInfo)}
+                        { renderTable( band,fitsHeaderInfo,true)}
+                    </div>
                 </div>
             </div>
-        </div>
-    </Tab>
-  );
+        </Tab>
+    );
 }
-function renderCloseAndHelpButtons(popupId){
-    return(
-    <div>
-        <div style={closeButtonStyle}>
-            < CompleteButton
-                text='close'
-                onClick={()=>dispatchHideDialog( popupId)}
-                dialogId={popupId}
-            />
-        </div>
-        <div style={helpIdStyle}>
-            <HelpIcon helpId={'tables'}/>
-        </div>
-    </div>
-);
-}
+
+const renderCloseAndHelpButtons = (popupId) => (
+    <Stack {...{direction:'row', justifyContent:'space-between', my:1/2, mr:1, ml:1/2, alignItems:'center'}}>
+        <CompleteButton text='Close' onClick={()=>dispatchHideDialog( popupId)} dialogId={popupId} />
+        <HelpIcon helpId={'tables'}/>
+    </Stack> );
+
 
 function renderFileSizeAndPixelSize(plot, band, fitsHeaderInfo, isOnTab) {
 
     const tableModel = fitsHeaderInfo[band];
-    const pt = getPixScaleArcSec(plot);
-    const pixelSize = pt.toFixed(2) + '"';
+    const pixelSize = getPixScaleArcSec(plot).toFixed(2) + '"';
 
-    const  mSize = get(tableModel, ['tableMeta', 'fileSize'], 0);
-    const  fileSize = (mSize && mSize > 0)  ? getSizeAsString(mSize) : '';
-    let    fileSizeStr;
+    const  fileSizeStr = getSizeAsString(tableModel?.tableMeta?.fileSize) ?? '';
 
-    if (fileSize) {
-        const flen = fileSize.substring(0, fileSize.length - 1);
-
-        fileSizeStr = `${sprintf('%.2f',flen)}${fileSize.substring(fileSize.length - 1, fileSize.length)}`;
-    } else {
-        fileSizeStr = '';
-    }
-
-    const titleStyleNoTab = {width: '100%', height: 30,display: 'inline-block', background:bgColor};
-    const titleStyleOnTab = {width: '100%', height: 30,display: 'inline-block'};
-    var titleStyle = isOnTab? titleStyleOnTab:titleStyleNoTab;
+    let dimStr= `${plot.dataWidth} x ${plot.dataHeight}`;
+    if (isImageCube(plot)) dimStr+= ` x ${getCubePlaneCnt(plot)}`;
 
    return (
-        <div style={titleStyle}>
-            <div style={ labelColumn1 }>Pixel Size:</div>
-            < div style= {textStyle} >{pixelSize}</div>
-            <div style={ labelColumn2}> File Size:</div>
-            <div style= {textStyle} >{fileSizeStr}</div>
-        </div>
+        <Stack direction='row' spacing={1} pt={1}>
+            <Typography {...{level:'body-sm', pl:1, textAlign: 'right'}}>Pixel Size:</Typography>
+            <Typography {...{level:'body-sm', color:'warning'}}>{pixelSize}</Typography>
+            <Typography {...{level:'body-sm', pl:2, textAlign: 'right'}}>File Size:</Typography>
+            <Typography {...{level:'body-sm', color: 'warning'}}>{fileSizeStr}</Typography>
+            <Typography {...{level:'body-sm', pl:2, textAlign: 'right'}}>Dimensions:</Typography>
+            <Typography {...{level:'body-sm', color:'warning'}}>{dimStr}</Typography>
+        </Stack>
     );
 }
 
@@ -314,50 +241,36 @@ function renderFileSizeAndPixelSize(plot, band, fitsHeaderInfo, isOnTab) {
  * @returns {XML}
  */
 function renderTable(band, fitsHeaderInfo, isPlacedOnTab) {
-
     const tableModel = fitsHeaderInfo[band];
-    var myTableStyle= isPlacedOnTab?tableOnTabStyle:tableStyle;
+    const myTableStyle= isPlacedOnTab?tableOnTabStyle:tableStyle;
     const tbl_ui_id = tableModel.tbl_id + '-ui';
     return (
         <div style={ myTableStyle}>
            <TablePanel
-               key={tableModel.tbl_id}
-               tbl_ui_id = {tbl_ui_id}
-               tableModel={tableModel}
-               height='calc(100% - 42px)'
-               showToolbar={false}
-               selectable={false}
-               showOptionButton={true}
-               allowUnits={false}
-               showFilters={true}
-               showTypes={false}
-           />
-
+               key={tableModel.tbl_id} tbl_ui_id = {tbl_ui_id} tableModel={tableModel} height='calc(100% - 42px)'
+               showToolbar={false} selectable={false} showOptionButton={true}
+               allowUnits={false} showFilters={true} showTypes={false} />
         </div>
     );
-
 }
 
 /**
  * This function will return the popup component.  As React conversion, the CamelCase is used.
  * @param plotView
  * @param element
+ * @param initLeft
+ * @param initTop
+ * @param onMove
  */
-export function fitsHeaderView(plotView,element) {
-
-    var plot = primePlot(plotView);
+export function fitsHeaderView(plotView,element, initLeft, initTop, onMove) {
+    const plot = primePlot(plotView);
     if (!plot)  return;
-
     const resultTable = createFitsHeaderTable(null, plot);
-    if (resultTable) {
-        showFitsHeaderPopup(plot, resultTable, element);
-    } else {
-        logger.error(`fitsHeader error: ${plot.plotId}`);
-    }
-
+    if (!resultTable) logger.error(`fitsHeader error: ${plot.plotId}`);
+    showFitsHeaderPopup(plot, resultTable, element, initLeft, initTop, onMove);
 }
 
-var tblCnt= 0;
+let tblCnt= 0;
 
 /**
  * produce table Id based on band info
@@ -370,12 +283,7 @@ function createTableIdForFitsHeader(plot) {
 
     switch (bands.length){
         case 1:
-            if (bands[0]===Band.NO_BAND){
-                colors='_noBand';
-            }
-            else {
-                colors=bands[0].key;
-            }
+            colors= bands[0]===Band.NO_BAND ? '_noBand' : bands[0].key;
             break;
         case 2:
             colors=bands[0].key + '_' + bands[1].key;
@@ -383,7 +291,6 @@ function createTableIdForFitsHeader(plot) {
         case 3:
             colors=bands[0].key  + '_' + bands[1].key +'_'+bands[2].key ;
             break;
-
     }
 
     const str = plot.plotImageId.replace(/\s/g, '');                   //remove the white places
@@ -392,17 +299,18 @@ function createTableIdForFitsHeader(plot) {
     return  tbl_id;
 }
 
-
 function createRowData(header,hduStr) {
     return Object.keys(header)
-        .sort((a, b) => header[a].idx - header[b].idx)
-        .reduce((prev, aKey, idx) => {
-            if (aKey === 'COMMENT') return prev;
-            const row= [`${idx}`, aKey, getHeader(header,aKey,''), getHeaderDesc(header,aKey)];
-            if (hduStr) row.push(hduStr);
-            prev.push(row);
+        .reduce((prev, aKey) => {
+            const hList= getAllValuesOfHeader(header, aKey);
+            hList.forEach((h) => {
+                const row= [h.idx??0, aKey, h.value??'', h.comment??''];
+                if (hduStr) row.push(hduStr);
+                prev.push(row);
+            });
             return prev;
-        }, []);
+        }, [])
+        .sort((r1, r2) => r1[0] - r2[0]);
 }
 
 /**
@@ -439,13 +347,12 @@ function createFitsHeaderTable(tableId, plot) {
             const tbl_id = oneBand === Band.NO_BAND ? tableId: `${tableId}-${oneBand.key}`;
             const tbl = getTblById(tbl_id);
             if (!tbl) {
-                const data = getHeaderData(get(headerAry, [oneBand]));
+                const data = getHeaderData(headerAry?.[oneBand.value]);
 
                 prev[oneBand.key] = {
                     tbl_id, tableData: {columns, data},
                     totalRows: data.length, highlightedRow: 0,
-                    tableMeta: {fileSize: get(plot, ['webFitsData', oneBand, 'getFitsFileSize']),
-                                content: FITSHEADERCONTENT}
+                    tableMeta: {fileSize: plot?.webFitsData?.[oneBand.value]?.getFitsFileSize, content: FITSHEADERCONTENT}
                 };
             } else {
                 prev[oneBand.key] = tbl;
@@ -456,15 +363,10 @@ function createFitsHeaderTable(tableId, plot) {
 
 // resort table based on current sort info.
 const updateTableSort = (tbl) => {
-    if (!getTblById(tbl.tbl_id)) {
-        return false;        // check if table is in store yet.
-    }
-    const sortInfo_add = get(tbl, ['request', 'sortInfo'], '');
-
+    if (!getTblById(tbl.tbl_id)) return false;        // check if table is in store yet.
+    const sortInfo_add = tbl?.request?.sortInfo ?? '';
     if (sortInfo_add !== currentSortInfo) {
-        const {request={}} = tbl;
-        const req = Object.assign({}, request, {sortInfo: currentSortInfo});
-
+        const req = {...tbl.request, sortInfo: currentSortInfo};
         dispatchTableSort(req, tbl.highlightedRow);
         return true;
     } else {

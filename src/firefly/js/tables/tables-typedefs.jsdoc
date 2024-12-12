@@ -19,7 +19,6 @@
  * @typedef {object} TableModel
  * @prop {string}   tbl_id    unique ID of this table.
  * @prop {string}   title     title, used on label.
- * @prop {Object} resources votable resources
  * @prop {TableRequest} request  the request used to create this table
  * @prop {TableKeywords} keywords  a list of all meta from the original source, including comments and duplicates
  * @prop {TableMeta} tableMeta     additional meta added and keywords as key/value pair.  comments and duplicates are no longer here.
@@ -28,6 +27,7 @@
  * @prop {number}   highlightedRow  the current highlighted row index.  index is natural order starting from 0.
  * @prop {object}   selectInfo  selection information.  use SelectInfo.newInstance take advantage of helper's functions.
  * @prop {boolean}  isFetching  true if data is being fetched and not ready for display.
+ * @prop {Status}   status      status of the table.  loosely modeled after HTTP status
  * @prop {string}   error       error message if the request fail to create a table.
  * @prop {Group[]} groups    groups if any.
  * @prop {Link[]}  links     links if any.
@@ -37,6 +37,14 @@
  * @global
  * @public
  */
+
+/**
+ * Table data.  Table data object.
+ * @typedef {object} Status
+ * @prop {number} code     status code
+ * @prop {message} message  a message to display with this code
+ */
+
 
 /**
  * Table data.  Table data object.
@@ -79,6 +87,7 @@
  * @prop {string} minValue  minimum value.
  * @prop {LINK[]} links     links if any.
  * @prop {string} cellRenderer  use custom predefined cell renderer.  See TableRenderer.js for usage.
+ * @prop {string} DERIVED_FROM  column derived from the given expression
  *
  * @global
  * @public
@@ -87,7 +96,10 @@
 /**
  * PARAM may have everything TableColumn has plus 'value'
  * @typedef {object} PARAM
- * @prop {string} value  value of this PARAM
+ * @prop {string} value - value of this PARAM
+ * @prop {string} name - name of this PARAM
+ * @prop {string} [type] - data type of the param
+ * @prop {string} [arraySize]
  *
  * @global
  * @public
@@ -136,15 +148,17 @@
  */
 
 /**
- * Table resources
+ * The first resource (index 0) belongs to this table. The remaining resources are from the same table set,
+ * where no table data exists, only metadata.
  * @typedef {object} RESOURCE
- * @prop {string} ID     ID used to reference this LINK.
+ * @prop {string} ID     ID used to reference this RESOURCE.
  * @prop {string} name
  * @prop {string} type
  * @prop {string} utype
  * @prop {string} desc
  * @prop {PARAM[]} params   params if any
  * @prop {GROUP[]} groups   groups if any
+ * @prop {object} infos   dictionary of key/value pairs
  * @global
  * @public
  */
@@ -152,7 +166,7 @@
 /**
  * Table group info
  * @typedef {object} GROUP
- * @prop {string} ID     ID used to reference this LINK.
+ * @prop {string} ID     ID used to reference this GROUP.
  * @prop {string} name
  * @prop {string} ucd
  * @prop {string} utype
@@ -181,7 +195,7 @@
  * @prop {string} Loading-Status COMPLETED or INPROGRESS
  * @prop {string} resultSetID ID for this table.  If sorted or filtered, a new one will be generated.
  * @prop {string} source    path of the original table source before any operations were performed. ie sort, filter, etc.  this may not be fully supported.
- * @prop {string} relatedCols  highlight related rows based on this column's value.
+ * @prop {string} tbl.relatedCols  rows where tbl.relatedCols are equal will be highlighted in a preset color
  *
  * @global
  * @public
@@ -265,16 +279,19 @@
  * @prop {boolean} [removable=true]  true if this table can be removed from view.
  * @prop {boolean} [border=true]
  * @prop {boolean} [showToolbar=true]   when false, showFilters, showTitle, showPaging, showSave, and showFilterButton will be false as well.
- * @prop {boolean} [showFilters=false]
+ * @prop {boolean} [showFilters]        defaults to true for all tables except client tables
  * @prop {boolean} [showTitle=true]
  * @prop {boolean} [showToggleTextView=true]
  * @prop {boolean} [showPaging=true]    enable/disable paging feature.  When false, all data will be displayed.
  * @prop {boolean} [showSave=true]
  * @prop {boolean} [showFilterButton=true]
- * @prop {boolean} [showInfoButton=false] when true, shows additional information about table, if available
+ * @prop {boolean} [showAddColumn=true]  when true, allow add column to table
+ * @prop {boolean} [showInfoButton=true] when true, shows additional information about table, if available
  * @prop {boolean} [showOptionButton=true]
- * @prop {boolean} [showUnits=true]
+ * @prop {boolean} [showPropertySheetButton]  uses firefly.options.table.showPropertySheetButton if not given.
+ * @prop {boolean} [showUnits]
  * @prop {boolean} [allowUnits=true] enable/disable the use of units in a table.
  * @prop {function[]}  [leftButtons]   an array of functions that returns a button-like component laid out on the left side of this table header.
  * @prop {function[]}  [rightButtons]  an array of functions that returns a button-like component laid out on the right side of this table header.
+ * @prop {boolean} [showHeader=true]  true if this table can show header row
  */

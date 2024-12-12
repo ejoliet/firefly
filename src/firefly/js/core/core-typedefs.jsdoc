@@ -16,16 +16,20 @@
  * @prop {string} BuildTag      vcs tag string if it were tagged
  * @prop {string} BuildCommit   vcs commit used to build this app
  * @prop {string} BuildCommitFirefly    Firefly's vcs commit used to build this app.
+ * @prop {string} BuildFireflyTag firefly tag used for this build
+ * @prop {string} BuildFireflyBranch firefly branch used for this build
+ * @prop {string} DevCycle the tag that marks this development cycle
  */
 
 /**
  * Information related to searches
  * @typedef {Object} SearchInfo
- * @prop {string} [title]    main title if any.  It will appears on top.
- * @prop {string} [flow]     'horizontal' or 'vertical'.  defaults to 'vertical'.
- * @prop {string} activeSearch    currently selected search.
- * @prop {Object.<string,Search>} allSearchItems  flatten maps of searches keyed by name
- * @prop {SearchGroup[]}          groups   search group
+ * @prop {string} [title]           main title if any.  It will appears on top.
+ * @prop {string} [flow]            'horizontal', 'vertical', or 'hidden'.  defaults to 'vertical'.
+ * @prop {string} activeSearch      currently selected search.
+ * @prop {boolean} renderAsMenuItems convert SearchInfo into MenuItems.  Defaults to false.  When this is true, flow is default to 'hidden', unless defined.
+ * @prop {Object.<string,Search>}   allSearchItems  flatten maps of searches keyed by name
+ * @prop {SearchGroup[]}            groups   search group
  */
 
 /**
@@ -44,18 +48,32 @@
  * @prop {SearchForm} form  define form info
  * @prop {function} renderStandardView    a function to render the search results in standard mode.
  * @prop {function} [renderExpandedView]  a function to render the search results in expanded mode
- * @prop {function} download  a function that returns the download dialog.
+ * @prop {function} download    a function that returns the download dialog.
+ * @prop {bool} primary         used by MenItem; defaults to false
+ * @prop {string} path          used by routed-app for navigation
  */
 
 /**
  * Search information.
  * @typedef {object} SearchForm
- * @prop {function} render    a function that returns the search form.
- * @prop {string[]} actions
- * @prop {object} params  additional parameters to be sent with the search request.
+ * @prop {function} render     a function that returns the search form.
+ * @prop {string|func} action  a predefined function mapped by this string or a function to perform the form submission. Invoked with request passed in.
+ * @prop {object} params  additional parameters added to the request before action is invoked.
  * @prop {string|function} title description of the search results.  if a function, the request will be passed in. 
  * @prop {string} [helpId] help ID if available
- * @prop {function} [onSubmit]  a function that handle the form submit.
+ */
+
+/**
+ * MenuItem information.
+ * @typedef {object} MenuItem
+ * @prop {string} action    action to trigger for the given menu item
+ * @prop {string} label     text on the button
+ * @prop {string} title     tooltips
+ * @prop {string} category  category/group of the given menu item
+ * @prop {bool} primary     shown as tab on init; defaults to false
+ * @prop {bool} landing     whether the app starts with this tab; defaults to false
+ * @prop {string} path      used by routed-app for navigation
+ * @prop {bool} visible     shown on tab menu
  */
 
 /**
@@ -104,35 +122,29 @@
 /**
  * Top-level.  Information on background jobs. Object is keyed by ID.
  * @typedef {Object} BackgroundInfo
- * @prop {string} email  email to notify when background job is completed
- * @prop {string} showDlScript  show download script link
- * @prop {Object.<string, BgStatus>} jobs  a map of background job and its statuses.
+ * @prop {string} email                     email to notify when background job is completed
+ * @prop {boolean} enableEmail              true to send email notification when job is done
+ * @prop {string} showDlScript              show download script link
+ * @prop {Object.<string, JobInfo>} jobs    a map of background job and its jobInfo.
  */
 
 /**
- * Background status of one job.  Packages info for this job are stored as ITEMS_n,
- * where n is a sequential integer.
- * @typedef {Object.<string, PackageStatus>} BgStatus
- * @prop {string} TYPE  type of job.  ie. 'PACKAGE'
- * @prop {string} ID    unique identifier for this job.
- * @prop {string} email email to notify when job completes.
- * @prop {string} Title title to display for this job.
- * @prop {string} STATE job's state.
- * @prop {number} PACKAGE_CNT  number of package in this job.
- * @prop {number} TOTAL_BYTES  total bytes.
- * @prop {string} DATA_SOURCE .
+ * Background jobInfo of one job.
+ * @typedef {Object} JobInfo
+ * @prop {string} jobId         unique identifier for this job
+ * @prop {string} ownerId       ID of the job creator
+ * @prop {string} phase         execution phase.  One of PENDING, QUEUED, EXECUTING, COMPLETED, ERROR, ABORTED
+ * @prop {string} startTime     start time in UTC
+ * @prop {string} endTime       end time in UTC
+ * @prop {number} executionDuration duration (in seconds) the job is allowed to run. 0 means unlimited
+ * @prop {string} destruction   the time at which the whole job + records + results will be destroyed
+ * @prop {string} parameters    the parameters to the job
+ * @prop {string[]} results     the results for the job - can also be retrieved at /{jobs}/{job-id}/results
+ * @prop {string} type          type of job. One of SEARCH, PACKAGE
+ * @prop {boolean} monitored    true if UI is monitoring the job
+ * @prop {number} progress      progress of the job as a percentage.  0-100, where 100 is done
+ * @prop {string} progressDesc  a description of the current progress
+ * @prop {string} error         error message if there's an error
  */
 
-/**
- * Background status of one job.  Packages info for this job are stored as ITEMS_n,
- * where n is a sequential integer.
- * @typedef {Object} PackageStatus
- * @prop {number} processedBytes  type of job.  ie. 'PACKAGE'
- * @prop {number} finalCompressedBytes    unique identifier for this job.
- * @prop {number} processedFiles job's state.
- * @prop {number} totalBytes  number of package in this job.
- * @prop {number} totalFiles  total bytes.
- * @prop {string} url
- */
-
-/*=========================================================================*/ 
+/*=========================================================================*/

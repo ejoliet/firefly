@@ -14,6 +14,7 @@ import {logger} from '../../util/Logger.js';
 import BrowserInfo from '../../util/BrowserInfo.js';
 import Enum from 'enum';
 import {showPlotLySaveDialog} from 'firefly/charts/ui/PlotlySaveDialog.jsx';
+import {Skeleton} from '@mui/joy';
 
 const PLOTLY_BASE_ID= 'plotly-plot';
 const MASKING_DELAY= 400;
@@ -93,7 +94,7 @@ export async function downloadChart(chartId) {
     const chartDivAll = document.querySelectorAll(`#${chartId}`);
     if (chartId && chartDivAll && chartDivAll.length > 0) {
         const chartDiv = chartDivAll[chartDivAll.length-1];
-        showPlotLySaveDialog(Plotly,chartDiv,chartId);
+        showPlotLySaveDialog(Plotly,chartDiv);
     } else {
         logger.error(`Image download has failed for chart id ${chartId}`);
     }
@@ -296,6 +297,8 @@ export class PlotlyWrapper extends Component {
                         break;
                     case RenderType.NEW_PLOT:
                         Plotly.newPlot(this.div, data, layout, config);
+                        //after Plotly.newPlot, the div is updated with a new layout, update this for the chart as well
+                        this.syncLayout(chartId, this.div.layout);
                         if (this.div.on) {
                             const chart = this.div;
                             // make sure clicked or selected chart is active
@@ -307,7 +310,7 @@ export class PlotlyWrapper extends Component {
                             chart.on('plotly_relayout', () => this.showMask(false));
                             chart.on('plotly_restyle', () => this.showMask(false));
                             chart.on('plotly_redraw', () => this.showMask(false));
-                            chart.on('plotly_relayout', (changes) => this.syncLayout(chartId, changes));
+                            chart.on('plotly_relayout', (changes) => {this.syncLayout(chartId, changes);});
                         }
                         else {
                             this.showMask(false);
@@ -333,7 +336,7 @@ export class PlotlyWrapper extends Component {
      */
     syncLayout(chartId, changes) {
         const {layout} = getChartData(chartId);
-        if (layout) {
+        if (layout && !this.props.thumbnail) {
             Object.entries(changes).forEach( ([k, v]) => {
                 if (k === 'xaxis' && Array.isArray(v)) {
                     set(layout, 'xaxis.range', v);
@@ -397,7 +400,7 @@ export class PlotlyWrapper extends Component {
         return (
             <div style={nstyle} >
                 <div id={chartId || this.id} style={{height: '100%', width: '100%'}} ref={this.refUpdate}/>
-                {showMask && <div style={maskWrapper}> <div className='loading-mask'/> </div>}
+                {showMask && <div style={maskWrapper}> <Skeleton/> </div>}
             </div>
         );
     }
@@ -421,7 +424,8 @@ PlotlyWrapper.propTypes = {
 
     autoSizePlot : PropTypes.bool,
     autoDetectResizing : PropTypes.bool,
-    doingResize: PropTypes.bool
+    doingResize: PropTypes.bool,
+    thumbnail: PropTypes.bool
 };
 
 PlotlyWrapper.defaultProps = {

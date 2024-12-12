@@ -10,6 +10,9 @@ import {isArray} from 'lodash';
 import {ServerParams} from '../data/ServerParams.js';
 import {doJsonRequest} from '../core/JsonUtils.js';
 import {SelectedShape} from '../drawingLayers/SelectedShape';
+import {getCmdSrvSyncURL} from 'firefly/util/WebUtil.js';
+import {fetchUrl} from 'firefly/api/ApiUtil.js';
+import {getBixPix, getNumberHeader, HdrConst} from 'firefly/visualize/FitsHeaderUtil.js';
 
 
 /**
@@ -63,36 +66,6 @@ export const callGetAreaStatistics= (state, ipt1, ipt2, ipt3, ipt4, areaShape = 
                 [ServerParams.ROTATION]: rotation }, true);
 
 
-/**
- *
- * @param {Array} stateAry
- * @param {number} level
- * @param {boolean} isFullScreen hint, will only make on file
- */
-export function callSetZoomLevel(stateAry, level, isFullScreen) {
-    const params= makeParamsWithStateAry(stateAry,false, [
-        {name:ServerParams.LEVEL, value:level},
-        {name:ServerParams.FULL_SCREEN, value : isFullScreen},
-    ]);
-    return doJsonRequest(ServerParams.ZOOM, params, true);
-}
-
-
-export function callChangeColor(state, colorTableId) {
-    const params= [
-        {name:ServerParams.STATE, value: state.toJson(false)},
-        {name:ServerParams.COLOR_IDX, value:colorTableId}
-    ];
-    return doJsonRequest(ServerParams.CHANGE_COLOR, params, true);
-}
-
-
-export function callRecomputeStretch(state, stretchDataAry) {
-    const params= { [ServerParams.STATE]: state.toJson(false)};
-    stretchDataAry.forEach( (sd,idx) => params[ServerParams.STRETCH_DATA+idx]=  JSON.stringify(sd));
-    return doJsonRequest(ServerParams.STRETCH, params, true);
-}
-
 export function callCrop(stateAry, corner1ImagePt, corner2ImagePt, cropMultiAll) {
     const params= makeParamsWithStateAry(stateAry,false, [
         {name:ServerParams.PT1, value: corner1ImagePt.toString()},
@@ -103,10 +76,64 @@ export function callCrop(stateAry, corner1ImagePt, corner2ImagePt, cropMultiAll)
 }
 
 export function callGetFileFlux(stateAry, pt) {
-    const params =  makeParamsWithStateAry(stateAry,true, [ {name: [ServerParams.PT], value: pt.toString()} ]);
+    const params =  makeParamsWithStateAry(stateAry,true,
+        [ {name: [ServerParams.PT], value: pt.toString()}]);
     return doJsonRequest(ServerParams.FILE_FLUX_JSON, params,true);
 }
 
+async function fetchExtraction(plot, inParams, cmd= ServerParams.FITS_EXTRACTION) {
+    const use64Bit= getBixPix(plot)===-64;
+    const params= {...inParams, [ServerParams.EXTRACTION_FLOAT_SIZE]: use64Bit ? 64 : 32};
+    const response= await fetchUrl(getCmdSrvSyncURL()+`?${ServerParams.COMMAND}=${cmd}`,{method:'POST', params },false);
+    if (!response.ok) {
+        throw(new Error(`Error from Server for getStretchedByteData: code: ${response.status}, text: ${response.statusText}`));
+    }
+    const arrayBuffer= await response.arrayBuffer();
+    return use64Bit ? new Float64Array(arrayBuffer) : new Float32Array(arrayBuffer);
+}
+
+export async function callGetCubeDrillDownAry(plot, hduNum, pt, ptSize, combineOp, relatedCubes) {
+    return fetchExtraction(plot,
+        {
+            [ServerParams.EXTRACTION_TYPE]: 'z-axis',
+            [ServerParams.STATE]: plot.plotState.toJson(false),
+            [ServerParams.PT] : pt.toString(),
+            [ServerParams.POINT_SIZE] : ptSize+'',
+            [ServerParams.COMBINE_OP] : combineOp,
+            [ServerParams.HDU_NUM] : hduNum+'',
+            [ServerParams.RELATED_HDUS] : relatedCubes+'',
+        });
+}
+
+export async function callGetLineExtractionAry(plot, hduNum, plane, pt, pt2, ptSize, combineOp, relatedHDUS) {
+    return fetchExtraction(plot,
+        {
+            [ServerParams.EXTRACTION_TYPE]: 'line',
+            [ServerParams.STATE]: plot.plotState.toJson(false),
+            [ServerParams.PT] : pt.toString(),
+            [ServerParams.PT2] : pt2.toString(),
+            [ServerParams.POINT_SIZE] : ptSize+'',
+            [ServerParams.COMBINE_OP] : combineOp,
+            [ServerParams.PLANE] : plane+'',
+            [ServerParams.HDU_NUM] : hduNum+'',
+            [ServerParams.RELATED_HDUS] : relatedHDUS+'',
+        });
+}
+
+export async function callGetPointExtractionAry(plot, hduNum, plane, ptAry, ptSizeX, ptSizeY, combineOp, relatedHDUS) {
+    return fetchExtraction(plot,
+        {
+            [ServerParams.EXTRACTION_TYPE]: 'points',
+            [ServerParams.STATE]: plot.plotState.toJson(false),
+            [ServerParams.PTARY] : JSON.stringify(ptAry.map( (pt) => pt.toString())),
+            [ServerParams.POINT_SIZE_X] : ptSizeX+'',
+            [ServerParams.POINT_SIZE_Y] : ptSizeY+'',
+            [ServerParams.COMBINE_OP] : combineOp,
+            [ServerParams.PLANE] : plane+'',
+            [ServerParams.HDU_NUM] : hduNum+'',
+            [ServerParams.RELATED_HDUS] : relatedHDUS+'',
+        });
+}
 
 /**
  *

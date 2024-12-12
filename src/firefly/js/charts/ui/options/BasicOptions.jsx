@@ -1,12 +1,15 @@
-import React, {useEffect} from 'react';
+import React, {useCallback, useEffect} from 'react';
 import PropTypes from 'prop-types';
-import {isArray, get, isUndefined, isEmpty, reverse, set} from 'lodash';
+import {get, isArray, isEmpty, isString, isUndefined, memoize, reverse, set} from 'lodash';
 
-import {dispatchChartUpdate, dispatchChartAdd, getChartData} from '../../ChartsCntlr.js';
+import {dispatchChartAdd, dispatchChartUpdate, getChartData} from '../../ChartsCntlr.js';
 import {FieldGroup} from '../../../ui/FieldGroup.jsx';
-import {getFieldVal, getField} from '../../../fieldGroup/FieldGroupUtils.js';
-import {dispatchValueChange, VALUE_CHANGE, MULTI_VALUE_CHANGE} from '../../../fieldGroup/FieldGroupCntlr.js';
-import {FieldGroupCollapsible} from '../../../ui/panel/CollapsiblePanel.jsx';
+import {getField, getFieldVal} from '../../../fieldGroup/FieldGroupUtils.js';
+import {dispatchValueChange, MULTI_VALUE_CHANGE, VALUE_CHANGE} from '../../../fieldGroup/FieldGroupCntlr.js';
+import {
+    CollapsibleGroup,
+    CollapsibleItem
+} from '../../../ui/panel/CollapsiblePanel.jsx';
 
 import {showColorPickerDialog} from '../../../ui/ColorPicker.jsx';
 import Validate from '../../../util/Validate.js';
@@ -18,13 +21,14 @@ import {useStoreConnector} from '../../../ui/SimpleComponent.jsx';
 import {updateSet} from '../../../util/WebUtil.js';
 import {hideColSelectPopup} from '../ColSelectView.jsx';
 import {addColorbarChanges} from '../../dataTypes/FireflyHeatmap.js';
-import {uniqueChartId, TRACE_COLORS, toRGBA, colorsOnTypes, getChartProps} from '../../ChartUtil.js';
+import {colorsOnTypes, getChartProps, toRGBA, TRACE_COLORS, uniqueChartId} from '../../ChartUtil.js';
 import {colorscaleNameToVal} from '../../Colorscale.js';
 import {DEFAULT_PLOT2D_VIEWER_ID} from '../../../visualize/MultiViewCntlr.js';
 
 import MAGNIFYING_GLASS from 'html/images/icons-2014/magnifyingGlass.png';
 import {ToolbarButton} from '../../../ui/ToolbarButton.jsx';
 import {ActiveTraceSelect} from '../PlotlyToolbar.jsx';
+import {FormControl, FormLabel, Stack, Typography} from '@mui/joy';
 
 export const helpStyle = {fontStyle: 'italic', color: '#808080', paddingBottom: 10};
 const xyratioFldName = 'fireflyLayout.xyratio';
@@ -73,29 +77,31 @@ function findViewerId(viewerId= DEFAULT_PLOT2D_VIEWER_ID, renderTreeId= undefine
 
 export function BasicOptions({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey}) {
     
-    const [activeTrace] = useStoreConnector(() => {
-        return pActiveTrace ?? getChartData(chartId)?.activeTrace ?? 0;
-    });
+    const activeTrace = useStoreConnector(() =>  pActiveTrace ?? getChartData(chartId)?.activeTrace ?? 0);
     useEffect(() => {
        return () => hideColSelectPopup();
     }, []);
 
-    const fieldProps = {labelWidth: 60, size: 25};
     const {noColor, tbl_id, multiTrace} = getChartProps(chartId, ptbl_id, activeTrace);
-    const {Name, Color} = basicOptions({activeTrace, tbl_id, chartId, groupKey, fieldProps});
+    const {Name, Color} = useBasicOptions({activeTrace, tbl_id, chartId, groupKey});
     const reducerFunc = basicFieldReducer({chartId, activeTrace});
     reducerFunc.ver = chartId+activeTrace;
 
     return (
-        <FieldGroup className='FieldGroup__vertical' style={{margin: '5px 0 0 -22px'}} keepState={false} groupKey={groupKey}
+        <FieldGroup keepState={false} groupKey={groupKey}
                     reducerFunc={reducerFunc}>
-            { (multiTrace || !noColor) &&
-                <FieldGroupCollapsible  header='Trace Options' initialState= {{ value:'closed' }} fieldKey='traceOptions'>
-                    {multiTrace && <Name/>}
-                    {!noColor && <Color/>}
-                </FieldGroupCollapsible>
-            }
-            <LayoutOptions {...{activeTrace, tbl_id, chartId, groupKey}}/>
+            <CollapsibleGroup>
+                {(multiTrace || !noColor) &&
+                    //TODO: expose it as Trace Options and replace all usages of following
+                    <CollapsibleItem header='Trace Options' componentKey='chart-trace-options'>
+                        <Stack spacing={1} sx={{'.MuiFormLabel-root': {width: '6rem'}}}>
+                            {multiTrace && <Name/>}
+                            {!noColor && <Color/>}
+                        </Stack>
+                    </CollapsibleItem>
+                }
+                <LayoutOptions {...{activeTrace, tbl_id, chartId, groupKey}}/>
+            </CollapsibleGroup>
         </FieldGroup>
     );
 }
@@ -157,35 +163,38 @@ export function basicFieldReducer({chartId, activeTrace}) {
 }
 
 
-export function LayoutOptions({activeTrace, tbl_id, chartId, groupKey, fieldProps={}, noXY, xNoLog, noTitle,
+export function LayoutOptions({activeTrace, tbl_id, chartId, groupKey, noXY, xNoLog, noTitle,
                                   XaxisTitle, YaxisTitle, ...more}) {
 
-    fieldProps = {labelWidth: 60, size: 25, ...fieldProps};
-    const {Title, XaxisTitle:pXaxisTitle, YaxisTitle:pYaxisTitle, Xoptions, Yoptions, Xyratio, Stretch, Xreset, Yreset} = basicOptions({activeTrace, tbl_id, chartId, groupKey, fieldProps, noXY, xNoLog, ...more});
+    const {Title, XaxisTitle:pXaxisTitle, YaxisTitle:pYaxisTitle, Xoptions, Yoptions, Xyratio, Stretch, Xreset, Yreset} = useBasicOptions({activeTrace, tbl_id, chartId, groupKey, noXY, xNoLog, ...more});
     XaxisTitle = XaxisTitle || pXaxisTitle;
     YaxisTitle = YaxisTitle || pYaxisTitle;
 
     return (
-        <FieldGroupCollapsible  header='Chart Options' initialState= {{ value:'closed' }} fieldKey='layoutOptions'>
-            <div className='FieldGroup__vertical'>
+        <CollapsibleItem  header='Chart Options' componentKey='chart-layout-options'
+                                    {...more /* to allow AccordionGroup styling props inserted by joy UI, propagate to Accordion */}>
+            <Stack spacing={2} sx={{'.MuiFormLabel-root': {width: '6rem'}}}>
                 <Title/>
-                {!noXY && <div>
-                    <XaxisTitle/>
-                    <Xoptions/>
-                    <br/>
-                    <YaxisTitle/>
-                    <Yoptions/>
-                    <br/>
-                    <PlotBoundaries {...{chartId, groupKey, activeTrace, tbl_id, fieldProps}}/>
-                </div>}
+                {!noXY && <>
+                    <Stack spacing={1}>
+                        <XaxisTitle/>
+                        <Xoptions/>
+                    </Stack>
+                    <Stack spacing={1}>
+                        <YaxisTitle/>
+                        <Yoptions/>
+                    </Stack>
+                    <PlotBoundaries {...{chartId, groupKey, activeTrace, tbl_id}}/>
+                </>}
                 <XyRatio {...{groupKey, Xyratio, Stretch, xNoLog}}/>
-
-                <div style={{overflow: 'hidden', height: 0, width: 0}}>
+                <div style={
+                    {display: 'none'} //hidden because following are just helper fields for tracking state
+                }>
                     <Xreset/>
                     <Yreset/>
                 </div>
-            </div>
-        </FieldGroupCollapsible>
+            </Stack>
+        </CollapsibleItem>
     );
 }
 
@@ -194,69 +203,59 @@ LayoutOptions.propTypes = {
     tbl_id: PropTypes.string,
     chartId: PropTypes.string,
     groupKey: PropTypes.string.isRequired,
-    fieldProps: PropTypes.object,       // fieldProps to apply to all fields
     noXY: PropTypes.bool,               // don't show XY fields.
     xNoLog: PropTypes.bool,             // no Log option for x axis
     XaxisTitle: PropTypes.func,         // x axis title override
     YaxisTitle: PropTypes.func          // y axis title override
 };
 
-export function PlotBoundaries({activeTrace:pActiveTrace, tbl_id, chartId, groupKey, fieldProps, isXNotNumeric, isYNotNumeric}) {
+export function PlotBoundaries({activeTrace:pActiveTrace, tbl_id, chartId, groupKey, isXNotNumeric, isYNotNumeric}) {
     const {activeTrace, ...rest} = getChartProps(chartId, tbl_id, pActiveTrace);
     isXNotNumeric = isXNotNumeric ?? rest.isXNotNumeric;
     isYNotNumeric = isYNotNumeric ?? rest.isYNotNumeric;
-    const {XaxisMin, XaxisMax, YaxisMin, YaxisMax} = basicOptions({activeTrace, chartId, groupKey, fieldProps, isXNotNumeric, isYNotNumeric});
+    const {XaxisMin, XaxisMax, YaxisMin, YaxisMax} = useBasicOptions({activeTrace, chartId, groupKey, isXNotNumeric, isYNotNumeric});
     return (
-        <div>
-            <div style={helpStyle}>
+        <Stack spacing={.5} sx={{
+            '.MuiFormLabel-root': {width: '3rem'},
+            '.MuiInput-root': {width: '7rem'}
+        }}>
+            <Typography level='body-sm'>
                 Set plot boundaries if different from data range.
-            </div>
+            </Typography>
             {isXNotNumeric ? false :
-                <div style={{display: 'flex', flexDirection: 'row', padding: '5px 15px 0'}}>
-                    <div style={{paddingRight: 5}}>
+                <Stack spacing={3} direction={'row'}>
                         <XaxisMin/>
-                    </div>
-                    <div style={{paddingRight: 5}}>
                         <XaxisMax/>
-                    </div>
-                </div>}
+                </Stack>}
             {isYNotNumeric ? false :
-                <div style={{display: 'flex', flexDirection: 'row', padding: '0px 15px 15px'}}>
-                    <div style={{paddingRight: 5}}>
+                <Stack spacing={3} direction={'row'}>
                         <YaxisMin/>
-                    </div>
-                    <div style={{paddingRight: 5}}>
                         <YaxisMax/>
-                    </div>
-                </div>
+                </Stack>
             }
-        </div>
+        </Stack>
     );
 }
 
 function XyRatio({groupKey, Xyratio, Stretch, xNoLog}) {
 
-    const [showStretch] = useStoreConnector(() => {
+    const showStretch = useStoreConnector(() => {
         const {value, valid} = getField(groupKey, xyratioFldName) || {};
         return !!value && valid;
     });
 
     if (xNoLog) return null;
     return (
-        <div>
-            <div style={helpStyle}>
+        <Stack spacing={.5}>
+            <Typography level='body-sm'>
                 Enter display aspect ratio below.<br/>
-                Leave it blank to use all available space.<br/>
-            </div>
-            <div style={{display: 'flex', flexDirection: 'row', padding: '5px 5px 5px 0'}}>
-                <div style={{paddingRight: 5}}>
-                    <Xyratio/>
-                </div>
-                {showStretch && <div style={{paddingRight: 5}}>
-                    <Stretch/>
-                </div>}
-            </div>
-        </div>
+                Leave it blank to use all available space.
+            </Typography>
+            <Stack spacing={2} direction={'row'}>
+                <Xyratio/>
+                {showStretch && <Stretch/>}
+            </Stack>
+        </Stack>
     );
 }
 
@@ -266,7 +265,7 @@ function XyRatio({groupKey, Xyratio, Stretch, xNoLog}) {
  * It assume the fieldId is the 'path' to the chart data and the value of the field is the value you want to change.
  * For fields that are mapped to tables, it assumes that they starts with '_tables'.  In this case, it will prepend
  * 'tables::' to the value.
- * @param {pbject} p
+ * @param {object} p
  * @param {string} p.chartId
  * @param {object} p.fields
  * @param {string} p.tbl_id
@@ -275,12 +274,35 @@ function XyRatio({groupKey, Xyratio, Stretch, xNoLog}) {
 export function submitChanges({chartId, fields, tbl_id, renderTreeId}) {
     if (!fields) return;                // fields failed validations..  quick/dirty.. may need to separate the logic later.
     if (!chartId) chartId = uniqueChartId();
+
+    const changes = evalChangesFromFields(chartId, tbl_id, fields);
+
+    if (isEmpty(getChartData(chartId))) {
+        // chart dropdown scenario
+        // create chart data from changes and add chart
+        const newChartData = {chartId, groupId: tbl_id};
+        Object.entries(changes).forEach(([k,v]) => set(newChartData, k, v));
+        dispatchChartAdd({chartId, chartType: 'plot.ly', groupId: tbl_id, renderTreeId,
+            viewerId: findViewerId(DEFAULT_PLOT2D_VIEWER_ID,renderTreeId),
+            ...newChartData});
+    } else {
+        // update chart from options scenario
+        dispatchChartUpdate({chartId, changes});
+    }
+}
+
+export function evalChangesFromFields(chartId, tbl_id, fields) {
+
     const {layout={}, data=[], fireflyData, activeTrace:traceNum=0} = getChartData(chartId, {});
+
     const changes = {showOptions: false};
     Object.entries(fields).forEach( ([k,v]) => {
         if (tbl_id && k.startsWith('_tables.')) {
             const [,activeTrace] = /^_tables.data.(\d)/.exec(k) || [];
-            if (!isUndefined(activeTrace)) set(changes, [`data.${activeTrace}.tbl_id`], tbl_id);
+            if (!isUndefined(activeTrace)) {
+                // table id must be set for a data change
+                changes[`data.${activeTrace}.tbl_id`] = data[activeTrace]?.tbl_id || tbl_id;
+            }
             k = k.replace('_tables.', '');
             v = v ? `tables::${v}` : undefined;
         } else if (k.startsWith('__')) {
@@ -377,24 +399,15 @@ export function submitChanges({chartId, fields, tbl_id, renderTreeId}) {
 
         // omit fields, that start with '__'
         if (!k.startsWith('__') && isUndefined(changes[k])) {
-            changes[k] = v;
+            if (layout.title || k!=='layout.title.text' || v) { // if no title set then don't set it in the changes
+                changes[k] = v;
+            }
         }
 
     });
     adjustAxesRange(layout, changes);
 
-    if (isEmpty(getChartData(chartId))) {
-        // chart dropdown scenario
-        // create chart data from changes and add chart
-        const newChartData = {chartId, groupId: tbl_id};
-        Object.entries(changes).forEach(([k,v]) => set(newChartData, k, v));
-        dispatchChartAdd({chartId, chartType: 'plot.ly', groupId: tbl_id, renderTreeId,
-            viewerId: findViewerId(DEFAULT_PLOT2D_VIEWER_ID,renderTreeId),
-            ...newChartData});
-    } else {
-        // update chart from options scenario
-        dispatchChartUpdate({chartId, changes});
-    }
+    return changes;
 }
 
 function adjustAxesRange(layout, changes) {
@@ -452,116 +465,133 @@ function filterOptions(options, opts) {
     return opts.filter((opt) => options.includes(opt) || options.includes('_all_')).toString();
 }
 
-
-
-
-export function basicOptions ({activeTrace:pActiveTrace, chartId, tbl_id, groupKey, fieldProps={}, isXNotNumeric, isYNotNumeric, xNoLog, yNoLog}) {
+/*
+ * This function returns a collection of components using `useCallback`, ensuring they are not recreated between re-renders.
+ * To modify this behavior, you can set the `deps` parameter accordingly.
+ */
+export const useBasicOptions = ({activeTrace:pActiveTrace, chartId, tbl_id, groupKey, isXNotNumeric,
+                                  isYNotNumeric, xNoLog, yNoLog, orientation='horizontal'}, deps=[]) => {
     const {activeTrace, data, layout, fireflyLayout, color, ...rest} = getChartProps(chartId, tbl_id, pActiveTrace);
     xNoLog = xNoLog ?? rest.xNoLog;
     yNoLog = yNoLog ?? rest.yNoLog;
     isXNotNumeric = isXNotNumeric ?? rest.isXNotNumeric;
     isYNotNumeric = isYNotNumeric ?? rest.isYNotNumeric;
-
-    const boundariesFieldProps = {labelWidth: 35, size: 10};
+    const initTitle= isString(layout?.title?.text) ?
+        layout.title.text :
+        isString(layout?.title) ? layout.title : '';
 
     return {
-        ShowLegend: (props={}) => (<CheckboxGroupInputField fieldKey={'layout.showlegend'}
+        ShowLegend: useCallback((props) => (<CheckboxGroupInputField fieldKey={'layout.showlegend'}
                                          initialState= {{value: get(layout, 'showlegend', 'true')}}
                                          tooltip='Show legend'
                                          label='Legend:'
-                                         options={[{label: 'Show legend:', value: 'true'}]} {...fieldProps} {...props}/>),
-        XaxisTitle: (props={}) => (<ValidationField fieldKey={'layout.xaxis.title.text'}
+                                         options={[{label: 'Show legend:', value: 'true'}]}
+                                         alignment={orientation} {...props}/>),deps),
+        XaxisTitle: useCallback((props) => (<ValidationField fieldKey={'layout.xaxis.title.text'}
                                          initialState= {{value: get(layout, 'xaxis.title.text')}}
                                          tooltip='X axis label'
-                                         label='X Label:' {...fieldProps} {...props}/>),
-        Xreset: (props={}) => (<ValidationField fieldKey='__xreset' initialState={{value:''}} {...fieldProps} {...props}/>),
-        Xoptions: (props={}) => (<CheckboxGroupInputField fieldKey='__xoptions'
+                                         label='X Label:'
+                                         orientation={orientation} {...props}/>), deps),
+        Xreset: useCallback((props) => (<ValidationField fieldKey='__xreset' initialState={{value:''}}
+                                                orientation={orientation} {...props}/>), deps),
+        Xoptions: useCallback((props) => (<CheckboxGroupInputField fieldKey='__xoptions'
                                  initialState= {{value: getOptions('x', layout)}}
                                  tooltip='X axis options'
                                  label='Options:'
-                                 options={xNoLog || isXNotNumeric ? X_AXIS_OPTIONS_NOLOG : X_AXIS_OPTIONS} {...fieldProps} {...props}/>),
-        YaxisTitle: (props={}) => (<ValidationField fieldKey={'layout.yaxis.title.text'}
+                                 options={xNoLog || isXNotNumeric ? X_AXIS_OPTIONS_NOLOG : X_AXIS_OPTIONS}
+                                 alignment={orientation} {...props}/>), deps),
+        YaxisTitle: useCallback((props) => (<ValidationField fieldKey={'layout.yaxis.title.text'}
                                      initialState= {{value: get(layout, 'yaxis.title.text')}}
                                      tooltip='Y axis label'
-                                     label='Y Label:' {...fieldProps} {...props}/>),
-        Yreset: (props={}) => (<ValidationField fieldKey='__yreset' initialState={{value:''}} {...fieldProps} {...props}/>),
-        Yoptions: (props={}) => (<CheckboxGroupInputField fieldKey='__yoptions'
+                                     label='Y Label:'
+                                     orientation={orientation} {...props}/>), deps),
+        Yreset: useCallback((props) => (<ValidationField fieldKey='__yreset' initialState={{value:''}}
+                                                orientation={orientation} {...props}/>), deps),
+        Yoptions: useCallback((props) => (<CheckboxGroupInputField fieldKey='__yoptions'
                                     initialState= {{value: getOptions('y', layout)}}
                                     tooltip='Y axis options'
                                     label='Options:'
-                                    options={yNoLog || isYNotNumeric ? Y_AXIS_OPTIONS_NOLOG : Y_AXIS_OPTIONS} {...fieldProps} {...props}/>),
-        XaxisMin: (props={}) => (<ValidationField fieldKey={'fireflyLayout.xaxis.min'}
+                                    options={yNoLog || isYNotNumeric ? Y_AXIS_OPTIONS_NOLOG : Y_AXIS_OPTIONS}
+                                    alignment={orientation} {...props}/>), deps),
+        XaxisMin: useCallback((props) => (<ValidationField fieldKey={'fireflyLayout.xaxis.min'}
                                     initialState= {{value: get(fireflyLayout, 'xaxis.min')}}
                                     validator={(val) => Validate.isFloat('X Min', val)}
                                     tooltip='Minimum X value'
-                                    label='X Min:' {...boundariesFieldProps} {...boundariesFieldProps} {...props}/>),
-        XaxisMax: (props={}) => (<ValidationField fieldKey={'fireflyLayout.xaxis.max'}
+                                    label='X Min:'
+                                    orientation={orientation} {...props}/>), deps),
+        XaxisMax: useCallback((props) => (<ValidationField fieldKey={'fireflyLayout.xaxis.max'}
                                     initialState= {{value: get(fireflyLayout, 'xaxis.max')}}
                                     validator={(val) => Validate.isFloat('X Max', val)}
                                     tooltip='Maximum X value'
-                                    label='X Max:' {...boundariesFieldProps} {...boundariesFieldProps} {...props}/>),
-        YaxisMin:  (props={}) => (<ValidationField fieldKey={'fireflyLayout.yaxis.min'}
+                                    label='X Max:'
+                                    orientation={orientation} {...props}/>), deps),
+        YaxisMin:  useCallback((props) => (<ValidationField fieldKey={'fireflyLayout.yaxis.min'}
                                     initialState= {{value: get(fireflyLayout, 'yaxis.min')}}
                                     validator={(val) => Validate.isFloat('Y Min', val)}
                                     tooltip='Minimum Y value'
-                                    label='Y Min:' {...boundariesFieldProps} {...boundariesFieldProps} {...props}/>),
-        YaxisMax:  (props={}) => (<ValidationField fieldKey={'fireflyLayout.yaxis.max'}
+                                    label='Y Min:'
+                                    orientation={orientation} {...props}/>), deps),
+        YaxisMax:  useCallback((props) => (<ValidationField fieldKey={'fireflyLayout.yaxis.max'}
                                     initialState= {{value: get(fireflyLayout, 'yaxis.max')}}
                                     validator={(val) => Validate.isFloat('Y Max', val)}
                                     tooltip='Maximum Y value'
-                                    label='Y Max:' {...boundariesFieldProps} {...props}/>),
-        Xyratio:  (props={}) => (<ValidationField style={{width: 15}} fieldKey={xyratioFldName}
+                                    label='Y Max:'
+                                    orientation={orientation} {...props}/>), deps),
+        Xyratio:  useCallback((props) => (<ValidationField style={{width: 15}} fieldKey={xyratioFldName}
                                      initialState= {{value: get(fireflyLayout, 'xyratio')}}
                                      validator={Validate.floatRange.bind(null, 0.1, 10, 1, 'X/Y ratio')}
                                      tooltip='X/Y ratio'
                                      label='X/Y ratio:'
-                                     labelWidth={50} {...fieldProps} {...props}/>),
-        Stretch:  (props={}) => (<RadioGroupInputField
+                                     orientation={orientation} {...props}/>), deps),
+        Stretch:  useCallback((props) => (<RadioGroupInputField
                                     fieldKey={'fireflyLayout.stretch'}
                                     alignment='horizontal'
                                     initialState= {{value: get(fireflyLayout, 'stretch', 'fit')}}
                                     tooltip='Should the plot fit into the available space or fill the available width?'
                                     label='Stretch to:'
-                                    labelWidth={50}
-                                    options={[ {label: 'height', value: 'fit'}, {label: 'width', value: 'fill'}]} {...fieldProps} {...props}/>),
-        Name:  (props={}) => (<ValidationField fieldKey={`data.${activeTrace}.name`}
+                                    options={[ {label: 'height', value: 'fit'}, {label: 'width', value: 'fill'}]}
+                                    orientation={orientation} {...props}/>), deps),
+        Name:  useCallback((props) => (<ValidationField fieldKey={`data.${activeTrace}.name`}
                                      initialState= {{value: get(data, `${activeTrace}.name`, '')}}
                                      tooltip='The name of this new series'
-                                     label='Name:' {...fieldProps} {...props}/>),
-        Color:  (props={}) => (
-                    <div style={{display: 'inlineFlux'}}>
-                        <ValidationField inline={true} fieldKey={`data.${activeTrace}.marker.color`}
-                                         initialState= {{value: color}}
-                                         tooltip='Set series color'
-                                         label='Color:' {...fieldProps} {...props}/>
-                        <div style={{display: 'inline-block', paddingLeft: 2, verticalAlign: 'top'}}
-                            title='Select trace color'
-                            onClick={() => showColorPickerDialog(getFieldVal(groupKey, `data.${activeTrace}.marker.color`), true, false,
-                            (ev) => {
-                                    if (ev) {
-                                        const {r, g, b, a} = ev.rgb;
-                                        const rgbStr = `rgba(${r},${g},${b},${a})`;
-                                        dispatchValueChange({fieldKey: `data.${activeTrace}.marker.color`, groupKey, value: rgbStr, valid: true});
-                                    }
-                                }, groupKey, 'plots.colorpicker', .5)}>
-                            <ToolbarButton icon={MAGNIFYING_GLASS}/>
-                        </div>
-                    </div>),
-        Title:  (props={}) => ( <ValidationField fieldKey={'layout.title.text'}
-                                 initialState= {{value: get(layout, 'title.text')}}
-                                 tooltip='Chart title'
-                                 label='Chart title:' {...fieldProps} {...props}/>),
-        ChooseTrace: ({style={}, ...props}) => {
-            if (!data || data.length < 2) return null;
-            return (
-                <div style={{display: 'inline-flex', alignItems: 'center', marginBottom: 5, ...style}}>
-                    <div>Choose Trace: </div>
-                    <ActiveTraceSelect style={{marginLeft: 10, backgroundColor: '#dadada', borderColor: '#cacaca', width: 'unset', minWidth: 50}}
-                                      chartId={chartId}
-                                      activeTrace={activeTrace}
-                                      {...props}/>
+                                     label='Name:'
+                                     orientation={orientation} {...props}/>), deps),
+        Color:  useCallback((props) => {
+            const colorPicker = (
+                <div style={{display: 'inline-block', paddingLeft: 2, verticalAlign: 'top'}}
+                     title='Select trace color'
+                     onClick={() => showColorPickerDialog(getFieldVal(groupKey, `data.${activeTrace}.marker.color`), true, false,
+                         (ev) => {
+                             if (ev) {
+                                 const {r, g, b, a} = ev.rgb;
+                                 const rgbStr = `rgba(${r},${g},${b},${a})`;
+                                 dispatchValueChange({fieldKey: `data.${activeTrace}.marker.color`, groupKey, value: rgbStr, valid: true});
+                             }
+                         }, groupKey, 'plots.colorpicker', .5)}>
+                    <ToolbarButton icon={MAGNIFYING_GLASS}/>
                 </div>
             );
-        },
+            return (
+                <ValidationField fieldKey={`data.${activeTrace}.marker.color`}
+                                 initialState={{value: color}}
+                                 tooltip='Set series color'
+                                 label='Color:'
+                                 endDecorator={colorPicker}
+                                 orientation={orientation} {...props}/>
+            );}, deps),
+        Title:  useCallback((props) => ( <ValidationField fieldKey={'layout.title.text'}
+                                                 initialState= {{value: initTitle}}
+                                                 tooltip='Chart title'
+                                                 label='Chart title:'
+                                                 orientation={orientation} {...props}/>), deps),
+        ChooseTrace: useCallback(({sx, ...props}) => {
+            if (!data || data.length < 2) return null;
+            return (
+                <FormControl sx={sx} orientation={orientation}>
+                    <FormLabel>Choose Trace: </FormLabel>
+                    <ActiveTraceSelect chartId={chartId} activeTrace={activeTrace} {...props}/>
+                </FormControl>
+            );
+        }, deps),
     };
 };

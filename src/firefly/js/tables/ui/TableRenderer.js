@@ -2,88 +2,132 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {Component, PureComponent, useRef, useCallback, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Cell} from 'fixed-data-table-2';
-import {set, get, isEqual, pick, omit, isEmpty, isString, toNumber} from 'lodash';
+import {get, isEmpty, isString, omit, set, toNumber} from 'lodash';
+import {Box, Button, Checkbox, Chip, Link, MenuItem, Sheet, Stack, Tooltip, Typography} from '@mui/joy';
 
-import {FilterInfo, FILTER_CONDITION_TTIPS, NULL_TOKEN} from '../FilterInfo.js';
-import {isColumnType, COL_TYPE, tblDropDownId, getTblById, getColumn, formatValue, getTypeLabel, getColumnIdx, getRowValues, getCellValue} from '../TableUtil.js';
+import {FILTER_CONDITION_TTIPS, FilterInfo, NULL_TOKEN} from '../FilterInfo.js';
+import {COL_TYPE, formatValue, getCellValue, getColumn, getColumnIdx, getRowValues, getTblById, getTypeLabel, isColumnType, isOfType, splitCols, splitVals} from '../TableUtil.js';
 import {SortInfo} from '../SortInfo.js';
 import {InputField} from '../../ui/InputField.jsx';
 import {SORT_ASC, UNSORTED} from '../SortInfo';
-import {toBoolean, copyToClipboard} from '../../util/WebUtil.js';
+import {copyToClipboard, encodeUrlString, toBoolean} from '../../util/WebUtil.js';
 
 import ASC_ICO from 'html/images/sort_asc.gif';
 import DESC_ICO from 'html/images/sort_desc.gif';
-import FILTER_SELECTED_ICO from 'html/images/icons-2014/16x16_Filter.png';
 import {CheckboxGroupInputField} from '../../ui/CheckboxGroupInputField';
-import DialogRootContainer, {showDropDown, hideDropDown} from '../../ui/DialogRootContainer.jsx';
+import DialogRootContainer, {DropDown} from '../../ui/DialogRootContainer.jsx';
 import {FieldGroup} from '../../ui/FieldGroup';
 import {getFieldVal} from '../../fieldGroup/FieldGroupUtils.js';
 import {dispatchValueChange} from '../../fieldGroup/FieldGroupCntlr.js';
 import {useStoreConnector} from './../../ui/SimpleComponent.jsx';
-import {applyLinkSub, applyTokenSub} from '../../util/VOAnalyzer.js';
+import {applyLinkSub, applyTokenSub} from '../../voAnalyzer/VoCoreUtils.js';
 import {showInfoPopup} from '../../ui/PopupUtil.jsx';
-import {dispatchTableUpdate} from '../../tables/TablesCntlr.js';
+import {dispatchTableUpdate} from '../TablesCntlr.js';
 import {dispatchShowDialog} from '../../core/ComponentCntlr.js';
 import {PopupPanel} from '../../ui/PopupPanel.jsx';
 
 import infoIcon from 'html/images/info-icon.png';
 import {dd2sex} from '../../visualize/CoordUtil.js';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import {FilterButton} from 'firefly/visualize/ui/Buttons.jsx';
 
-const html_regex = /^<.+>$/;                    // A very limited check.  Will limit or remove the use of embedded HTML in the future
-const filterStyle = {width: '100%', boxSizing: 'border-box'};
+
+export const headerStyle = {fontSize:'var(--joy-fontSize-sm)', fontWeight:'var(--joy-fontWeight-md)'};  // maybe faulty becuase it's translated from Typography title-sm, which is dynamic.
+
+const html_regex = /<.+>|&.+;/;           // A rough detection of html elements or entities
 
 const imageStubMap = {
     info: <img style={{width:'14px'}} src={infoIcon} alt='info'/>
 };
 
 
+/**
+ * Custom cell renderer.
+ * @typedef {function} CellRenderer
+ * @param {CellInfo} cellInfo the cell info to render
+ */
+
+/**
+ * Custom cell renderer.
+ * @typedef {object} CellInfo
+ * @prop {TableColumn} col
+ * @prop {string} value of the cell to render
+ * @prop {string[]} rvalues values of cell after it gone through a resolver, e.g. Links
+ * @prop {string} text text representation of the value, e.g. after number format
+ * @prop {boolean} isArray true if value is an array
+ * @prop {int} absRowIdx the absolute row index
+ * @prop {string} textAlign one of middle, right, left
+ * @prop {TableModel} tableModel the full table model; data, columns, meta, etc
+ */
+
+
 /*---------------------------- COLUMN HEADER RENDERERS ----------------------------*/
 
 function SortSymbol({sortDir}) {
+    if (sortDir === UNSORTED) return null;
     return (
-        <div style={{marginLeft: 2}}>
-            <img style={{verticalAlign: 'middle'}} src={sortDir === SORT_ASC ? ASC_ICO : DESC_ICO}/>
-        </div>
+        <img src={sortDir === SORT_ASC ? ASC_ICO : DESC_ICO} width='9px' height='5px'/>
     );
 };
 
-export const HeaderCell = React.memo( ({col, showUnits, showTypes, showFilters, filterInfo, sortInfo, onSort, onFilter, style, tbl_id}) => {
+export const HeaderCell = React.memo( ({col, showUnits, showTypes, showFilters, filterInfo, sortInfo, onSort, onFilter, sx={}, tbl_id}) => {
     const {label, name, desc, sortByCols, sortable} = col || {};
     const cdesc = desc || label || name;
     const sortDir = SortInfo.parse(sortInfo).getDirection(name);
-    const sortCol = sortByCols || name;
+    const sortCol = sortByCols ? splitCols(sortByCols) : [name];
     const typeVal = getTypeLabel(col);
     const unitsVal = col.units ? `(${col.units})`: '';
-    const className = toBoolean(sortable, true) ? 'clickable' : undefined;
+    const clickable = toBoolean(sortable, true) ? 'clickable' : undefined;
+    const color = col.DERIVED_FROM ? 'warning' : undefined;
 
     const onClick = toBoolean(sortable, true) ? () => onSort(sortCol) : () => showInfoPopup('This column is not sortable');
+    const centerIt = {justifyContent:'center', alignItems:'center'};
+
+    sx = {py: '2px', ...sx};
     return (
-        <div style={style} title={cdesc} className='TablePanel__header'>
-            <div style={{height: '100%', width: '100%'}} className={className} onClick={onClick}>
-                <div style={{display: 'inline-flex', width: '100%', justifyContent: 'center'}}>
-                    <div style={{textOverflow: 'ellipsis', overflow: 'hidden'}}>
-                        {label || name}
-                    </div>
-                    { sortDir !== UNSORTED && <SortSymbol sortDir={sortDir}/> }
-                </div>
-                {showUnits && <div style={{height: 11, fontWeight: 'normal'}}>{unitsVal}</div>}
-                {showTypes && <div style={{height: 11, fontWeight: 'normal', fontStyle: 'italic'}}>{typeVal}</div>}
-            </div>
-            {showFilters && <Filter {...{cname:name, onFilter, filterInfo, tbl_id}}/>}
-        </div>
+        <Sheet variant='plain' sx={sx}>
+            <Stack width={1} height={1} {...centerIt}>
+                <Tooltip title={cdesc} sx={{maxWidth:'20em'}}>
+                    <Stack width={1} height={1} {...centerIt} className={clickable} onClick={onClick}>
+                        <Stack direction='row' {...centerIt}>
+                            <Stack textOverflow='ellipsis' overflow='hidden'>
+                                <HeaderText val={label || name} level='title-sm' color={color}/>
+                            </Stack>
+                            <SortSymbol sortDir={sortDir}/>
+                        </Stack>
+                        { showUnits && <HeaderText val={unitsVal}/> }
+                        { showTypes && <HeaderText val={typeVal}/> }
+                    </Stack>
+                </Tooltip>
+                {showFilters && (<Filter {...{cname:name, onFilter, filterInfo, tbl_id}}/>)}
+            </Stack>
+        </Sheet>
     );
 });
+
+export function HeaderText({val, level='body-sm', sx, ...rest}) {
+    return (
+        <Typography component='div' level={level} {...rest}
+                    sx={{lineHeight:1.2, height:'1.2em', whiteSpace:'nowrap', ...sx}}>
+            {val || ''}
+        </Typography>
+    );
+}
 
 const blurEnter = ['blur','enter'];
 
 function Filter({cname, onFilter, filterInfo, tbl_id}) {
 
-    const colGetter= () => getColumn(getTblById((tbl_id)), cname);
+    const colGetter= () => getColumn(getTblById((tbl_id)), cname) ?? {};
+    const col = useStoreConnector(colGetter);
+    const [showTooltip, setShowTooltip] = useState(true);
+    const dropdownEl = useRef(null);
 
-    const enumArrowEl = useRef(null);
-    const [col={}] = useStoreConnector(colGetter);
+    useEffect(() => {
+        dropdownEl.current?.focus();
+    }, [dropdownEl.current]);
 
     const validator = useCallback((cond) => {
         return FilterInfo.conditionValidator(cond, tbl_id, cname);
@@ -94,26 +138,30 @@ function Filter({cname, onFilter, filterInfo, tbl_id}) {
     if (!filterable) return <div style={{height:19}} />;      // column is not filterable
 
     const filterInfoCls = FilterInfo.parse(filterInfo);
-    const content =  <EnumSelect {...{col, tbl_id, filterInfo, filterInfoCls, onFilter}} />;
-    const onEnumClicked = () => {
-        showDropDown({id: tblDropDownId(tbl_id), content, atElRef: enumArrowEl.current, locDir: 33, style: {marginLeft: -10},
-            wrapperStyle: {zIndex: 110}}); // 110 is the z-index of a dropdown
-    };
+
+    const endDecorator = enumVals && (
+        <DropDown onFocusChange={(v) => setShowTooltip(!v)}     // only show input tooltip when dropdown is not active
+                  slotProps={{button: {sx: {mr: -1}}}}
+                  title='Filter to a subset of values in this column'
+        >
+            <EnumSelect {...{col, tbl_id, filterInfo, filterInfoCls, onFilter}} />
+        </DropDown>
+    );
 
     return (
-        <div style={{height:29, display: 'inline-flex', alignItems: 'center', width: '100%'}}>
-            <InputField
-                validator={validator}
-                fieldKey={name}
-                tooltip={FILTER_CONDITION_TTIPS}
-                value={filterInfoCls.getFilter(name)}
-                onChange={onFilter}
-                actOn={blurEnter}
-                showWarning={false}
-                style={filterStyle}
-                wrapperStyle={filterStyle}/>
-            {enumVals && <div ref={enumArrowEl} className='arrow-down clickable' onClick={onEnumClicked} style={{borderWidth: 6, borderRadius: 2}}/>}
-        </div>
+        <InputField
+            validator={validator}
+            fieldKey={name}
+            sx={{width: 1, '--Input-radius': ''}}
+            tooltip={showTooltip && FILTER_CONDITION_TTIPS}
+            value={filterInfoCls.getFilter(name)}
+            onChange={onFilter}
+            actOn={blurEnter}
+            showWarning={false}
+            slotProps={{
+                input: {size:'sm', endDecorator }
+            }}
+        />
     );
 }
 
@@ -121,12 +169,15 @@ function EnumSelect({col, tbl_id, filterInfoCls, onFilter}) {
     const {name, enumVals} = col || {};
     const groupKey = 'TableRenderer_enum';
     const fieldKey = tbl_id + '-' + name;
-    const options = enumVals.split(',')
-                        .map( (s) => {
-                            const value = s === '' ? '%EMPTY' : s;                  // because CheckboxGroupInputField does not support '' as an option, use '%EMPTY' as substitute
-                            const label = value === NULL_TOKEN ? '<NULL>' : value === '%EMPTY' ? '<EMPTY_STR>' : value;
-                            return {label, value};
-                        } );
+    const options = splitVals(enumVals)                             // split by comma(,) ignoring those in single-quotes
+        .map( (s) => {
+            const value = s === '' ? '%EMPTY' : s;                  // because CheckboxGroupInputField does not support '' as an option, use '%EMPTY' as substitute
+            let label = value;
+            if (value === NULL_TOKEN)       label = isOfType(col.type, COL_TYPE.BOOL) ? 'false' : '<NULL>';  // handle null value
+            else if (value === '%EMPTY')    label = '<EMPTY_STR>';                                           // handle empty string
+            label = label.replace(/^'(.*)'$/, '$1');     // remove enclosed quotes if any
+            return {label, value};
+        } );
     let value;
     const filterBy = (filterInfoCls.getFilter(name) || '').match(/IN \((.+)\)/i);
     if (filterBy) {
@@ -137,98 +188,67 @@ function EnumSelect({col, tbl_id, filterInfoCls, onFilter}) {
                            .join(',');
     }
 
-    const hideEnumSelect = () => hideDropDown(tblDropDownId(tbl_id));
     const onClear = () => {
         dispatchValueChange({fieldKey, groupKey, value: '', valid: true});
     };
     const onApply = () => {
         let value = getFieldVal(groupKey, fieldKey);
         if (value) {
-            value = value.split(',').map((s) => s === '%EMPTY' ? '' : s).join();           // convert %EMPTY back into ''
+            value = splitVals(value).map((s) => s === '%EMPTY' ? '' : s).join();           // convert %EMPTY back into ''
             if (isColumnType(col, COL_TYPE.TEXT)) {
-                value = value.split(',').map((s) => `'${s.trim()}'`).join(',');
+                value = splitVals(value).map((s) => s.startsWith("'") ? s :`'${s.trim()}'`).join(',');
             }
             value = `IN (${value})`;
         }
         onFilter({fieldKey: name, valid: true, value});
-        hideEnumSelect();
     };
 
     return (
-        <FieldGroup groupKey='TableRenderer_enum' style={{minWidth: 100}}>
-            <div style={{display: 'inline-flex', marginBottom: 5, width: '100%', justifyContent: 'space-between'}}>
-                <div className='ff-href' style={{marginLeft: 3, fontSize: 13}} onClick={onApply} title='Apply selected filter'>filter</div>
-                <div className='ff-href' style={{marginLeft: 3, fontSize: 13}} onClick={onClear} title='Clear selection'>clear</div>
-                <div className='btn-close' onClick={hideEnumSelect} style={{margin: -2, fontSize: 12}}/>
-            </div>
-            <CheckboxGroupInputField {...{fieldKey, alignment: 'vertical', options, initialState:{value}}}/>
-        </FieldGroup>
+        <Sheet sx={{minWidth:'10em'}}>
+            <FieldGroup groupKey='TableRenderer_enum'>
+                <Stack spacing={2} px={2}>
+                    <Chip onClick={onClear} title='Clear selection'>clear</Chip>
+                    <CheckboxGroupInputField slotProps={{ input: {size: 'sm'} }} {...{fieldKey, alignment: 'vertical', options, initialState:{value}}}/>
+                    <Stack direction='row' flexGrow={1}>
+                        <Button color='primary' variant='solid' size='sm' onClick={onApply} title='Apply selected filter'>Apply</Button>
+                    </Stack>
+                </Stack>
+            </FieldGroup>
+        </Sheet>
     );
 }
 
-export class SelectableHeader extends PureComponent {
-    constructor(props) {
-        super(props);
-    }
-
-    // componentDidUpdate(prevProps, prevState) {
-    //     deepDiff({props: prevProps, state: prevState},
-    //         {props: this.props, state: this.state},
-    //         this.constructor.name);
-    // }
-    //
-    render() {
-        const {checked, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected, style} = this.props;
-        return (
-            <div style={{padding: 0, ...style}} className='TablePanel__header'>
-                <input type='checkbox'
-                       tabIndex={-1}
-                       checked={checked}
-                       onChange={(e) => onSelectAll(e.target.checked)}/>
-                {showUnits && <div/>}
-                {showTypes && <div/>}
-                {showFilters && <img className='clickable'
-                                     style={{marginBottom: 3}}
-                                     src={FILTER_SELECTED_ICO}
-                                     onClick={onFilterSelected}
-                                     title='Filter on selected rows'/>}
-            </div>
-        );
-    }
+export function SelectableHeader ({checked, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected, sx}) {
+    return (
+        <Stack alignItems='center' height={1} justifyContent='space-between' py='2px' sx={sx}>
+            <Checkbox size='sm'
+                tabIndex={-1}
+                checked={checked}
+                onChange={(e) => onSelectAll(e.target.checked)}/>
+            {/*{showUnits && <Box height='1em'/>}*/}
+            {/*{showTypes && <Box height='1em'/>}*/}
+            {showFilters && <FilterButton  iconButtonSize='28px'
+                                 onClick={onFilterSelected}
+                                 tip='Filter on selected rows'/>}
+        </Stack>
+    );
 }
 
-export class SelectableCell extends Component {
-    constructor(props) {
-        super(props);
-    }
 
-    shouldComponentUpdate(nProps) {
-        const toCompare = ['rowIndex', 'selectInfoCls'];
-        return !isEqual(pick(nProps, toCompare), pick(this.props, toCompare));
-    }
-
-    // componentDidUpdate(prevProps, prevState) {
-    //     deepDiff({props: prevProps, state: prevState},
-    //         {props: this.props, state: this.state},
-    //         this.constructor.displayName);
-    // }
-    //
-    render() {
-        const {rowIndex, selectInfoCls, onRowSelect, style} = this.props;
-        return (
-            <div style={style} className='TablePanel__checkbox'>
-                <input type='checkbox'
-                       tabIndex={-1}
-                       checked={selectInfoCls.isSelected(rowIndex)}
-                       onChange={(e) => onRowSelect(e.target.checked, rowIndex)}/>
-            </div>
-        );
-    }
+export function SelectableCell ({rowIndex, selectInfoCls, onRowSelect, sx={}}) {
+    return (
+        <Stack alignItems='center' justifyContent='center' height={1} sx={sx}>
+            <Checkbox size='sm' mt='1x' mb='1px'
+                      tabIndex={-1}
+                      checked={selectInfoCls.isSelected(rowIndex)}
+                      onChange={(e) => onRowSelect(e.target.checked, rowIndex)}/>
+        </Stack>
+    );
 }
 
 /*---------------------------- CELL RENDERERS ----------------------------*/
 
-/**
+/*
  * returns cell related attributes for display {col, value, rvalues, text, isArray, textAlign, absRowIdx}
  * @returns {{col, value, rvalues, text, isArray, textAlign, absRowIdx, tableModel}}
  */
@@ -282,61 +302,74 @@ export function makeDefaultRenderer(col={}) {
     return renderer;
 }
 
+export function ContentEllipsis({children, text, textAlign, sx, actions=[]}) {
+
+    const [showActions, setShowActions] = useState(false);
+    const [dropdown, setDropdown] = useState(false);
+    const contentEl = useRef(null);
+
+    const checkOverflow = (ev) => {
+        const w = ev?.currentTarget;
+        setShowActions(w?.clientWidth < contentEl?.current?.scrollWidth-4);  // account for paddings
+    };
+
+    return (
+        <Stack direction='row'  overflow='hidden' whiteSpace='nowrap' alignItems='center' justifyContent={textAlign} sx={sx}
+               onMouseEnter={checkOverflow} onMouseLeave={() => setShowActions(false)}
+        >
+            <Stack ref={contentEl}>{children}</Stack>
+            { (showActions || dropdown) &&
+                <ActionDropdown {...{text, actions, onChange: (v)=> setDropdown(v) | setShowActions(v)}}/>
+            }
+        </Stack>
+    );
+}
+
+function ActionDropdown({text, actions, onChange}) {
+    const popupID = 'actions--popup';
+    const copyCB = () => {
+        copyToClipboard(text);
+    };
+    const viewAsText = () => {
+        DialogRootContainer.defineDialog(popupID, <ViewAsText text={text}/>);
+        dispatchShowDialog(popupID);
+    };
+    return (
+        <DropDown button={<MoreHorizIcon/>} onOpenChange={onChange} useIconButton={false}
+                  slotProps={{
+                      button: {
+                          variant:'soft',
+                          size:'sm',
+                          sx:{position: 'absolute', right:0, paddingInline:'.25em'}
+                  }}}
+        >
+            <MenuItem onClick={copyCB}>Copy to clipboard</MenuItem>
+            <MenuItem onClick={viewAsText}>View full text</MenuItem>
+            {actions?.map((text, action) => <MenuItem onClick={action}>{text}</MenuItem>)}
+        </DropDown>
+    );
+};
+
+
 
 /**
  * A wrapper tag that handles default styles, textAlign, and actions.
  */
 export const CellWrapper =  React.memo( (props) => {
     const {tbl_id, startIdx, CellRenderer, style, columnKey, col, rowIndex, data, height, width} = props;
-    const dropDownID = 'actions--dropdown';
-    const popupID = 'actions--popup';
 
-    const [hasActions, setHasActions] = useState(false);
-    const actionsEl = useRef(null);
     const cellInfo = getCellInfo({columnKey, col, rowIndex, data, tbl_id, startIdx});
     const {textAlign, text} = cellInfo;
 
-    const onActionsClicked = (ev) => {
-        ev.stopPropagation();
-        showDropDown({id: dropDownID, content: dropDown, atElRef: actionsEl.current, locDir: 33, style: {marginLeft: -10},
-            wrapperStyle: {zIndex: 110}}); // 110 is the z-index of a dropdown
-    };
-
-    const copyCB = () => {
-        copyToClipboard(text);
-        hideDropDown(dropDownID);
-    };
-
-    const viewAsText = () => {
-        DialogRootContainer.defineDialog(popupID, <ViewAsText text={text}/>);
-        dispatchShowDialog(popupID);
-        hideDropDown(dropDownID);
-    };
-
-    const dropDown =  (
-        <div className='Actions__dropdown'>
-            <div className='Actions__item' onClick={copyCB}>Copy to clipboard</div>
-            <div className='Actions__item' onClick={viewAsText}>View as plain text</div>
-        </div>
+    const content = <CellRenderer {...omit(props, 'Content')} cellInfo={cellInfo}/>;
+    const contentWithWrapper = (
+        <Stack alignItems={textAlign} justifyContent='center' whiteSpace='nowrap' height={1} width={1}>
+            {content}
+        </Stack>
     );
-    const lineHeight = height - 6 + 'px';  // 6 is the top/bottom padding.
 
-    const checkOverflow = (ev) => {
-        if (CellRenderer.allowActions) {
-            const c = ev?.currentTarget?.children?.[0] || {};
-            setHasActions(c.clientWidth < c.scrollWidth-6);  // account for paddings
-        }
-    };
+    return CellRenderer?.allowActions ? <ContentEllipsis sx={{height:1, width:1}} {...{textAlign, text}}>{content}</ContentEllipsis> : contentWithWrapper;
 
-    return (
-        <div onMouseEnter={checkOverflow}
-             onMouseLeave={() => setHasActions(false)} style={{display: 'flex', height: '100%'}}>
-            <div style={{textAlign, lineHeight, ...style}} className='public_fixedDataTableCell_cellContent'>
-                <CellRenderer {...omit(props, 'Content')} cellInfo={cellInfo}/>
-            </div>
-            {hasActions && <div ref={actionsEl} className='Actions__anchor clickable' onClick={onActionsClicked} title='Display full cell contents'>&#x25cf;&#x25cf;&#x25cf;</div>}
-        </div>
-    );
 }, skipCellRender);
 
 function skipCellRender(prev={}, next={}) {
@@ -349,7 +382,7 @@ function skipCellRender(prev={}, next={}) {
 
 
 function ViewAsText({text, ...rest}) {
-    const [doFmt, setDoFmt] = useState(false);
+    const [doFmt, setDoFmt] = useState(true);
 
     const onChange = (e) => {
         setDoFmt(e.target.checked);
@@ -361,14 +394,18 @@ function ViewAsText({text, ...rest}) {
         } catch (e) {}      // if text is not JSON, just show as is.
     }
 
+    const content = doFmt && html_regex.test(text) ? <div dangerouslySetInnerHTML={{__html: text}}/> : <Typography whiteSpace='pre'>{text}</Typography>;
+
     const label = 'View with formatting';
     return (
-        <PopupPanel title={'View as plain text'} style={{flexDirection: 'column'}} {...rest}>
+        <PopupPanel title={'View full text'} sx={{flexDirection: 'column'}} {...rest}>
             <div style={{display: 'flex', alignItems: 'center'}}>
-                <input id='doFormat' type = 'checkbox' title = {label} onChange = {onChange}/>
+                <input id='doFormat' type='checkbox' title={label} onChange={onChange} checked={doFmt}/>
                 <label htmlFor='doFormat' style={{verticalAlign: ''}}>{label}</label>
             </div>
-            <textarea readOnly className='Actions__popup' value={text} style={{width: 650, height: 125}}/>
+            <Sheet variant='outlined' sx={{resize:'both', overflow:'auto', minWidth:'30em', minHeight:'15em', maxWidth:'90vw', maxHeight:'90vh', p:1}} >
+                {content}
+            </Sheet>
         </PopupPanel>
 
     );
@@ -377,6 +414,9 @@ function ViewAsText({text, ...rest}) {
 /**
  * @see {@link http://www.ivoa.net/documents/VOTable/20130920/REC-VOTable-1.3-20130920.html#ToC54}
  * LinkCell is implementing A.4 using link substitution based on A.1
+ * Adding custom vocabularies to content-role:
+ * content-role may contain more than one value. Values are separated by semicolon.
+ *   encode:values =>  apply encodeURIComponent to all the resolved values.
  */
 export const LinkCell = React.memo(({cellInfo, style, ...rest}) => {
     const {absRowIdx, col, textAlign, rvalues, tableModel} = cellInfo || getCellInfo(rest);
@@ -386,10 +426,10 @@ export const LinkCell = React.memo(({cellInfo, style, ...rest}) => {
             <div style={{textAlign, overflow: 'visible'}}>
             {
                 col.links.map( (link={}, idx) => {
-                    const {href, title, action} = link;
+                    const {href, title, action, role=''} = link;
                     const target = action || '_blank';
                     const rvalue = rvalues[idx];
-                    const rhref = applyLinkSub(tableModel, href, absRowIdx, rvalue);
+                    const rhref = applyLinkSub(tableModel, href, absRowIdx, rvalue, role.includes('encode:values'));
                     if (!rhref) return '';
                     mstyle = idx > 0 ? {marginLeft: 3, ...mstyle} : mstyle;
                     return (<ATag key={'ATag_' + idx} href={rhref}
@@ -417,18 +457,18 @@ export const createLinkCell = ({hrefColIdx, value}) => {
 
     return ({rowIndex, data, colIdx, height, width, columnKey}) => {
         hrefColIdx = hrefColIdx || colIdx;
-        const href = get(data, [rowIndex, hrefColIdx], 'undef');
-        const val = value || get(data, [rowIndex, colIdx], 'undef');
-        if (href === 'undef' || href === '#') {
+        const href = get(data, [rowIndex, hrefColIdx], '#');
+        const val = value || get(data, [rowIndex, colIdx], '#');
+        if (href && href !== '#') {
             return (
                 <Cell {...{rowIndex, height, width, columnKey}}>
-                    {val}
+                    <Link target='_blank' href={href}>{val}</Link>
                 </Cell>
             );
         } else {
             return (
                 <Cell {...{rowIndex, height, width, columnKey}}>
-                    <a target='_blank' href={href}>{val}</a>
+                    {val}
                 </Cell>
             );
         }
@@ -459,18 +499,20 @@ export const createInputCell = (tooltips, size = 10, validator, onChange, style)
             return null;
         } else {
             return (
-                <div style={{padding: '0 2px 0 2px', marginTop:'-2px'}}>
+                <Box px={1/4}>
                     <InputField
                         key={rowIndex + '-' +colIdx}
                         validator={(v) => validator(v, data, rowIndex, colIdx)}
+                        sx={{'.MuiInput-root':{'minHeight':'3px', 'borderRadius':4}}}
                         tooltip={tooltips}
                         size={size}
                         style={style}
                         value={val}
                         onChange={(v) => changeHandler(rowIndex, data, colIdx, v) }
                         actOn={['blur','enter']}
+                        showWarning={false}
                     />
-                </div>
+                </Box>
             );
         }
     };
@@ -480,7 +522,7 @@ export const createInputCell = (tooltips, size = 10, validator, onChange, style)
  * an input field renderer that update tableModel.
  * @param p
  * @param p.tbl_id
- * @param p.col         the column for this render
+ * @param p.cname         the column for this render
  * @param p.tooltips
  * @param p.style
  * @param p.isReadOnly  a function returning true if this row is read only
@@ -488,7 +530,7 @@ export const createInputCell = (tooltips, size = 10, validator, onChange, style)
  * @param p.onChange
  * @returns {Function}
  */
-export const inputColumnRenderer = ({tbl_id, cname, tooltips, style={}, isReadOnly, validator, onChange}) => {
+export const inputColumnRenderer = ({tbl_id, cname, tooltips, style={}, isReadOnly, validator, onChange, ...props}) => {
 
     return ({rowIndex, data, colIdx}) => {
         const val = get(data, [rowIndex, colIdx]);
@@ -496,9 +538,10 @@ export const inputColumnRenderer = ({tbl_id, cname, tooltips, style={}, isReadOn
             return <div style={{width: '100%', height: '100%', ...style}}>{val}</div>;
         } else {
             return (
-                <div style={{...style}}>
+                <Box {...props}>
                     <InputField
                         key={rowIndex + '-' +colIdx}
+                        sx={{'.MuiInput-root':{'minHeight':'3px', 'borderRadius':4}}}
                         validator={ validator && ((v) => validator(v, data, rowIndex, colIdx))}
                         tooltip={tooltips}
                         style={{width: '100%', boxSizing: 'border-box', ...style}}
@@ -506,7 +549,7 @@ export const inputColumnRenderer = ({tbl_id, cname, tooltips, style={}, isReadOn
                         onChange={makeChangeHandler(rowIndex, data, colIdx, tbl_id, cname, validator, onChange)}
                         actOn={['blur','enter']}
                     />
-                </div>
+                </Box>
             );
         }
     };
@@ -517,15 +560,15 @@ export const inputColumnRenderer = ({tbl_id, cname, tooltips, style={}, isReadOn
  * a checkbox renderer that update tableModel.
  * @param p
  * @param p.tbl_id
- * @param p.col         the column for this render
+ * @param p.cname       the column name of this renderer
  * @param p.tooltips
- * @param p.style
+ * @param p.sx
  * @param p.isReadOnly  a function returning true if this row is read only
  * @param p.validator   a validator function used to validate the input
  * @param p.onChange
  * @returns {Function}
  */
-export const checkboxColumnRenderer = ({tbl_id, cname, tooltips, style={}, isReadOnly, validator, onChange}) => {
+export const checkboxColumnRenderer = ({tbl_id, cname, tooltips, sx={}, isReadOnly, validator, onChange}) => {
 
     return ({rowIndex, data, colIdx}) => {
         const val = get(data, [rowIndex, colIdx]);
@@ -533,13 +576,13 @@ export const checkboxColumnRenderer = ({tbl_id, cname, tooltips, style={}, isRea
         const changeHandler = makeChangeHandler(rowIndex, data, colIdx, tbl_id, cname, validator, onChange);
 
         return (
-            <div className='TablePanel__checkbox' style={style}>
+            <Stack height={1} alignItems='center' justifyContent='center' style={sx}>
                 <input type = 'checkbox'
                        disabled = {disabled}
                        title = {tooltips}
                        onChange = {(e) => changeHandler({valid: true, value: e.target.checked})}
                        checked = {val}/>
-            </div>
+            </Stack>
         );
     };
 };
@@ -623,10 +666,10 @@ export const NumberRange = React.memo(({cellInfo, base, upper, lower, style={}, 
 
     if (upperVal && lowerVal) {
         delta = (
-            <div className='CellRenderer__numrange'>
+            <Stack justifyContent='center' lineHeight='normal'>
                 <div style={ustyle}>+{upperVal}</div>
                 <div style={lstyle}>-{lowerVal}</div>
-            </div>
+            </Stack>
         );
     }
 
@@ -691,15 +734,31 @@ export const ATag = React.memo(({cellInfo, label, title, href, target, style={},
 
     if (imgStubKey) {
         label = imageStubMap[imgStubKey] || <img data-src={imgStubKey}/>;   // if a src is given but, not found.. show bad img.
+    } else {
+        label = html_regex.test(label) ? <div dangerouslySetInnerHTML={{__html: label}}/> : label;
     }
-
-    return <a {...{title, href, target, style}}> {label} </a>;
+    href = encodeUrlString(href);
+    return href ? <Link {...{title, href, target, style}}> {label} </Link> : '';
 });
 
 export const TextCell = React.memo(({cellInfo, text, ...rest}) => {
     const {absRowIdx, tableModel, value, text:fmtVal} = cellInfo || getCellInfo(rest);
     text  = applyTokenSub(tableModel, text, absRowIdx, fmtVal);
-    return (text?.search && text.search(html_regex) >= 0) ? <div dangerouslySetInnerHTML={{__html: text}}/> : text;
+    return html_regex.test(text) ? <div dangerouslySetInnerHTML={{__html: text}}/> : text;
+});
+
+export const ColorSwatch = React.memo(({cellInfo, text, size, ...rest}) => {
+    const {value} = cellInfo || getCellInfo(rest);
+    if (!value) return <div/>;
+              // must use style (not sx): {backgroundColor: value}, sx will get overridden.
+    return (
+        <Stack direction='column' alignItems='center'>
+            <Box {...{
+                width:size, height:size, border:'1px solid transparent', borderRadius:3,
+                style: {backgroundColor: value}
+            }}/>
+        </Stack>
+    );
 });
 
 /**
@@ -731,7 +790,8 @@ export const RendererXRef = {
     NumberRange,
     CoordCell,
     ImageCell,
-    ATag
+    ATag,
+    ColorSwatch
 };
 
 
@@ -746,7 +806,7 @@ const parseStyles = (styles='') =>  {
         .split(';')
         .filter((style) => style.split(':')[0] && style.split(':')[1])
         .map((style) => [
-            style.split(':')[0].trim().replace(/^-ms-/, 'ms-').replace(/-./g, c => c.substr(1).toUpperCase()),
+            style.split(':')[0].trim().replace(/^-ms-/, 'ms-').replace(/-./g, (c) => c.substr(1).toUpperCase()),
             style.split(':').slice(1).join(':').trim()
         ])
         .reduce((styleObj, style) => ({
@@ -755,3 +815,24 @@ const parseStyles = (styles='') =>  {
         }), {});
     // some
 };
+
+
+export function getPxWidth({text, fontSize, fontWeight}) {
+    const div = document.createElement('div');
+
+    // Set the style if given
+    if (fontSize)   div.style.fontSize = fontSize + 'px';
+    if (fontWeight) div.style.fontWeight = fontWeight + '';
+    div.style.fontFamily = 'var(--joy-fontFamily-body)';
+    div.textContent = text;
+
+    // Hide the element so it doesn't affect the layout
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+
+    document.body.appendChild(div);
+    const width = div.getBoundingClientRect().width;
+    document.body.removeChild(div);
+
+    return width;
+}

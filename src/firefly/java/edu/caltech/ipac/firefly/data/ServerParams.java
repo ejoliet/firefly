@@ -2,12 +2,6 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 package edu.caltech.ipac.firefly.data;
-/**
- * User: roby
- * Date: 2/7/12
- * Time: 10:14 AM
- */
-
 
 /**
  * @author Trey Roby
@@ -31,11 +25,18 @@ public class ServerParams {
     public static final String FULL_SCREEN = "fullScreen";
     public static final String IMAGE_PT1 = "ImagePt1";
     public static final String FILE_AND_HEADER = "fah";
+    public static final String WPT = "wpt";
     public static final String PT = "pt";
     public static final String PT1 = "pt1";
     public static final String PT2 = "pt2";
     public static final String PT3 = "pt3";
     public static final String PT4 = "pt4";
+    public static final String PTARY = "ptAry";
+    public static final String WPT_ARY = "wptAry";
+    public static final String WL_ARY = "wlAry";
+    public static final String FLUX_UNIT= "fluxUnit";
+    public static final String WL_UNIT= "wlUnit";
+    public static final String PLANE = "plane";
     public static final String CRO_MULTI_ALL = "cropMultiAll";
     public static final String STRETCH_DATA = "stretchData";
     public static final String BAND = "band";
@@ -98,22 +99,26 @@ public class ServerParams {
     public static final String ALL = "all";
     public static final String CDS = "cds";
     public static final String HIPS_SOURCES = "hipsSources";
+    public static final String HIPS_LIST_SOURCE= "hipsListSource";
+    public static final String HIPS_LIST_SOURCE_NAME= "hipsListSourceName";
+    public static final String ENSURE_SOURCE= "ensureSource";
+    public static final String ADHOC_SOURCE = "adhocSource";
     public static final String HIPS_DATATYPES = "hipsDataTypes";
     public static final String HIPS_MERGE_PRIORITY = "mergedListPriority";
+    public static final String HIPS_TABLE_TYPE= "hipsTableType";
     public static final String CUBE = "cube";
     public static final String CATALOG = "catalog";
+    public static final String RADIX = "radix";
 
     public static final String GEOSHAPE = "shape";
     public static final String ROTATION = "rotation";
+    public static final String NAIFID_FORMAT = "naifIdFormat";
 
     // commands
     public static final String FILE_FLUX = "CmdFileFlux";
     public static final String FILE_FLUX_JSON = "CmdFileFluxJson";
     public static final String CREATE_PLOT = "CmdCreatePlot";
     public static final String CREATE_PLOT_GROUP = "CmdCreatePlotGroup";
-    public static final String ZOOM = "CmdZoom";
-    public static final String STRETCH = "CmdStretch";
-    public static final String CHANGE_COLOR = "CmdChangeColor";
     public static final String FLIP_Y = "CmdFlipY";
     public static final String HISTOGRAM = "CmdHistogram";
     public static final String CROP = "CmdCrop";
@@ -124,20 +129,21 @@ public class ServerParams {
     public static final String JSON_DATA = "JsonData";
     public static final String RESOLVE_NAME= "CmdResolveName";
     public static final String RESOLVE_NAIFID = "CmdResolveNaifid";
-    public static final String SUB_BACKGROUND_SEARCH= "subBackgroundSearch";
-    public static final String GET_STATUS= "status";
+    public static final String TABLE_SEARCH_SPATIAL_BINARY = "TableSearchSpatialBinary";
+
+
+    // Background Job related
+    public static final String JOB_ID= "jobId";
     public static final String ADD_JOB = "addBgJob";
     public static final String REMOVE_JOB = "removeBgJob";
     public static final String CANCEL= "cancel";
-    public static final String CLEAN_UP= "cleanup";
-    public static final String DOWNLOAD_PROGRESS= "downloadProgress";
     public static final String SET_EMAIL= "setEmail";
-    public static final String SET_ATTR= "setAttribute";
-    public static final String GET_EMAIL= "getEmail";
     public static final String RESEND_EMAIL= "resendEmail";
-    public static final String CLEAR_PUSH_ENTRY= "clearPushEntry";
-    public static final String REPORT_USER_ACTION= "reportUserAction";
     public static final String CREATE_DOWNLOAD_SCRIPT= "createDownoadScript";
+    public static final String UWS_JOB_INFO= "uwsJobInfo";
+
+    public static final String GET_CAPABILITIES= "getCapabilities";
+    public static final String REPORT_USER_ACTION= "reportUserAction";
     public static final String DS9_REGION= "ds9Region";
     public static final String SAVE_DS9_REGION= "saveDS9Region";
     public static final String ADD_SAVED_REQUEST= "addSavedRequest";
@@ -148,6 +154,7 @@ public class ServerParams {
     public static final String CLIENT_ROT_ANGLE= "clientRotAngle";
     public static final String CLIENT_FlIP_Y= "clientFlipY";
     public static final String ACTION= "action";
+    public static final String PROP= "prop";
 
     public static final String VIS_PUSH_ALIVE_CHECK= "pushAliveCheck";
     public static final String VIS_PUSH_ALIVE_COUNT= "pushAliveCount";
@@ -155,6 +162,7 @@ public class ServerParams {
     public static final String GET_IMAGE_MASTER_DATA= "getImageMasterData";
     public static final String GET_FLOAT_DATA= "getFloatData";
     public static final String GET_BYTE_DATA= "getStretchedByteData";
+    public static final String FITS_EXTRACTION= "fitsExtraction";
 
     public static final String USER_TARGET_WORLD_PT = "UserTargetWorldPt";
 
@@ -164,11 +172,23 @@ public class ServerParams {
     public static final String SELECTED_VALUES = "selectedValues";
     public static final String TABLE_SAVE = "tableSave";
     public static final String UPLOAD = "upload";
-    public static final String JSON_SEARCH = "jsonSearch";
+    public static final String ADD_OR_UPDATE_COLUMN = "addOrUpdateColumn";
+    public static final String DELETE_COLUMN = "deleteColumn";
 
     public static final String INIT_APP = "CmdInitApp";
+    public static final String JSON_PROPERTY= "CmdJsonProperty";
     public static final String LOGOUT = "CmdLogout";
     public static final String TILE_SIZE = "tileSize";
+    public static final String DATA_COMPRESS = "dataCompress";
+    public static final String POINT_SIZE= "pointSize";
+    public static final String POINT_SIZE_X= "pointSizeX";
+    public static final String POINT_SIZE_Y= "pointSizeY";
+    public static final String COMBINE_OP= "combineOp";
+    public static final String AXIS= "axis";
+    public static final String EXTRACTION_TYPE= "extractionType";
+    public static final String EXTRACTION_FLOAT_SIZE= "extractionFloatSize";
+    public static final String HDU_NUM= "hduNum";
+    public static final String RELATED_HDUS= "relatedHDUs";
     public static final String BACK_TO_URL= "backToUrl";
     public static final String MASK_DATA= "maskData";
     public static final String MASK_BITS= "maskBits";

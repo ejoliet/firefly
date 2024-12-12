@@ -6,21 +6,23 @@ package edu.caltech.ipac.firefly.server.network;
 
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.security.SsoAdapter;
-import edu.caltech.ipac.util.StringUtils;
-import org.apache.commons.codec.digest.DigestUtils;
 
 import java.io.File;
+import java.io.Serializable;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
+
+import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
  * Date: 5/23/17
  *
  * @version $Id: $
  */
-public class HttpServiceInput implements Cloneable{
+public class HttpServiceInput implements Cloneable, Serializable {
     private String requestUrl;
     private Map<String, String> params;
     private Map<String, String> headers;
@@ -64,7 +66,7 @@ public class HttpServiceInput implements Cloneable{
         return params;
     }
     public HttpServiceInput setParam(String key, String value) {
-        if (StringUtils.isEmpty(key)) return this;
+        if (isEmpty(key)) return this;
         if (params == null) params = new HashMap<>();
         params.put(key, value);
         return this;
@@ -74,7 +76,7 @@ public class HttpServiceInput implements Cloneable{
         return headers;
     }
     public HttpServiceInput setHeader(String key, String value) {
-        if (StringUtils.isEmpty(key)) return this;
+        if (isEmpty(key)) return this;
         if (headers == null) headers = new HashMap<>();
         headers.put(key, value);
         return this;
@@ -84,7 +86,7 @@ public class HttpServiceInput implements Cloneable{
         return cookies;
     }
     public HttpServiceInput setCookie(String key, String value) {
-        if (StringUtils.isEmpty(key)) return this;
+        if (isEmpty(key)) return this;
         if (cookies == null) cookies = new HashMap<>();
         cookies.put(key, value);
         return this;
@@ -94,7 +96,7 @@ public class HttpServiceInput implements Cloneable{
         return files;
     }
     public HttpServiceInput setFile(String key, File value) {
-        if (StringUtils.isEmpty(key)) return this;
+        if (isEmpty(key)) return this;
         if (files == null) files = new HashMap<>();
         files.put(key, value);
         return this;
@@ -151,32 +153,53 @@ public class HttpServiceInput implements Cloneable{
         }
     }
 
+    /**
+     * @return this HttpServiceInput with necessary credentials added
+     */
+    public HttpServiceInput applyCredential() {
+        SsoAdapter ssoAdapter = ServerContext.getRequestOwner().getSsoAdapter();
+        if (ssoAdapter != null) {
+            ssoAdapter.setAuthCredential(this);
+        }
+        return this;
+    }
+
 //====================================================================
 //  convenience functions
 //====================================================================
 
-    /**
-     * returns an HttpServiceInput that contains the required credential to access backend services.
-     * This credential information is based on the implementer of SsoAdapter.
-     * @return
-     */
+    @Deprecated     // does not make sense because credential should only be passed to a known backend service(url)
     public static HttpServiceInput createWithCredential() {
         return createWithCredential(null);
     }
 
     /**
-     * return an HttpServiceInput with the requestUrl that may contains credential needed to access backend services.
-     * The given requestUrl is used to determine whether or not to include the credential in the call.
-     * @param requestUrl
+     * returns an HttpServiceInput that contains the required credential to access the given backend service.
+     * This credential information is based on the implementer of SsoAdapter.
+     * @param requestUrl  URL to access
      * @return
      */
     public static HttpServiceInput createWithCredential(String requestUrl) {
-        HttpServiceInput input = new HttpServiceInput(requestUrl);
-        SsoAdapter ssoAdapter = ServerContext.getRequestOwner().getSsoAdapter();
-        if (ssoAdapter != null) {
-            ssoAdapter.setAuthCredential(input);
+        return new HttpServiceInput(requestUrl).applyCredential();
+    }
+
+    public String getUniqueKey() {
+        String key = isEmpty(requestUrl) ? "" : requestUrl;
+        String args = ( params  == null ? "" : toKeyString(params) ) +
+                    ( headers == null ? ""   : toKeyString(headers) ) +
+                    ( cookies == null ? ""   : toKeyString(cookies) ) +
+                    ( files == null ? ""     : toKeyString(files) ) +
+                    ( isEmpty(userId) ? "" : userId) +
+                    ( isEmpty(passwd) ? "" : passwd);
+        try {
+            return key + (isEmpty(args) ? "" : new String(MessageDigest.getInstance("MD5").digest(args.getBytes())));
+        } catch (NoSuchAlgorithmException e) {
+            return key + args;
         }
-        return input;
+    }
+
+    private static String toKeyString(Map<String,?> map ) {
+        return map.entrySet().stream().map((ent) -> ent.getKey()+"="+ent.getValue()).collect(Collectors.joining("|"));
     }
 
 }

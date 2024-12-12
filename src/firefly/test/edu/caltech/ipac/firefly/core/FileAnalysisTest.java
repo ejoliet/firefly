@@ -9,6 +9,7 @@ import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.server.util.StopWatch;
 import edu.caltech.ipac.firefly.util.FileLoader;
 import edu.caltech.ipac.table.DataGroup;
+import org.apache.logging.log4j.Level;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -17,6 +18,7 @@ import org.junit.experimental.categories.Category;
 import java.io.File;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
 /**
@@ -120,7 +122,7 @@ public class FileAnalysisTest extends ConfigTest {
         assertEquals(csvTable.length(), report.getFileSize());
         assertEquals(1, report.getParts().size());
         assertEquals(FileAnalysisReport.Type.Table, report.getParts().get(0).getType());
-        assertEquals("CSVFormat (6 cols x 1000 rows)", report.getParts().get(0).getDesc());
+        assertEquals("CSV (6 cols x 1000 rows)", report.getParts().get(0).getDesc());
 
         // files with multiple parts
         // --------------------------------------------------------------------------------------------
@@ -140,7 +142,7 @@ public class FileAnalysisTest extends ConfigTest {
         assertEquals(11, report.getParts().size());
         assertEquals(FileAnalysisReport.Type.HeaderOnly, report.getParts().get(0).getType());
         assertNull(report.getParts().get(0).getDesc());
-        assertNull(report.getParts().get(1).getDesc());
+        assertNotNull(report.getParts().get(1).getDesc());
 
         assertEquals(FileAnalysisReport.Type.Table, report.getParts().get(4).getType());
         assertEquals(" 7 cols x 12 rows ", report.getParts().get(4).getDesc());
@@ -159,8 +161,8 @@ public class FileAnalysisTest extends ConfigTest {
         assertEquals(62, report.getParts().size());
         assertEquals(FileAnalysisReport.Type.HeaderOnly, report.getParts().get(0).getType());
         assertNull(report.getParts().get(0).getDesc());
-        assertNull(report.getParts().get(1).getDesc());
-        assertNull(report.getParts().get(61).getDesc());
+        assertNotNull(report.getParts().get(1).getDesc());
+        assertNotNull(report.getParts().get(61).getDesc());
     }
 
     @Test
@@ -212,8 +214,8 @@ public class FileAnalysisTest extends ConfigTest {
         report= FileAnalysis.analyze(multiVoTable, reportType);
         details = report.getParts().get(0).getDetails();        // first of 826 parts
         // test params
-        assertEquals("J2000.0", details.getParam("Equinox").getValue());
-        assertEquals("Equatorial", details.getParam("CoordSystem").getValue());
+        assertEquals("J2000.0", details.getParam("Equinox").getStringValue());
+        assertEquals("Equatorial", details.getParam("CoordSystem").getStringValue());
         // test column info
         assertEquals(17, details.size());       // number of columns
         assertEquals("Object Name", details.getData("name", 1));       // Object Name column info
@@ -243,7 +245,8 @@ public class FileAnalysisTest extends ConfigTest {
     @Test
     public void perfTest() throws Exception {
 
-        StopWatch.getInstance().start("perfTestMidSize").enable().setLogger(Logger.getLogger("console"));
+        Logger.setLogLevel(Level.TRACE, "edu.caltech");     // exclude numerous nom.tam warnings
+        StopWatch.getInstance().start("perfTestMidSize");
         for(int i=0; i < 10; i++) {
             StopWatch.getInstance().start("voTable");
             FileAnalysis.analyze(voTable, FileAnalysisReport.ReportType.Details);

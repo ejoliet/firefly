@@ -3,10 +3,12 @@
  */
 
 import {isEmpty, difference,get, flatten, values, uniq} from 'lodash';
-import {primePlot, getPlotViewIdListInOverlayGroup, getPlotViewById, operateOnOthersInOverlayColorGroup} from './PlotViewUtil.js';
+import { primePlot, getPlotViewIdListInOverlayGroup, getPlotViewById, operateOnOthersInOverlayColorGroup} from './PlotViewUtil.js';
 import {WPConst} from './WebPlotRequest.js';
 import {RDConst} from './WebPlot.js';
-import {visRoot, dispatchPlotMask, dispatchOverlayPlotChangeAttributes, dispatchPlotMaskLazyLoad} from './ImagePlotCntlr.js';
+import {
+    visRoot, dispatchPlotMask, dispatchPlotMaskLazyLoad, dispatchChangeImageVisibility
+} from './ImagePlotCntlr.js';
 import {dispatchCreateDrawLayer, dispatchAttachLayerToPlot} from './DrawLayerCntlr.js';
 import Artifact from '../drawingLayers/Artifact.js';
 
@@ -69,7 +71,20 @@ function unactivatedDataTypeMatches(r,idx, pv) {
         const opvAry= pv.overlayPlotViews.filter((opv) => opv.relatedDataId===r.relatedDataId);
         if (!opvAry.length) return true;
         const maskNumberAry= values(r.availableMask);
-        if (maskNumberAry.length!==opvAry.length) return true;
+
+        const maskDataWidth= opvAry.find( (opv) => opv?.plot?.dataWidth)?.plot?.dataWidth;
+        const maskDataHeight= opvAry.find( (opv) => opv?.plot?.dataHeight)?.plot?.dataHeight;
+
+        if (maskDataHeight && maskDataHeight) {
+            if (maskNumberAry.length!==opvAry.length ||
+                maskDataWidth !== primePlot(pv)?.dataWidth ||
+                maskDataHeight !== primePlot(pv)?.dataHeight) {
+                return true;
+            }
+        }
+        else if (maskNumberAry.length!==opvAry.length) {
+            return true;
+        }
     }
     else if (dataType===RDConst.TABLE) {
         return false;
@@ -89,7 +104,10 @@ function unactivatedDataTypeMatches(r,idx, pv) {
 export function operateOnOverlayPlotViewsThatMatch(vr, opv, func) {
     const opvList= flatten(getPlotViewIdListInOverlayGroup(vr, opv.plotId)
         .map( (id) => getPlotViewById(vr,id).overlayPlotViews))
-        .filter( (aOpv) => get(aOpv,'title')===opv.title);
+        .filter( (aOpv) =>
+            aOpv?.title===opv.title &&
+            aOpv?.plot?.dataWidth===opv?.plot?.dataWidth &&
+            aOpv?.plot?.dataHeight===opv?.plot?.dataHeight);
 
     opvList.forEach( (aOpv) => func(aOpv));
 }
@@ -101,7 +119,7 @@ export function operateOnOverlayPlotViewsThatMatch(vr, opv, func) {
  */
 export function setMaskVisible(opv, visible) {
     if (!visible || opv.plot) {
-        dispatchOverlayPlotChangeAttributes({plotId:opv.plotId, imageOverlayId:opv.imageOverlayId, attributes:{visible}});
+        dispatchChangeImageVisibility({plotId:opv.plotId, imageOverlayId:opv.imageOverlayId,visible});
     }
     else if (visible && opv.lazyLoadPayload) {
         dispatchPlotMaskLazyLoad(opv.lazyLoadPayload);
@@ -113,7 +131,7 @@ export function setMaskVisible(opv, visible) {
 /**
  * Do processing to turn this related data into a drawing layer
  * @param {VisRoot}  vr
- * @param {PlotView} pv
+ * @param {PlotView|undefined} pv
  * @param {RelatedData} relatedData
  */
 export function enableRelatedDataLayer(vr, pv, relatedData) {
@@ -143,18 +161,17 @@ function enableRelatedDataLayerMaskInGroup(vr, pv,relatedData) {
 
 
 function enableRelatedDataLayerMask(pv, relatedData) {
-    const hdu= relatedData.searchParams[WPConst.MULTI_IMAGE_IDX];
+    const imageNumber= relatedData.searchParams[WPConst.MULTI_IMAGE_IDX];
     const fileKey= relatedData.searchParams[WPConst.FILE];
 
 
     const availMaskValues= values(relatedData.availableMask).map( (v) => Number(v));
-    const activeMaskValues= pv.overlayPlotViews.map( (opv) => Number(opv.maskNumber));
 
-    difference(availMaskValues,activeMaskValues)
+    availMaskValues
         .sort( (v1,v2) => v1-v2)
         .forEach(  (v) =>
             {
-                addMaskLayer(pv, v, hdu, fileKey, relatedData);
+                addMaskLayer(pv, v, imageNumber, fileKey, relatedData);
             }
         );
 
@@ -164,7 +181,7 @@ function enableRelatedDataLayerMask(pv, relatedData) {
 const maskIdRoot= 'AUTO_LOADED_MASK';
 let maskCnt= 0;
 
-function addMaskLayer(pv, maskNumber, hdu, fileKey, relatedData) {
+function addMaskLayer(pv, maskNumber, imageNumber, fileKey, relatedData) {
 
     const {relatedDataId}= relatedData;
 
@@ -173,7 +190,7 @@ function addMaskLayer(pv, maskNumber, hdu, fileKey, relatedData) {
     dispatchPlotMask({plotId:pv.plotId,
         imageOverlayId:`${pv.plotId}-${maskIdRoot}_#${maskNumber}_${maskCnt}`,
         fileKey, maskNumber, maskValue:Math.pow(2,Number(maskNumber)),
-        uiCanAugmentTitle:false, imageNumber:hdu, title,
+        uiCanAugmentTitle:false, imageNumber, title,
         relatedDataId, lazyLoad:true});
     maskCnt++;
 }
@@ -185,6 +202,7 @@ function makeMaskTitle(maskNumber, availableMask) {
         .find( (k) => parseInt(availableMask[k])===maskNumber);
     if (maskDesc) {
         if (maskDesc.startsWith('HIERARCH')) maskDesc= maskDesc.substring(9);
+        if (maskDesc.startsWith('MP_')) maskDesc= maskDesc.substring(3);
         return `${titleRoot} - ${maskDesc}`;
     }
     else {
@@ -213,7 +231,7 @@ function enableRelatedDataLayerTableOverlay(pv, relatedData) {
  * search matchOverlayPlotViews array and find any related data in the passed PlotView. Enable the layers
  * that match.
  * This function has side effect of dispatching actions
- * @param {PlotView} pv the plot view the contains the related data
+ * @param {PlotView|undefined} pv the plot view the contains the related data
  * @param {OverlayPlotView[]} matchOverlayPlotViews array of OverlayPlotView that must be matched
  */
 export function enableMatchingRelatedData(pv, matchOverlayPlotViews) {

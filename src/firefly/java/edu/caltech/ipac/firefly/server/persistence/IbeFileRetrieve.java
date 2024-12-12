@@ -15,12 +15,12 @@ import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.data.RelatedData;
 import edu.caltech.ipac.firefly.data.ServerRequest;
 import edu.caltech.ipac.firefly.server.ServerContext;
-import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
 import edu.caltech.ipac.firefly.server.query.BaseFileInfoProcessor;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
 import edu.caltech.ipac.firefly.server.query.ParamDoc;
 import edu.caltech.ipac.firefly.server.query.SearchProcessorImpl;
 import edu.caltech.ipac.firefly.server.query.ibe.IbeQueryArtifact;
+import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.visualize.plot.WorldPt;
 
 import java.io.File;
@@ -56,7 +56,7 @@ public class IbeFileRetrieve extends BaseFileInfoProcessor {
                 return ofile;
             }
         } catch (Exception e) {
-            throw new DataAccessException(e.getMessage(), e);
+            throw new DataAccessException("Failed to retrieve the requested file", e);
         }
     }
 
@@ -64,12 +64,21 @@ public class IbeFileRetrieve extends BaseFileInfoProcessor {
         String mission = r.getParam(MISSION);
         WorldPt wp= getWorldPtFromCenterParam(r.getParam("center"));
         String subsize= r.getParam("subsize");
-        if (wp==null || mission==null || subsize==null) return null;
-
+        if ( mission==null ) return null;
         switch (mission.toLowerCase()) {
             case "wise":
-                return IbeQueryArtifact.getWiseRelatedData(wp, subsize,r.getParam("band"));
+                String scanId = r.getParam("scan_id");
+                String frameNum = r.getParam("frame_num");
+                String coaddId = r.getParam("coadd_id");
+                if (wp!=null && subsize!=null) {
+                    return IbeQueryArtifact.getWiseRelatedData(wp, subsize, r.getParam("band"));
+                } else if (scanId !=null) {
+                    return IbeQueryArtifact.getWiseScanIdRelatedData(scanId, r.getParam("band"), frameNum);
+                } else if (coaddId !=null) {
+                    return IbeQueryArtifact.getWiseCoaddIdRelatedData(coaddId, r.getParam("band"));
+                }
             case "2mass":
+                if (wp==null || subsize==null) return null;
                 return IbeQueryArtifact.get2MassRelatedData(wp, subsize);
             default:
                 return null;
@@ -86,7 +95,7 @@ public class IbeFileRetrieve extends BaseFileInfoProcessor {
     protected File makeOutputFile(IbeDataParam params) throws IOException {
         String fname = params.getFileName();
         if (fname.contains(".tbl")) {
-            return File.createTempFile("IbeFileRetrieve-", "-" + fname, ServerContext.getTempWorkDir());
+            return File.createTempFile("IbeFileRetrieve-", "-" + fname, QueryUtil.getTempDir(null));
         } else {
             ;
             return File.createTempFile(fname + "-", "", ServerContext.getVisCacheDir());

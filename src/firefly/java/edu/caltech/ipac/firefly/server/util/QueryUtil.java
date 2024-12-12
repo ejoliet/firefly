@@ -8,11 +8,10 @@ import edu.caltech.ipac.astro.net.TargetNetwork;
 import edu.caltech.ipac.astro.target.IpacTableTargetsParser;
 import edu.caltech.ipac.astro.target.TargetFixedSingle;
 import edu.caltech.ipac.firefly.core.EndUserException;
-import edu.caltech.ipac.firefly.core.background.BackgroundStatus;
-import edu.caltech.ipac.firefly.core.background.PackageProgress;
 import edu.caltech.ipac.firefly.data.CatalogRequest;
 import edu.caltech.ipac.firefly.data.DecimateInfo;
 import edu.caltech.ipac.firefly.data.DownloadRequest;
+import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.data.Param;
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.ServerRequest;
@@ -20,6 +19,7 @@ import edu.caltech.ipac.firefly.data.SortInfo;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.data.table.SelectionInfo;
 import edu.caltech.ipac.firefly.server.ServerContext;
+import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
 import edu.caltech.ipac.table.DataGroup;
 import edu.caltech.ipac.table.DataObject;
@@ -28,13 +28,19 @@ import edu.caltech.ipac.table.IpacTableUtil;
 import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.table.TableMeta;
 import edu.caltech.ipac.table.TableUtil;
+import edu.caltech.ipac.table.io.VoTableReader;
 import edu.caltech.ipac.table.query.DataGroupQuery;
 import edu.caltech.ipac.table.query.DataGroupQueryStatement;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.CollectionUtil;
 import edu.caltech.ipac.util.DataObjectUtil;
+import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.StringUtils;
+import edu.caltech.ipac.util.cache.CacheManager;
+import edu.caltech.ipac.util.cache.StringKey;
 import edu.caltech.ipac.util.decimate.DecimateKey;
+import edu.caltech.ipac.util.download.FailedRequestException;
+import edu.caltech.ipac.util.download.URLDownload;
 import edu.caltech.ipac.visualize.plot.WorldPt;
 import org.apache.commons.httpclient.URIException;
 import org.apache.commons.httpclient.util.URIUtil;
@@ -44,22 +50,23 @@ import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static edu.caltech.ipac.firefly.core.background.BackgroundStatus.ACTIVE_REQUEST_CNT;
-import static edu.caltech.ipac.firefly.core.background.BackgroundStatus.ITEMS;
-import static edu.caltech.ipac.firefly.core.background.BackgroundStatus.MESSAGE_CNT;
-import static edu.caltech.ipac.firefly.core.background.BackgroundStatus.PACKAGE_CNT;
-import static edu.caltech.ipac.firefly.core.background.BackgroundStatus.RESPONSE_CNT;
-import static edu.caltech.ipac.firefly.core.background.BackgroundStatus.TOTAL_BYTES;
+import static edu.caltech.ipac.firefly.data.TableServerRequest.FF_SESSION_ID;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_ID;
+import static edu.caltech.ipac.firefly.visualize.WebPlotRequest.URL_CHECK_FOR_NEWER;
+import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
  * Date: Jul 14, 2008
@@ -71,12 +78,12 @@ public class QueryUtil {
     public static final Logger.LoggerImpl LOGGER = Logger.getLogger();
     public static final String SEARCH_REQUEST = "searchRequest";
 
-    private static final int DECI_DEF_MAX_POINTS = AppProperties.getIntProperty("decimation.def.max.points", 100000);
+    public static final int DECI_DEF_MAX_POINTS = AppProperties.getIntProperty("decimation.def.max.points", 100000);
     public static final int DECI_ENABLE_SIZE = AppProperties.getIntProperty("decimation.enable.size", 5000);
 
     public static String makeUrlBase(String url) {
 
-        if (StringUtils.isEmpty(url)) return "";
+        if (isEmpty(url)) return "";
 
         if (url.toLowerCase().startsWith("http"))
             return url;
@@ -85,24 +92,139 @@ public class QueryUtil {
         }
     }
 
+    public static File getTempDir() {
+        return getTempDir(null);
+    }
+
     /**
      * returns a hierarchical temporary directory.
      * @return
      */
-    public static File getTempDir() {
-        String sessId = ServerContext.getRequestOwner().getRequestAgent().getSessId();
-        File tempDir = new File(ServerContext.getTempWorkDir(), sessId.substring(0, 3));
+    public static File getTempDir(TableServerRequest tsr) {
+        File rootDir = tsr == null || tsr.getJobId() == null ? ServerContext.getTempWorkDir() : ServerContext.getPermWorkDir();
+        File tempDir = new File(rootDir, getSessPrefix(tsr));
         if (!tempDir.exists()) tempDir.mkdirs();
         return tempDir;
     }
 
+    /**
+     * returns a hierarchical temporary directory.
+     * @return
+     */
+    public static File getTempDir(ServerRequest req) {
+        File tempDir = new File(ServerContext.getTempWorkDir(), getSessPrefix(req));
+        if (!tempDir.exists()) tempDir.mkdirs();
+        return tempDir;
+    }
 
+    private static String getSessPrefix(ServerRequest req) {
+        String sessId = ServerContext.getRequestOwner().getRequestAgent().getSessId();
+        if (req != null && req.getParam(FF_SESSION_ID) != null) {
+            sessId = Math.abs(req.getParam(FF_SESSION_ID).hashCode()) + "";
+        }
+        return sessId.substring(0, 3);
+    }
+
+
+    /**
+     * resolve the file given a 'source' string.  it could be a local path, or a url.
+     * if it's a url, download it into the application's workarea
+     * @param source source file
+     * @param request table request
+     * @return file
+     */
+    public static File resolveFileFromSource(String source,TableServerRequest request) throws DataAccessException {
+        if (source == null) return null;
+        try {
+            URL url = makeUrl(source);
+            if (url == null) {
+                // file path based source
+                File f = ServerContext.convertToFile(source);
+                if (f == null) return null;
+                if (!f.canRead()) throw new SecurityException("Access is not permitted.");
+
+                return f;
+            } else {
+                boolean checkForUpdates = request.getBooleanParam(URL_CHECK_FOR_NEWER, true);
+                HttpServiceInput inputs = HttpServiceInput.createWithCredential(url.toString());
+                StringKey key = new StringKey(inputs.getUniqueKey());
+                File res  = (File) CacheManager.getCache().get(key);
+                String ext = FileUtil.getExtension(url.getPath().replaceFirst("^.*/", ""));
+                ext = isEmpty(ext) ? ".ul" : "." + ext;
+                File nFile = File.createTempFile(request.getRequestId(), ext, QueryUtil.getTempDir(request));
+
+                if (res == null) {
+                    FileInfo finfo = URLDownload.getDataToFile(url, nFile, inputs.getCookies(), inputs.getHeaders(),
+                            URLDownload.Options.defWithRedirect());
+                    checkForFailures(finfo);
+                    res = nFile;
+                    CacheManager.getCache().put(key, res);
+                } else if (checkForUpdates) {
+                    FileUtil.writeStringToFile(nFile, "workaround");
+                    nFile.setLastModified(res.lastModified());
+                    URLDownload.Options ops= URLDownload.Options.modifiedOp(false);
+                    FileInfo finfo = URLDownload.getDataToFile(url, nFile, inputs.getCookies(), inputs.getHeaders(), ops);
+                    if (finfo.getResponseCode() != HttpURLConnection.HTTP_NOT_MODIFIED) {
+                        checkForFailures(finfo);
+                        res = nFile;
+                        CacheManager.getCache().put(key, res);
+                    }
+                }
+                return res;
+            }
+        } catch (FailedRequestException ex) {
+            throw new DataAccessException(combineErrorMsg(ex.getMessage(), ex.getDetailMessage()));
+        } catch (Exception ex) {
+            throw new DataAccessException(ex.getMessage());
+        }
+    }
+
+    public static String combineErrorMsg(String main, String cause) {
+        cause = cause == null ? "" : cause;
+        return isEmpty(main) ? cause : main + (cause.isEmpty() ? "" : ":" + cause);
+    }
+
+    private static URL makeUrl(String source) {
+        try {
+            return new URL(source);
+        } catch (MalformedURLException e) {
+            return null;
+        }
+    }
+
+    private static void checkForFailures(FileInfo finfo) throws FailedRequestException {
+        if (finfo.getResponseCode() < 200 || finfo.getResponseCode() > 300) {
+            String error = "Request failed with status %s %s".formatted(finfo.getResponseCode(), finfo.getResponseCodeMsg());
+            String details = getErrorFromContent(finfo.getFile());
+            throw new FailedRequestException(error, details);
+        }
+    }
+
+    private static String getErrorFromContent(File file) {
+        if (file == null || !file.canRead()) return null;
+        try {
+            String content = FileUtil.readFile(file);
+            // replace this logic with mimetype detection once 'enhanced detection PR merged'.
+            String msg = content;       // assume it's text/plain
+            String forDetection = content.trim().toLowerCase().replaceAll("\\s", "");
+            if (forDetection.contains("</votable>")) {  // try votable
+                try {
+                    msg = VoTableReader.getError(new FileInputStream(file), "n/a");
+                } catch (Exception ignored) {}
+            } else if (forDetection.contains("</html>")) {  // it's html; don't use it
+                msg = null;
+            } else if (forDetection.startsWith("{")) {  // could be json.  ignore for now
+                msg = null;
+            }
+            return msg;
+        } catch (Exception ignored) { return null;}
+    };
 
     public static DownloadRequest convertToDownloadRequest(String dlReqStr, String searchReqStr, String selInfoStr) {
         DownloadRequest retval = new DownloadRequest(convertToServerRequest(searchReqStr), null, null);
         retval.setSelectionInfo(SelectionInfo.parse(selInfoStr));
 
-        if (!StringUtils.isEmpty(dlReqStr)) {
+        if (!isEmpty(dlReqStr)) {
             try {
                 JSONObject jsonReq = (JSONObject) new JSONParser().parse(dlReqStr);
                 for (Object key : jsonReq.keySet()) {
@@ -124,7 +246,7 @@ public class QueryUtil {
      */
     public static TableServerRequest convertToServerRequest(String searchReqStr) {
         TableServerRequest retval = new TableServerRequest();
-        if (!StringUtils.isEmpty(searchReqStr)) {
+        if (!isEmpty(searchReqStr)) {
             try {
                 JSONObject jsonReq = (JSONObject) new JSONParser().parse(searchReqStr);
                 for (Object key : jsonReq.keySet()) {
@@ -159,49 +281,6 @@ public class QueryUtil {
         }
 
         return retval;
-    }
-
-    public static BackgroundStatus convertToBackgroundStatus(String jsonBgStatus) {
-        BackgroundStatus retval = new BackgroundStatus();
-        if (!StringUtils.isEmpty(jsonBgStatus)) {
-            try {
-                JSONObject jsonReq = (JSONObject) new JSONParser().parse(jsonBgStatus);
-                for (Object key : jsonReq.keySet()) {
-                    String skey = String.valueOf(key);
-                    Object val = jsonReq.get(key);
-                    if (val != null) {
-                        if (skey.equals(BackgroundStatus.ITEMS.substring(0, BackgroundStatus.ITEMS.length()-1))) {
-                            parseBgItems(retval, val.toString());
-                        } else {
-                            retval.setParam(skey, val.toString());
-                        }
-                    }
-                }
-            } catch (ParseException e) {
-                LOGGER.error(e);
-            }
-        }
-        return retval;
-    }
-
-    public static JSONObject convertToJsonObject(BackgroundStatus bgStat) {
-        List<String> intParams = Arrays.asList(MESSAGE_CNT, PACKAGE_CNT, TOTAL_BYTES, RESPONSE_CNT, ACTIVE_REQUEST_CNT);
-
-        JSONObject rval = new JSONObject();
-        Map<String, String> params = bgStat.getParams();
-        if (params != null && params.size() > 0) {
-            for(Map.Entry<String,String> p :  Collections.unmodifiableSet(params.entrySet())) {
-                String key = p.getKey();
-                Object val = p.getValue();
-                if (key.startsWith(ITEMS)) {
-                    val = convertToJsonObject(PackageProgress.parse(p.getValue()));
-                } else if (intParams.contains(key)) {
-                    val = bgStat.getIntParam(key);
-                }
-                rval.put(key, val);
-            }
-        }
-        return rval;
     }
 
     public static JSONArray toJsonArray(List values) {
@@ -247,33 +326,6 @@ public class QueryUtil {
         return jObj;
     }
 
-    public static JSONObject convertToJsonObject(PackageProgress progress) {
-        JSONObject rval = new JSONObject();
-        rval.put("totalFiles", progress.getTotalFiles());
-        rval.put("totalBytes", progress.getTotalByes());
-        rval.put("processedFiles", progress.getProcessedFiles());
-        rval.put("processedBytes", progress.getProcessedBytes());
-        rval.put("finalCompressedBytes", progress.getFinalCompressedBytes());
-        rval.put("url", progress.getURL());
-        return rval;
-    }
-
-    private static void parseBgItems(BackgroundStatus retval, String val) throws ParseException {
-        JSONArray items = (JSONArray) new JSONParser().parse(val);
-        for (int i = 0; i < items.size(); i++) {
-            JSONObject item = (JSONObject) items.get(i);
-            PackageProgress pp = new PackageProgress(
-                    getInt(item.get("totalFiles")),
-                    getInt(item.get("processedFiles")),
-                    getLong(item.get("totalBytes")),
-                    getLong(item.get("processedBytes")),
-                    getLong(item.get("finalCompressedBytes")),
-                    String.valueOf(item.get("url"))
-                );
-            retval.setParam(BackgroundStatus.ITEMS+i, pp.serialize());
-        }
-    }
-
     public static String encode(String s) {
         if (s == null) return "";
         try {
@@ -286,7 +338,7 @@ public class QueryUtil {
     public static String encodeUrl(String url, List<Param> params) {
         String qStr = params == null ? "" : "?" +
                       params.stream()
-                              .filter(p -> !StringUtils.isEmpty(p.getName()))
+                              .filter(p -> !isEmpty(p.getName()))
                               .map(p -> p.getName() + "=" + encode(p.getValue()))
                               .collect(Collectors.joining("&"));
         return url + qStr;
@@ -489,13 +541,10 @@ public class QueryUtil {
                 }
             }
 
+        } catch (FileNotFoundException e) {
+            throw new DataAccessException.FileNotFound("Upload file not found", ufile);
         } catch (Exception e) {
-            String msg = e.getMessage();
-            if (msg==null) msg=e.getCause().getMessage();
-            if (msg==null) msg="";
-            throw new DataAccessException(
-                    new EndUserException("Exception while parsing the uploaded file: <br><i>" + msg + "</i>" ,
-                               e.getMessage(), e) );
+            throw new DataAccessException("Unable to parse uploaded file", e);
         }
         return targets;
     }
@@ -573,13 +622,10 @@ public class QueryUtil {
                 newdg.add(nrow);
             }
             return newdg;
+        } catch (FileNotFoundException e) {
+            throw new DataAccessException.FileNotFound("Upload file not found", ufile);
         } catch (Exception e) {
-            String msg = e.getMessage();
-            if (msg==null) msg=e.getCause().getMessage();
-            if (msg==null) msg="";
-            throw new DataAccessException(
-                    new EndUserException("Exception while parsing the uploaded file: <br><i>" + msg + "</i>" ,
-                            e.getMessage(), e) );
+            throw new DataAccessException("Unable to parse uploaded file", e);
         }
     }
 
@@ -589,6 +635,15 @@ public class QueryUtil {
 
     public static DataAccessException createEndUserException(String msg, String details) {
         return new DataAccessException(new EndUserException(msg, details) );
+    }
+
+    /**
+     * Add double quotes around the str if it does not contain quotes
+     * @param str the string to apply
+     * @return a new string
+     */
+    public static String quotes(String str) {
+        return str.contains("\"") ? str : "\"" + str + "\"";
     }
 
     /**
@@ -615,8 +670,6 @@ public class QueryUtil {
             throw new DataAccessException("Same column is used for decimation.");
         }
 
-        int maxPoints = decimateInfo.getMaxPoints() == 0 ? DECI_DEF_MAX_POINTS : decimateInfo.getMaxPoints();
-
         int deciEnableSize = decimateInfo.getDeciEnableSize() > -1 ? decimateInfo.getDeciEnableSize() : DECI_ENABLE_SIZE;
         boolean doDecimation = dg.size() >= deciEnableSize;
 
@@ -635,7 +688,7 @@ public class QueryUtil {
         columns[2] = new DataType("rowidx", Integer.class); // need it to tie highlighted and selected to table
         if (doDecimation) {
             columns[3] = new DataType("weight", Integer.class);
-            columns[4] = new DataType(DecimateKey.DECIMATE_KEY, String.class);
+            columns[4] = new DataType("dkey", String.class);
         }
         Class xColClass = columns[0].getDataType();
         Class yColClass = columns[1].getDataType();
@@ -660,7 +713,7 @@ public class QueryUtil {
             double xval = xValGetter.getValue(row);
             double yval = yValGetter.getValue(row);
 
-            if (Double.isNaN(xval) || Double.isNaN(yval)) {
+            if (Double.isNaN(xval) || Double.isNaN(yval) || Double.isInfinite(xval) || Double.isInfinite(yval)) {
                 outRows--;
                 continue;
             }
@@ -736,22 +789,7 @@ public class QueryUtil {
 
                 java.util.Date startTime = new java.util.Date();
 
-                // determine the number of cells on each axis
-                int nXs = (int)Math.sqrt(maxPoints * decimateInfo.getXyRatio());  // number of cells on the x-axis
-                int nYs = (int)Math.sqrt(maxPoints/decimateInfo.getXyRatio());  // number of cells on the x-axis
-
-                double xUnit = (xMax - xMin)/nXs;        // the x size of a cell
-                double yUnit = (yMax - yMin)/nYs;        // the y size of a cell
-
-                // case when min and max values are the same
-                if (xUnit == 0) xUnit = Math.abs(xMin) > 0 ? Math.abs(xMin) : 1;
-                if (yUnit == 0) yUnit = Math.abs(yMin) > 0 ? Math.abs(yMin) : 1;
-
-                // increase cell size a bit to include max values into grid
-                xUnit += xUnit/1000.0/nXs;
-                yUnit += yUnit/1000.0/nYs;
-
-                DecimateKey decimateKey = new DecimateKey(xMin, yMin, nXs, nYs, xUnit, yUnit);
+                DecimateKey decimateKey = getDecimateKey(decimateInfo, xMax, xMin, yMax, yMin);
 
                 HashMap<String, SamplePoint> samples = new HashMap<>();
                 // decimating the data now....
@@ -803,17 +841,7 @@ public class QueryUtil {
                     retval.add(row);
                 }
                 String decimateInfoStr = decimateInfo.toString();
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG,
-                        decimateInfoStr.substring(DecimateInfo.DECIMATE_TAG.length() + 1));
-                decimateKey.setCols(decimateInfo.getxColumnName(), decimateInfo.getyColumnName());
-                retval.addAttribute(DecimateKey.DECIMATE_KEY,
-                        decimateKey.toString());
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG + ".X-UNIT", String.valueOf(xUnit));
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG + ".Y-UNIT", String.valueOf(yUnit));
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG + ".WEIGHT-MIN", String.valueOf(minWeight));
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG + ".WEIGHT-MAX", String.valueOf(maxWeight));
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG + ".XBINS", String.valueOf(nXs));
-                retval.addAttribute(DecimateInfo.DECIMATE_TAG + ".YBINS", String.valueOf(nYs));
+                insertDecimateInfo(retval, decimateInfo, decimateKey, minWeight, maxWeight);
 
                 java.util.Date endTime = new java.util.Date();
                 Logger.briefInfo(decimateInfoStr + " - took "+(endTime.getTime()-startTime.getTime())+"ms");
@@ -821,6 +849,44 @@ public class QueryUtil {
         }
 
         return retval;
+    }
+
+    public static void insertDecimateInfo(DataGroup dg, DecimateInfo decimateInfo, DecimateKey decimateKey, long minWeight, long maxWeight) {
+        String decimateInfoStr = decimateInfo.toString();
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG,
+                decimateInfoStr.substring(DecimateInfo.DECIMATE_TAG.length() + 1));
+//                decimateKey.setCols(decimateInfo.getxColumnName(), decimateInfo.getyColumnName());
+        dg.addAttribute(DecimateKey.DECIMATE_KEY,
+                decimateKey.toString());
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG + ".X-UNIT", String.valueOf(decimateKey.getXUnit()));
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG + ".Y-UNIT", String.valueOf(decimateKey.getYUnit()));
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG + ".WEIGHT-MIN", String.valueOf(minWeight));
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG + ".WEIGHT-MAX", String.valueOf(maxWeight));
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG + ".XBINS", String.valueOf(decimateKey.getNX()));
+        dg.addAttribute(DecimateInfo.DECIMATE_TAG + ".YBINS", String.valueOf(decimateKey.getNY()));
+    }
+
+    public static DecimateKey getDecimateKey(DecimateInfo decimateInfo, double xMax, double xMin, double yMax, double yMin) {
+
+        int maxPoints = decimateInfo.getMaxPoints() == 0 ? DECI_DEF_MAX_POINTS : decimateInfo.getMaxPoints();
+        // determine the number of cells on each axis
+        int nXs = (int)Math.sqrt(maxPoints * decimateInfo.getXyRatio());  // number of cells on the x-axis
+        int nYs = (int)Math.sqrt(maxPoints/decimateInfo.getXyRatio());  // number of cells on the x-axis
+
+        double xUnit = (xMax - xMin)/nXs;        // the x size of a cell
+        double yUnit = (yMax - yMin)/nYs;        // the y size of a cell
+
+        // case when min and max values are the same
+        if (xUnit == 0) xUnit = Math.abs(xMin) > 0 ? Math.abs(xMin) : 1;
+        if (yUnit == 0) yUnit = Math.abs(yMin) > 0 ? Math.abs(yMin) : 1;
+
+        // increase cell size a bit to include max values into grid
+        xUnit += xUnit/1000.0/nXs;
+        yUnit += yUnit/1000.0/nYs;
+
+        DecimateKey decimateKey = new DecimateKey(xMin, yMin, nXs, nYs, xUnit, yUnit);
+        decimateKey.setCols(decimateInfo.getxColumnName(), decimateInfo.getyColumnName());
+        return decimateKey;
     }
 
     private static int getFirstSigDigitPos(double num) {
@@ -886,7 +952,7 @@ public class QueryUtil {
     }
 
     private static Map<String, String> encodedStringToMap(String str) {
-        if (StringUtils.isEmpty(str)) return null;
+        if (isEmpty(str)) return null;
         HashMap<String, String> map = new HashMap<String, String>();
         for (String entry : str.split("&")) {
             String[] kv = entry.split("=", 2);

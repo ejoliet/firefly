@@ -90,8 +90,9 @@
                             radius: 300
                         });
                 } else if (source === "byUrl") {
-                    request = firefly.util.table.makeFileRequest(null, a.url.value, null,
-                        {META_INFO: {CENTER_COLUMN: 'crval1;crval2;EQJ2000'}});
+                    const procId = a.procId.value || 'IpacTableFromSource';
+                        request = firefly.util.table.makeTblRequest(procId, null, {source: a.url.value},
+                            {META_INFO: {CENTER_COLUMN: 'crval1;crval2;EQJ2000'}});
                 } else {
                     request = firefly.util.table.makeIrsaWorkspaceRequest(a.fromWS.value);
                 }
@@ -168,6 +169,12 @@
                 <textarea name="options" rows="5" cols="70" placeholder='{"pageSize": 100}'></textarea>
             </div>
 
+            <div class="input-field">
+                <label> Use ProcID</label>
+                <input name="procId" placeholder='to override IpacTableFromSource'></input>
+            </div>
+
+
         </form>
         <div class="input-field" style="flex-direction: row">
             <button style="width: 100px" onclick="showTable()">Show Table</button>
@@ -207,9 +214,9 @@ There are additional information specific to each input field.  Click the top bu
 @prop {boolean} [expandable=true]
 @prop {boolean} [removable=true]  true if this table can be removed from view.
 @prop {boolean} [border=true]
-@prop {boolean} [showUnits=true]
+@prop {boolean} [showUnits]
 @prop {boolean} [allowUnits=true] enable/disable the use of units in a table.
-@prop {boolean} [showFilters=false]
+@prop {boolean} [showFilters]     defaults to true for all tables except client tables
 @prop {boolean} [showToolbar=true]
 @prop {boolean} [showTitle=true]
 @prop {boolean} [showToggleTextView=true]
@@ -217,9 +224,11 @@ There are additional information specific to each input field.  Click the top bu
 @prop {boolean} [showSave=true]
 @prop {boolean} [showOptionButton=true]
 @prop {boolean} [showFilterButton=true]
-@prop {boolean} [showInfoButton=false]
+@prop {boolean} [showInfoButton=true]
+@prop {boolean} [showPropertySheetButton]  uses firefly.options.table.propertySheet if not given.
 @prop {function[]}  [leftButtons]   an array of functions that returns a button-like component laid out on the left side of this table header.
 @prop {function[]}  [rightButtons]  an array of functions that returns a button-like component laid out on the right side of this table header.
+@prop {boolean} [showHeader=true]  true if this table can show header row
                 </pre>
             </div>
 

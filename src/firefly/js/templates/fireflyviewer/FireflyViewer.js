@@ -3,28 +3,32 @@
  */
 
 
-import React, {PureComponent} from 'react';
+import React, {useEffect} from 'react';
 import PropTypes from 'prop-types';
-import {pickBy} from 'lodash';
+import {cloneDeep} from 'lodash/lang.js';
 
-import {flux} from '../../core/ReduxFlux.js';
-import {getMenu, isAppReady, dispatchSetMenu,
-    dispatchOnAppReady, dispatchNotifyRemoteAppReady} from '../../core/AppDataCntlr.js';
-import {LO_VIEW, getLayouInfo, SHOW_DROPDOWN} from '../../core/LayoutCntlr.js';
+import {
+    dispatchSetMenu,
+    dispatchOnAppReady, dispatchNotifyRemoteAppReady, getAppOptions,
+} from '../../core/AppDataCntlr.js';
+import {LO_VIEW, getLayouInfo} from '../../core/LayoutCntlr.js';
+import {AppConfigDrawer} from '../../ui/AppConfigDrawer.jsx';
+import {getActiveRowToImageDef} from '../../visualize/saga/ActiveRowToImageWatcher.js';
+import {getCatalogWatcherDef} from '../../visualize/saga/CatalogWatcher.js';
+import {getMocWatcherDef} from '../../visualize/saga/MOCWatcher.js';
+import {getUrlLinkWatcherDef} from '../../visualize/saga/UrlLinkWatcher.js';
 import {layoutManager} from './FireflyViewerManager.js';
-import {Menu} from '../../ui/Menu.jsx';
-import {Banner} from '../../ui/Banner.jsx';
-import {DropDownContainer} from '../../ui/DropDownContainer.jsx';
+import {LayoutChoiceVisualAccordion} from './LayoutChoice.jsx';
 import {TriViewPanel} from './TriViewPanel.jsx';
-import {getActionFromUrl} from '../../core/History.js';
-import {launchTableTypeWatchers} from '../../visualize/ui/TriViewImageSection.jsx';
+import {startImagesLayoutWatcher} from '../../visualize/ui/TriViewImageSection.jsx';
 import {dispatchAddSaga} from '../../core/MasterSaga.js';
 import {getImageMasterData} from '../../visualize/ui/AllImageSearchConfig.js';
 import {getWorkspaceConfig, initWorkspace} from '../../visualize/WorkspaceCntlr.js';
-import {warningDivId} from '../../ui/LostConnection.jsx';
 
-import FFTOOLS_ICO from 'html/images/fftools-logo-offset-small-42x42.png';
-import {startTTFeatureWatchers} from '../common/ttFeatureWatchers';
+import {getAllStartIds, getObsCoreWatcherDef, startTTFeatureWatchers} from '../common/ttFeatureWatchers';
+import App from 'firefly/ui/App.jsx';
+import {setIf as setIfUndefined} from 'firefly/util/WebUtil.js';
+import {handleInitialAppNavigation} from 'firefly/templates/common/FireflyLayout';
 
 /**
  * This FireflyViewer is a generic application with some configurable behaviors.
@@ -35,93 +39,66 @@ import {startTTFeatureWatchers} from '../common/ttFeatureWatchers';
  * <li><b>title</b>:  This title will appears at center top of the results area. Defaults to 'FFTools'. </li>
  * <li><b>menu</b>:  menu is an array of menu items {label, action, icon, desc, type}.  Leave type blank for dropdown.  If type='COMMAND', it will fire the action without triggering dropdown.</li>
  * <li><b>appTitle</b>:  The title of the FireflyViewer.  It will appears at top left of the banner. Defaults to 'Firefly'. </li>
- * <li><b>appIcon</b>:  A url string to the icon to appear on the banner. </li>
+ * <li><b>appIcon</b>:  A react element rendered at where appIcon should appear. </li>
  * <li><b>footer</b>:   A react elements to place on the footer when the menu drop down. </li>
  * <li><b>dropdownPanels</b>:  An array of additional react elements which are mapped to a menu item's action. </li>
  * <li><b>views</b>:  The type of result view.  Choices are 'images', 'tables', and 'xyPlots'.  They can be combined with ' | ', i.e.  'images | tables'</li>
  *
  */
-export class FireflyViewer extends PureComponent {
+export function FireflyViewer ({menu, options, views='images | tables | xyplots', showViewsSwitch, leftButtons,
+                                   centerButtons, rightButtons, normalInit=true, appTitle='Firefly',
+                                   landingPage, slotProps, apiHandlesExpanded, ...appProps}){
 
-    constructor(props) {
-        super(props);
+    useEffect(() => {
         getImageMasterData();
-        const views = LO_VIEW.get(props.views) || LO_VIEW.none;
-        this.state = this.getNextState();
-        startTTFeatureWatchers();
-        if (views.has(LO_VIEW.images) ) launchTableTypeWatchers();
-        dispatchAddSaga(layoutManager,{views: props.views});
+        const eviews = LO_VIEW.get(views) || LO_VIEW.none;
+        startTTFeatureWatchers(getAllStartIds());
+        startTTFeatureWatchers(
+            [
+                getMocWatcherDef().id,
+                getCatalogWatcherDef().id,
+                getUrlLinkWatcherDef().id,
+                getActiveRowToImageDef().id,
+                getAppOptions().enableObsCoreDownload && getObsCoreWatcherDef().id,
+            ]
+        );
+        if (eviews.has(LO_VIEW.images) ) startImagesLayoutWatcher();
+        dispatchAddSaga(layoutManager,{views,apiHandlesExpanded});
         if (getWorkspaceConfig()) { initWorkspace(); }
-    }
+    }, []);
 
-    getNextState() {
-        const menu = getMenu();
-        const layoutInfo = getLayouInfo();
-        const isReady = isAppReady();
+    useEffect(() => {
+        dispatchOnAppReady(() => onReady({menu, options, normalInit, appTitle}));
+    }, []);
 
-        return Object.assign({}, this.props,
-            {menu, isReady, ...layoutInfo});
-    }
+    const FireflySidebar= (props) => (
+        <AppConfigDrawer {...props}>
+            <LayoutChoiceVisualAccordion/>
+        </AppConfigDrawer>
+    );
 
-    componentDidMount() {
-        dispatchOnAppReady((state) => {
-            onReady({state, menu: this.props.menu, views: this.props.views,
-                options:this.props.options, initLoadingMessage:this.props.initLoadingMessage, initLoadCompleted:this.state.initLoadCompleted});
-        });
-        this.removeListener = flux.addListener(() => this.storeUpdate());
-    }
+    const mSlotProps = cloneDeep(slotProps || {});
+    setIfUndefined(mSlotProps, 'drawer.component', FireflySidebar);
+    setIfUndefined(mSlotProps, 'banner.enableVersionDialog', true);
 
-    componentWillUnmount() {
-        this.removeListener && this.removeListener();
-    }
-
-    storeUpdate() {
-        this.setState(this.getNextState());
-    }
-
-    render() {
-        const {isReady, menu={}, appTitle, appIcon, altAppIcon, dropDown, showUserInfo, initLoadCompleted, initLoadingMessage,
-            dropdownPanels, views, footer, style, showViewsSwitch, leftButtons,
-            centerButtons, rightButtons, bannerLeftStyle, bannerMiddleStyle} = this.state;
-        const {visible, view, initArgs} = dropDown || {};
-
-        if (!isReady) {
-            return (<div style={{top: 0}} className='loading-mask'/>);
-        } else {
-            return (
-                <div id='App' className='rootStyle' style={style}>
-                    <header>
-                        <BannerSection {...{menu, showUserInfo, appTitle, appIcon, altAppIcon, bannerLeftStyle, bannerMiddleStyle}}/>
-                        <div id={warningDivId} data-decor='full' className='warning-div center'/>
-                        <DropDownContainer
-                            key='dropdown'
-                            footer={footer}
-                            visible={!!visible}
-                            selected={view}
-                            initArgs={initArgs}
-                            {...{dropdownPanels} } />
-                    </header>
-                    <main>
-                        <DynamicResults {...{views, showViewsSwitch, leftButtons, centerButtons,
-                                             rightButtons, initLoadingMessage, initLoadCompleted}}/>
-                    </main>
-                </div>
-            );
-        }
-    }
+    return (
+        <App slotProps={mSlotProps} {...{views, ...appProps}}>
+            <DynamicResults {...{views, showViewsSwitch, landingPage, leftButtons, centerButtons,
+                rightButtons}}/>
+        </App>
+    );
 }
 
 /**
  * menu is an array of menu items {label, action, icon, desc, type}.
  * dropdownPanels is an array of additional react elements which are mapped to a menu item's action.
- * @type {{title: *, menu: *, appTitle: *, appIcon: *, altAppIcon: *, dropdownPanels: *, views: *}}
+ * @type {{title: *, menu: *, appTitle: *, appIcon: *, dropdownPanels: *, views: *}}
  */
 FireflyViewer.propTypes = {
     title: PropTypes.string,
     menu: PropTypes.arrayOf(PropTypes.object),
     appTitle: PropTypes.string,
-    appIcon: PropTypes.string,
-    altAppIcon: PropTypes.string,
+    appIcon: PropTypes.element,
     showUserInfo: PropTypes.bool,
     footer: PropTypes.element,
     dropdownPanels: PropTypes.arrayOf(PropTypes.element),
@@ -132,40 +109,21 @@ FireflyViewer.propTypes = {
     centerButtons: PropTypes.arrayOf( PropTypes.func ),
     rightButtons: PropTypes.arrayOf( PropTypes.func ),
     options: PropTypes.object,
-    initLoadingMessage: PropTypes.string,
+    normalInit: PropTypes.bool
 };
 
-FireflyViewer.defaultProps = {
-    appTitle: 'Firefly',
-    views: 'images | tables | xyPlots'
-};
 
-function onReady({menu, views, options={}, initLoadingMessage, initLoadCompleted}) {
+function onReady({menu, options={}, normalInit, appTitle}) {
     if (menu) {
         const {backgroundMonitor= true}= options;
         dispatchSetMenu({menuItems: menu, showBgMonitor:backgroundMonitor});
     }
     const {hasImages, hasTables, hasXyPlots} = getLayouInfo();
-    if (!(hasImages || hasTables || hasXyPlots)) {
-        let goto = getActionFromUrl();
-        if (!goto) goto= (!initLoadingMessage || initLoadCompleted) && {type: SHOW_DROPDOWN};
-        if (goto) flux.process(goto);
+    if (normalInit && (!(hasImages || hasTables || hasXyPlots))) {
+        handleInitialAppNavigation({menu, appTitle});
     }
     dispatchNotifyRemoteAppReady();
 }
-
-function BannerSection(props) {
-    const {menu, appIcon=FFTOOLS_ICO, ...rest} = pickBy(props);
-    return (
-        <Banner key='banner'
-            menu={<Menu menu={menu} /> }
-            appIcon={appIcon}
-            enableVersionDialog={true}
-            {...rest}
-        />
-    );
-}
-
 
 function DynamicResults(props) {
     var {views, ...rest} = props;
@@ -181,8 +139,5 @@ DynamicResults.propTypes = {
     leftButtons: PropTypes.arrayOf( PropTypes.func ),
     centerButtons: PropTypes.arrayOf( PropTypes.func ),
     rightButtons: PropTypes.arrayOf( PropTypes.func )
-};
-DynamicResults.defaultProps = {
-    showViewsSwitch: true
 };
 

@@ -3,8 +3,9 @@
  */
 package edu.caltech.ipac.firefly.server;
 
+import com.sun.management.OperatingSystemMXBean;
 import edu.caltech.ipac.firefly.server.cache.EhcacheProvider;
-import edu.caltech.ipac.firefly.server.db.DbAdapter;
+import edu.caltech.ipac.firefly.server.db.DbMonitor;
 import edu.caltech.ipac.firefly.server.query.SearchProcessorFactory;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.server.util.VersionUtil;
@@ -15,7 +16,6 @@ import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.util.cache.CacheManager;
 import nom.tam.fits.FitsFactory;
-import org.apache.log4j.PropertyConfigurator;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
@@ -29,6 +29,8 @@ import javax.websocket.HandshakeResponse;
 import javax.websocket.server.HandshakeRequest;
 import java.io.File;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -74,7 +76,6 @@ public class ServerContext {
     private static boolean FITS_SECURITY;
     private static final Map<File, Long> _visSessionDirs= new ConcurrentHashMap<>(617);
     private static final String CONFIG_DIR = "server_config_dir";
-    private static final String CACHEMANAGER_DISABLED_PROP = "CacheManager.disabled";
     private static final String WORK_DIR_PROP = "work.directory";
     private static final String SHARED_WORK_DIR_PROP= "shared.work.directory";
     public static final String VIS_SEARCH_PATH= "visualize.fits.search.path";
@@ -134,7 +135,7 @@ public class ServerContext {
 
             // init fits read global settting
             FitsFactory.setAllowTerminalJunk(true);
-            FitsFactory.setUseHierarch(true);
+            FitsFactory.setUseHierarch(true); // this is now the default as of 1.16
             FitsFactory.setLongStringsEnabled(true);
         }
     }
@@ -165,25 +166,8 @@ public class ServerContext {
             throw new RuntimeException(errmsg);
         }
 
-        // initializes log4j
-        File cfg = getConfigFile("log4j.properties");
-        if (cfg.canRead()) {
-            String statsDir = AppProperties.getProperty(STATS_LOG_DIR);
-            if (!StringUtils.isEmpty(statsDir)) {
-                initDir(new File(statsDir));
-            }
-            System.out.println(String.format("Initializing Log4J using file: %s  => %s", cfg.getAbsolutePath(), statsDir));
-            PropertyConfigurator.configureAndWatch(cfg.getAbsolutePath());
-        }
-
         // setup ClientLog and Assert to use firefly logging.
         Assert.setLogger(new AssertLogger());
-
-
-
-        // disable caching is it's a preference
-        CacheManager.setDisabled(AppProperties.getBooleanProperty(CACHEMANAGER_DISABLED_PROP, false));
-
 
         // Must be done after property init
         FITS_SECURITY = AppProperties.getBooleanProperty("visualize.fits.Security", true);
@@ -192,22 +176,17 @@ public class ServerContext {
         CacheManager.setCacheProvider(EhcacheProvider.class.getName());
 
         // setup working area
-        File workingDirFile = null;
-        String workDirRoot = AppProperties.getProperty(WORK_DIR_PROP);
-        if (!StringUtils.isEmpty(workDirRoot)) {
-            workingDirFile = new File(workDirRoot);
-            initDir(workingDirFile);
+        File workingDirFile = setupWorkDir("Setting up " + WORK_DIR_PROP,
+                                AppProperties.getProperty(WORK_DIR_PROP),
+                                new File(System.getProperty("java.io.tmpdir"),"workarea"));
+        if (workingDirFile != null) {
+            setWorkingDir(new File(workingDirFile, contextName));
         }
-        if (workingDirFile == null || !workingDirFile.canWrite()) {
-            workingDirFile = new File(System.getProperty("java.io.tmpdir"),"workarea");
-        }
-        setWorkingDir(new File(workingDirFile, contextName));
 
-
-        File sharedWorkingDirFile = null;
-        String sharedWorkDirRoot = AppProperties.getProperty(SHARED_WORK_DIR_PROP);
-        if (!StringUtils.isEmpty(sharedWorkDirRoot)) {
-            sharedWorkingDirFile= initDir(new File(sharedWorkDirRoot));
+        // setup shared working area
+        File sharedWorkingDirFile = setupWorkDir("Setting up " + SHARED_WORK_DIR_PROP,
+                AppProperties.getProperty(SHARED_WORK_DIR_PROP), workingDirFile);
+        if (sharedWorkingDirFile != null) {
             setSharedWorkingDir(new File(sharedWorkingDirFile, contextName));
             try {
                 File f= new File(getSharedWorkingDir(), FileUtil.getHostname()+"."+ACCESS_TEST_EXT);
@@ -219,16 +198,40 @@ public class ServerContext {
             }
         }
 
-
         Logger.info("",
                 "CACHE_PROVIDER : " + EhcacheProvider.class.getName(),
                 "WORK_DIR       : " + getWorkingDir(),
-                "DEBUG_MODE     : " + AppProperties.getBooleanProperty("debug.mode", false),
                 "Available Cores: " + getAvailableCores() );
+    }
 
-         if (!getWorkingDir().equals(getSharedWorkingDir())) {
-             Logger.info("Using shared working dir: "+ getSharedWorkingDir());
-         }
+    private static File setupWorkDir(String desc, String fromProp, File altDir) {
+        log.info(desc);
+        if (!StringUtils.isEmpty(fromProp)) {
+            log.info(desc +  "; Using path from property: " + fromProp);
+            File workDir = new File(fromProp);
+            initDir(workDir);
+            if (workDir.canWrite()) {
+                return workDir;
+            }
+            else {
+                log.info(desc + " failed. " + " Unable to write to directory: " + workDir.getPath());
+            }
+        }
+
+        if (altDir == null) {
+            log.error(desc + " failed. " + " no alternate directory is given");
+            return null;
+        }
+
+        // using altDir
+        log.info(desc +  "; Using alternate path: " + altDir.getPath());
+        initDir(altDir);
+        if (altDir.canWrite()) {
+            return altDir;
+        } else {
+            log.error(desc + " failed. " + " Unable to write to alternate directory: " + altDir.getPath());
+            return null;
+        }
     }
 
 
@@ -343,18 +346,13 @@ public class ServerContext {
      * @return File the original requested SharedWorkingDirRequested, may not be a good directory
      */
     public static File getSharedWorkingDirRequested() {
-        return sharedWorkingDir;
+        String swd = AppProperties.getProperty(SHARED_WORK_DIR_PROP);
+        return swd == null ? null : new File(swd);
     }
-
 
     public static File getSharedWorkingDir() {
-        if (sharedWorkingDir==null) return getWorkingDir();
-        initDir(sharedWorkingDir);
-        if (!sharedWorkingDir.canWrite()) return getWorkingDir();
-        return sharedWorkingDir;
+        return initDir(sharedWorkingDir);
     }
-
-
 
     public static void setWorkingDir(File workDir) {
         workingDir = workDir;
@@ -362,9 +360,6 @@ public class ServerContext {
 
     public static void setSharedWorkingDir(File sharedWorkDir) {
         sharedWorkingDir = sharedWorkDir;
-        if (!sharedWorkingDir.canWrite()) {
-            Logger.getLogger().error("Cannot write to Shared Worked Dir: " + sharedWorkDir.toString());
-        }
     }
 
     public static File getHiPSDir() {
@@ -855,30 +850,48 @@ public class ServerContext {
         public static final String WEBAPP_CONFIG_LOC = "/WEB-INF/config";
 
         public void contextInitialized(ServletContextEvent servletContextEvent) {
-            System.out.println("contextInitialized...");
-            ServletContext cntx = servletContextEvent.getServletContext();
-            ServerContext.init(cntx.getContextPath(), cntx.getServletContextName(), cntx.getRealPath(WEBAPP_CONFIG_LOC));
-            VersionUtil.initVersion(cntx);  // can be called multiple times, only inits on the first call
-            SCHEDULE_TASK_EXEC.scheduleAtFixedRate(
-                                () -> DbAdapter.getAdapter().cleanup(false),
-                                DbAdapter.CLEANUP_INTVL,
-                                DbAdapter.CLEANUP_INTVL,
-                                TimeUnit.MILLISECONDS);
+            try {
+                System.out.println("contextInitialized...");
+                ServletContext cntx = servletContextEvent.getServletContext();
+                ServerContext.init(cntx.getContextPath(), cntx.getServletContextName(), cntx.getRealPath(WEBAPP_CONFIG_LOC));
+                VersionUtil.initVersion(cntx);  // can be called multiple times, only inits on the first call
+                SCHEDULE_TASK_EXEC.scheduleAtFixedRate(
+                        () -> DbMonitor.cleanup(false),
+                        DbMonitor.CLEANUP_INTVL,
+                        DbMonitor.CLEANUP_INTVL,
+                        TimeUnit.MILLISECONDS);
+            } catch (Throwable e) {
+                e.printStackTrace();
+            }
         }
 
         public void contextDestroyed(ServletContextEvent servletContextEvent) {
-            System.out.println("contextDestroyed...");
-            DbAdapter.getAdapter().cleanup(true);
-            ((EhcacheProvider)CacheManager.getCacheProvider()).shutdown();
             try {
-                SHORT_TASK_EXEC.shutdownNow();
-                SHORT_TASK_EXEC.awaitTermination(5, TimeUnit.SECONDS);
-                SCHEDULE_TASK_EXEC.shutdownNow();
-                SCHEDULE_TASK_EXEC.awaitTermination(5, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                System.out.println("contextDestroyed...");
+                DbMonitor.cleanup(true, false);
+                ((EhcacheProvider)CacheManager.getCacheProvider()).shutdown();
+                try {
+                    SHORT_TASK_EXEC.shutdownNow();
+                    SHORT_TASK_EXEC.awaitTermination(5, TimeUnit.SECONDS);
+                    SCHEDULE_TASK_EXEC.shutdownNow();
+                    SCHEDULE_TASK_EXEC.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            } catch (Throwable e) {
+                e.printStackTrace();
             }
         }
     }
 
+    public static Info getSeverInfo() {
+        OperatingSystemMXBean osBean = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
+        long pMem =  osBean.getTotalMemorySize();
+        Runtime rt= Runtime.getRuntime();
+        long totMem= rt.totalMemory();
+        long freeMem= rt.freeMemory();
+        long maxMem= rt.maxMemory();
+        return new Info(FileUtil.getHostname(), pMem, FileUtil.getIPString(), maxMem, totMem, freeMem);
+    }
+    public record Info(String host, long pMemory, String ip, long jvmMax, long jvmTotal, long jvmFree) {}
 }

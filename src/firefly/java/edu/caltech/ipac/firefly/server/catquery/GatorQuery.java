@@ -188,7 +188,7 @@ public class GatorQuery extends BaseGator {
             req.setMethod(CatalogRequest.Method.TABLE);
             File uloadFile = null;
             try {
-                uloadFile = File.createTempFile(getFilePrefix(req), ".tbl", ServerContext.getTempWorkDir());
+                uloadFile = createTempFile(req,".tbl");
                 WorldPt pt = req.getWorldPtParam(ServerParams.USER_TARGET_WORLD_PT);
                 if (pt == null) pt = req.getWorldPtJ2000();
                 pt = VisUtil.convertToJ2000(pt);
@@ -317,11 +317,8 @@ public class GatorQuery extends BaseGator {
         }
     }
 
-    @Override
-    protected File postProcessData(File f, TableServerRequest request) throws Exception {
-        if (!(request instanceof CatalogRequest) ) return f;
+    protected File modifyData(File f, CatalogRequest req) throws Exception {
 
-        CatalogRequest req = (CatalogRequest) request;
         if ("1".equals(req.getParam(CatalogRequest.ONE_TO_ONE)) &&
                 req.getMethod() != CatalogRequest.Method.TABLE) {
             // for single target, 1-to-1 search..  remove empty row from results
@@ -406,24 +403,13 @@ public class GatorQuery extends BaseGator {
         pt = VisUtil.convertToJ2000(pt);
 
         if (pt == null) {
-            throw new EndUserException("IRSA search failed, Catalog is unavailable",
+            throw new EndUserException("IRSA search failed. Catalog is unavailable",
                     "Search Processor did not find the required parameter: " +
                             CatalogRequest.RA_DEC_J2000);
         }
         String fstr = String.format(Locale.US, "%8.6fd %8.6fd eq j2000", pt.getLon(), pt.getLat());
         return param("objstr", urlEncode(fstr));
     }
-
-    protected String getFileBaseName(CatalogRequest req) throws EndUserException {
-        CatalogRequest.Method method = req.getMethod();
-        if (method != null) {
-            return "gator-catalog-" + req.getMethod().getDesc();
-        } else {
-            throw new EndUserException("Could not complete IRSA search",
-                    "The search method was not specified in the query");
-        }
-    }
-
 
     public static double convert(CatalogRequest.RadUnits fromUnits, CatalogRequest.RadUnits toUnits, double v) {
         double retval;

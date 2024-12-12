@@ -7,24 +7,18 @@
  */
 
 
-import {get, set, pickBy, cloneDeep, has, isUndefined} from 'lodash';
+import {get, pickBy, cloneDeep, has, isUndefined} from 'lodash';
 import {ServerParams} from '../data/ServerParams.js';
 import {doJsonRequest} from '../core/JsonUtils.js';
-import {getBgEmail} from '../core/background/BackgroundUtil.js';
-import {encodeUrl, getModuleName} from '../util/WebUtil.js';
+import {submitJob, getBackgroundJobs, getJobInfo} from '../core/background/BackgroundUtil.js';
+import {dispatchBgJobInfo} from '../core/background/BackgroundCntlr.js';
+import {encodeUrl, updateSet, getCmdSrvSyncURL} from '../util/WebUtil.js';
 
-import Enum from 'enum';
 import {getTblById, getResultSetID, getResultSetRequest} from '../tables/TableUtil.js';
-import {MAX_ROW, DataTagMeta, getTblId, setResultSetID, setResultSetRequest, setSelectInfo} from '../tables/TableRequestUtil.js';
+import {MAX_ROW, getTblId, setResultSetID, setResultSetRequest, setSelectInfo} from '../tables/TableRequestUtil.js';
 import {SelectInfo} from '../tables/SelectInfo.js';
-import {getBackgroundJobs} from '../core/background/BackgroundUtil.js';
 import {getFireflySessionId} from '../Firefly.js';
-import * as TblUtil from '../tables/TableUtil';
 import {download} from '../util/fetch';
-import {getCmdSrvURL} from '../util/WebUtil';
-
-export const DownloadProgress= new Enum(['STARTING', 'WORKING', 'DONE', 'UNKNOWN', 'FAIL']);
-export const ScriptAttributes= new Enum(['URLsOnly', 'Unzip', 'Ditto', 'Curl', 'Wget', 'RemoveZip']);
 
 
 const DOWNLOAD_REQUEST = 'downloadRequest';
@@ -38,6 +32,21 @@ const doBigIntRequest = (cmd, params) => {
 };
 
 
+export function createTableSearchParams(tableRequest) {
+    const def = {
+        startIdx: 0,
+        pageSize : MAX_ROW,
+        ffSessionId: getFireflySessionId(),
+    };
+
+    tableRequest = setupNewRequest(tableRequest, def);
+
+    const params = {
+        [ServerParams.REQUEST]: JSON.stringify(tableRequest),
+    };
+    return params;
+}
+
 /**
  * tableRequest will be sent to the server as a json string.
  * @param {TableRequest} tableRequest is a table request params object
@@ -49,17 +58,7 @@ const doBigIntRequest = (cmd, params) => {
  */
 export function fetchTable(tableRequest, hlRowIdx) {
 
-    const def = {
-        startIdx: 0,
-        pageSize : MAX_ROW,
-        ffSessionId: getFireflySessionId(),
-    };
-    
-    tableRequest = setupNewRequest(tableRequest, def);
-
-    const params = {
-        [ServerParams.REQUEST]: JSON.stringify(tableRequest),
-    };
+    const params = createTableSearchParams(tableRequest);
 
     return doBigIntRequest(ServerParams.TABLE_SEARCH, params)
     .then( (tableModel) => {
@@ -91,6 +90,11 @@ export function fetchTable(tableRequest, hlRowIdx) {
     });
 }
 
+export function asyncFetchTable(tableRequest) {
+    const params = createTableSearchParams(tableRequest);
+    return submitJob(ServerParams.TABLE_SEARCH, params);
+}
+
 /**
  * a utility function used to query data from the given tableRequest without altering the table.
  * @param {TableRequest} tableRequest is a table request params object
@@ -104,6 +108,30 @@ export function queryTable(tableRequest, {filters, sortInfo, inclCols}) {
         .then( (index) => {
             return index;
         });
+}
+
+/**
+ * add a column to the table backed by this tableRequest
+ * @param {TableRequest} tableRequest is a table request params object
+ * @param colAttribs      column attributes.  i.e. name, type, expression, etc
+ * @returns {Promise.<number>}
+ */
+export function addOrUpdateColumn(tableRequest, colAttribs) {
+
+    const params = Object.assign(pickBy(colAttribs), {[ServerParams.REQUEST]: JSON.stringify(tableRequest)});
+    return doJsonRequest(ServerParams.ADD_OR_UPDATE_COLUMN, params);
+}
+
+/**
+ * delete a column from the table backed by this tableRequest
+ * @param {TableRequest} tableRequest is a table request params object
+ * @param cname      column name to delete
+ * @returns {Promise.<number>}
+ */
+export function deleteColumn(tableRequest, cname) {
+
+    const params = {[ServerParams.REQUEST]: JSON.stringify(tableRequest), cname};
+    return doJsonRequest(ServerParams.DELETE_COLUMN, params);
 }
 
 /**
@@ -137,13 +165,6 @@ export function packageRequest(dlRequest, searchRequest, selectionInfo) {
             selectionInfo = SelectInfo.newInstance({selectAll: true, rowCount: totalRow}).toString();
         }
     }
-    if (!dlRequest.Email && getBgEmail()) {
-        dlRequest.Email = getBgEmail();
-    }
-    // insert DataTag if not present
-    if (!get(searchRequest, DataTagMeta)) {
-        set(searchRequest, DataTagMeta, `${getModuleName()}-${ServerParams.PACKAGE_REQUEST}`);
-    }
 
     const params = {
         [DOWNLOAD_REQUEST]: JSON.stringify(dlRequest),
@@ -151,7 +172,7 @@ export function packageRequest(dlRequest, searchRequest, selectionInfo) {
         [SELECTION_INFO]: selectionInfo
     };
 
-    return doBigIntRequest(ServerParams.PACKAGE_REQUEST, params);
+    return submitJob(ServerParams.PACKAGE_REQUEST, params);
 }
 
 
@@ -169,75 +190,44 @@ export function getJsonData(request) {
 }
 
 /**
- *
- * @param {ServerRequest} request
- * @param {ServerRequest} clientRequest
- * @param {number} waitMillis
- * @return {Promise}
- */
-export function submitBackgroundSearch(request, clientRequest, waitMillis) {
-    if (getBgEmail()) {
-        request = set(request, ['META_INFO', ServerParams.EMAIL], getBgEmail());
-    }
-    request.ffSessionId = request.ffSessionId ?? getFireflySessionId();
-
-    // insert DataTag if not present
-    if (!get(request, DataTagMeta)) {
-        set(request, DataTagMeta, `${getModuleName()}-${request.id}`);
-    }
-    const params = {
-        [ServerParams.REQUEST]: JSON.stringify(request),
-        [ServerParams.WAIT_MILS]: String(waitMillis)
-    };
-    clientRequest && (params[ServerParams.CLIENT_REQUEST] = JSON.stringify(clientRequest));
-
-    return doBigIntRequest(ServerParams.SUB_BACKGROUND_SEARCH, params);
-}
-
-/**
  * add this job to the background
- * @param {string} bgStatus background id
+ * @param {string} jobId background job id
  * @return {Promise}
  */
-export function addBgJob(bgStatus) {
-    const params = {bgStatus: JSON.stringify(bgStatus)};
-    return doJsonRequest(ServerParams.ADD_JOB, params).then( () => true);
+export function addBgJob(jobId) {
+    const params = {[ServerParams.JOB_ID]: jobId};
+    return doJsonRequest(ServerParams.ADD_JOB, params);
 }
 
 /**
  *
- * @param {string} id background id
+ * @param {string} jobId background job id
  * @return {Promise}
  */
-export function removeBgJob(id) {
-    const params = {[ServerParams.ID]: id};
-    return doJsonRequest(ServerParams.REMOVE_JOB, params).then( () => true);
+export function removeBgJob(jobId) {
+    const params = {[ServerParams.JOB_ID]: jobId};
+    return doJsonRequest(ServerParams.REMOVE_JOB, params).then( (jobInfo) => {
+        if (!jobInfo) {     // job is not on the server.. remove it locally
+            dispatchBgJobInfo(updateSet(getJobInfo(jobId), 'jobInfo.monitored', false));
+        }
+    });
 }
 
 /**
  *
- * @param {string} id background id
+ * @param {string} jobId background job id
  * @return {Promise}
  */
-export function cancel(id) {
-    const paramList = [];
-    paramList.push({name: ServerParams.ID, value: id});
-    return doJsonRequest(ServerParams.CANCEL, paramList
-    ).then( () => true);
+export function cancel(jobId) {
+    const params = {[ServerParams.JOB_ID]: jobId};
+    return doJsonRequest(ServerParams.CANCEL, params);
 }
 
-/**
- *
- * @param {string} fileKey
- * @return {Promise}
- */
-export function getDownloadProgress(fileKey) {
-    const paramList = [];
-    paramList.push({name: ServerParams.FILE, value: fileKey});
-    return doJsonRequest(ServerParams.DOWNLOAD_PROGRESS, paramList
-    ).then((data) => {return DownloadProgress.get(data); });
+export function uwsJobInfo(jobUrl, jobId) {
+    const params = {[ServerParams.JOB_ID]: jobId,
+                    [ServerParams.JOB_URL]: jobUrl};
+    return doJsonRequest(ServerParams.UWS_JOB_INFO, params);
 }
-
 
 /**
  * @param {string} email
@@ -250,25 +240,8 @@ export function setEmail(email) {
     } );
     if(paramList.length > 0) {
         paramList.push({name:ServerParams.EMAIL, value:email});
-        return doJsonRequest(ServerParams.SET_EMAIL, paramList
-        ).then( () => true);
+        return doJsonRequest(ServerParams.SET_EMAIL, paramList);
     }
-}
-
-/**
- *
- * @param {array|string} ids one id or an array of ids
- * @param {JobAttributes} attribute job attribute
- * @return {Promise}
- */
-export function setAttribute(ids, attribute) {
-    const idList=  Array.isArray(ids) ? ids : [ids];
-    const paramList= idList.map( (id) => {
-        return {name:ServerParams.ID, value: id};
-    } );
-    paramList.push({name:ServerParams.ATTRIBUTE, value:attribute.toString()});
-    return doJsonRequest(ServerParams.SET_ATTR, paramList
-    ).then( () => true);
 }
 
 /**
@@ -277,22 +250,7 @@ export function setAttribute(ids, attribute) {
  * @return {Promise}
  */
 export function resendEmail(email) {
-    return doJsonRequest(ServerParams.RESEND_EMAIL, {[ServerParams.EMAIL]: email}
-    ).then( () => true);
-}
-
-/**
- *
- * @param {string} id
- * @param {number} idx
- * @return {Promise}
- */
-export function clearPushEntry(id, idx ) {
-    const paramList = [];
-    paramList.push({name: ServerParams.ID, value: id});
-    paramList.push({name: ServerParams.IDX, value: `${idx}`});
-    return doJsonRequest(ServerParams.CLEAR_PUSH_ENTRY, paramList
-    ).then( () => true);
+    return doJsonRequest(ServerParams.RESEND_EMAIL, {[ServerParams.EMAIL]: email});
 }
 
 /**
@@ -311,19 +269,23 @@ export function reportUserAction(channel, desc, data) {
     ).then( () => true);
 }
 
+export function getCapabilities(url) {
+    return doJsonRequest(ServerParams.GET_CAPABILITIES, {URL:url});
+}
+
 
 /**
  *
- * @param id
+ * @param jobId
  * @param fname
  * @param dataSource
  * @param {array} attributes and array of ScriptAttributes
  * @return {Promise}
  */
-export function createDownloadScript(id, fname, dataSource, attributes) {
+export function createDownloadScript(jobId, fname, dataSource, attributes) {
     const attrAry= Array.isArray(attributes) ? attributes : [attributes];
     const paramList= attrAry.map( (v='') => ({name:ServerParams.ATTRIBUTE, value: v.toString()}) );
-    paramList.push({name: ServerParams.ID, value: id});
+    paramList.push({name: ServerParams.JOB_ID, value: jobId});
     paramList.push({name: ServerParams.FILE, value: fname});
     paramList.push({name: ServerParams.SOURCE, value: dataSource});
     return doJsonRequest(ServerParams.CREATE_DOWNLOAD_SCRIPT, paramList);
@@ -338,7 +300,7 @@ export function createDownloadScript(id, fname, dataSource, attributes) {
  * @param {string} p.dataSource
  */
 export function getDownloadScript({packageID, type, fname, dataSource}) {
-    const url = encodeUrl(getCmdSrvURL(), {packageID, type, fname, dataSource});
+    const url = encodeUrl(getCmdSrvSyncURL(), {packageID, type, fname, dataSource});
     if (url) download(url);
 }
 

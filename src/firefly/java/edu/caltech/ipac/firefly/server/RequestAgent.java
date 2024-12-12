@@ -9,12 +9,14 @@ import edu.caltech.ipac.util.StringUtils;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.File;
 import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.Enumeration;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 
 /**
  * Date: 4/20/15
@@ -35,6 +37,7 @@ public class RequestAgent {
     private String remoteIP;
     private String sessId;
     private String contextPath;
+    private String servletPath;
 
     public RequestAgent() {}
 
@@ -45,6 +48,14 @@ public class RequestAgent {
         this.remoteIP = remoteIP;
         this.sessId = sessId;
         this.contextPath = contextPath;
+    }
+
+    public String getServletPath() {
+        return servletPath;
+    }
+
+    public void setServletPath(String servletPath) {
+        this.servletPath = servletPath;
     }
 
     public void setCookies(Map<String, Cookie> cookies) {
@@ -137,34 +148,42 @@ public class RequestAgent {
 //====================================================================
 
     public static class HTTP extends RequestAgent {
-        public static String AUTH_KEY = "JOSSO_SESSIONID";
-        public static String TO_BE_DELETE = "-";
+        private static final String AUTH_KEY = "JOSSO_SESSIONID";
         private static final Logger.LoggerImpl LOG = Logger.getLogger();
-        private HttpServletRequest request;
-        private HttpServletResponse response;
-        private static final String[] ID_COOKIE_NAMES = new String[]{AUTH_KEY, "ISIS"};
+        private final HashMap<String, String> headers = new HashMap<>();      // key stored as lowercase;
+        private final HashMap<String, Cookie> cookies = new HashMap<>();
+        private final HttpServletResponse response;
+        private final String realPath;
+
+
 
         public HTTP(HttpServletRequest request, HttpServletResponse response) {
-            this.request = request;
             this.response = response;
+
+            Collections.list(request.getHeaderNames()).forEach(h -> {
+                headers.put(h.toLowerCase(), request.getHeader(h));
+            });
+            applyIfNotEmpty(request.getCookies(), v -> {
+                Arrays.stream(v).forEach(c -> cookies.put(c.getName(), c));
+            });
 
             // getting the base url including the application path is a bit tricky when behind reverse proxy(ies)
             String proto = getHeader("X-Forwarded-Proto", request.getScheme());
-            String host  = getHeader("X-Forwarded-Server", getHeader("X-Forwarded-Host", request.getServerName()));
+            String host  = getHeader("X-Forwarded-Host", getHeader("X-Forwarded-Server", request.getServerName()));
             String port  = getHeader("X-Forwarded-Port", String.valueOf(request.getServerPort()));
             port = port.matches("443|80") ? "" : ":" + port;
-            String contextPath = getHeader("X-Forwarded-Path", request.getContextPath());
+            String proxiedPath = getHeader("X-Forwarded-Path", getHeader("X-Forwarded-Prefix", "") + request.getContextPath());
 
             String hostUrl = String.format("%s://%s%s", proto, host, port);
-            String baseUrl = hostUrl + contextPath;
+            String baseUrl = hostUrl + proxiedPath;
             baseUrl = baseUrl.endsWith("/") ? baseUrl :  baseUrl + "/";
 
             String requestUrl =  getHeader("X-Original-URI");
             if (requestUrl == null) {
                 String queryStr = request.getQueryString() == null ? "" : "?" + request.getQueryString();
                 String path = request.getRequestURI();
-                if (!contextPath.equals(request.getContextPath())) {
-                    path = path.replace(request.getContextPath(), contextPath);
+                if (!proxiedPath.equals(request.getContextPath())) {
+                    path = path.replace(request.getContextPath(), proxiedPath);
                 }
                 requestUrl = path + queryStr;
             }
@@ -175,28 +194,22 @@ public class RequestAgent {
             setBaseUrl(baseUrl);
             setHostUrl(hostUrl);
             setRequestUrl(requestUrl);
-            setContextPath(contextPath);
+            setContextPath(request.getContextPath());
             setRemoteIP(remoteIP);
             setSessId(request.getSession(true).getId());
+            setServletPath(request.getServletPath());
 
+            realPath = request.getServletContext().getRealPath("/");
         }
 
         @Override
         protected Map<String, Cookie> extractCookies() {
-            HashMap<String, Cookie> cookies = new HashMap<>();
-            if (request != null) {
-                if (request.getCookies() != null) {
-                    for (javax.servlet.http.Cookie c : request.getCookies()) {
-                        cookies.put(c.getName(), c);
-                    }
-                }
-            }
             return cookies;
         }
 
         @Override
         public String getRealPath(String relPath) {
-            return response != null ? request.getRealPath(relPath) : null;
+            return new File(realPath, relPath).getAbsolutePath();
         }
 
         @Override
@@ -208,13 +221,8 @@ public class RequestAgent {
 
         @Override
         public String getHeader(String name, String def) {
-            if (request != null) {
-                String retval = request.getHeader(name);
-                retval = retval == null ? request.getHeader(name.toLowerCase()) : retval;
-                return StringUtils.isEmpty(retval) ? def : retval;
-            } else {
-                return def;
-            }
+            String retval = name == null ? null : headers.get(name.toLowerCase());
+            return StringUtils.isEmpty(retval) ? def : retval;
         }
 
         @Override

@@ -8,14 +8,28 @@
  * Created by tatianag on 3/17/16.
  */
 
-import {assign, cloneDeep, flatten, get, has, isArray, isEmpty, isObject, isString, isUndefined, merge, pick, range, set, uniqueId} from 'lodash';
+import {
+    assign, flatten, get, has, isArray, isEmpty, isObject, isString,
+    isUndefined, merge, pick, range, set, uniqueId
+} from 'lodash';
 import shallowequal from 'shallowequal';
 
 import {getAppOptions} from '../core/AppDataCntlr.js';
-import {COL_TYPE, getColumnType, getTblById, isColumnType, isFullyLoaded, isTableLoaded, stripColumnNameQuotes, watchTableChanges} from '../tables/TableUtil.js';
+import {
+    COL_TYPE, getColumnType, getMetaEntry, getTblById, isColumnType, isFullyLoaded, isTableLoaded,
+    stripColumnNameQuotes, SYS_COLUMNS, watchTableChanges
+} from '../tables/TableUtil.js';
 import {TABLE_HIGHLIGHT, TABLE_LOADED, TABLE_SELECT, TABLE_SORT} from '../tables/TablesCntlr.js';
+import {getSpectrumDM} from '../voAnalyzer/SpectrumDM.js';
+import {findTableCenterColumns} from '../voAnalyzer/TableAnalysis.js';
 import {dispatchLoadTblStats, getColValStats} from './TableStatsCntlr.js';
-import {dispatchChartHighlighted, dispatchChartSelect, dispatchChartUpdate, dispatchSetActiveTrace, getChartData} from './ChartsCntlr.js';
+import {
+    dispatchChartHighlighted,
+    dispatchChartSelect,
+    dispatchChartUpdate,
+    dispatchSetActiveTrace,
+    getChartData
+} from './ChartsCntlr.js';
 import {Expression} from '../util/expr/Expression.js';
 import {quoteNonAlphanumeric} from '../util/expr/Variable.js';
 import {flattenObject} from '../util/WebUtil.js';
@@ -24,15 +38,15 @@ import {getTraceTSEntries as histogramTSGetter} from './dataTypes/FireflyHistogr
 import {getTraceTSEntries as heatmapTSGetter} from './dataTypes/FireflyHeatmap.js';
 import {getTraceTSEntries as genericTSGetter} from './dataTypes/FireflyGenericData.js';
 import {getTraceTSEntries as spectrumTSGetter, spectrumPlot, spectrumType} from './dataTypes/FireflySpectrum.js';
-import Color from '../util/Color.js';
+import {toRGBA as colorToRGBA} from '../util/Color.js';
 import {MetaConst} from '../data/MetaConst';
 import {ALL_COLORSCALE_NAMES, colorscaleNameToVal} from './Colorscale.js';
-import {findTableCenterColumns, getSpectrumDM} from '../util/VOAnalyzer.js';
 import {getColValidator} from './ui/ColumnOrExpression.jsx';
 
 export const DEFAULT_ALPHA = 0.5;
 
 export const SCATTER = 'scatter';
+export const SCATTERGL = 'scattergl';
 export const HEATMAP = 'heatmap';
 
 export const SELECTED_COLOR = 'rgba(255, 200, 0, 1)';
@@ -68,7 +82,7 @@ export function singleTraceUI() {
  * @returns {*}
  */
 export function getMaxScatterRows() {
-    return get(getAppOptions(), 'charts.maxRowsForScatter', 5000);
+    return get(getAppOptions(), 'charts.maxRowsForScatter', 25000);
 }
 
 
@@ -81,6 +95,14 @@ export function getMaxScatterRows() {
 export function getMinScatterGLRows() {
     return get(getAppOptions(), 'charts.minScatterGLRows', 1000);
 }
+
+/**
+ * @returns {boolean} return true if Pin Charts feature is enabled
+ */
+export function allowPinnedCharts() {
+    return getAppOptions()?.charts?.allowPinnedCharts ?? false;
+}
+
 
 /**
  * @summary Get unique chart id
@@ -100,34 +122,15 @@ export function colWithName(cols, name) {
 
 export function getNumericCols(cols) {
     const ncols = [];
-    const excludeNames = ['ROW_IDX', 'ROW_NUM'];
     cols.forEach((c) => {
         if (isColumnType(c, COL_TYPE.NUMBER)) {
-            if (!excludeNames.includes(c.name)) { ncols.push(c); }
+            if (!SYS_COLUMNS.includes(c.name)) { ncols.push(c); }
         }
     });
     return ncols;
 }
 
 
-
-/**
- * @global
- * @public
- * @typedef {Object} XYPlotOptions - shallow object with XYPlot parameters
- * @prop {string}  [source]     location of the ipac table, url or file path; ignored when XY plot view is added to table
- * @prop {string}  [tbl_id]     table id of the table this plot is connected to
- * @prop {string}  [chartTitle] title of the chart
- * @prop {string}  xCol         column or expression to use for x values, can contain multiple column names ex. log(col) or (col1-col2)/col3
- * @prop {string}  yCol         column or expression to use for y values, can contain multiple column names ex. sin(col) or (col1-col2)/col3
- * @prop {string}  [plotStyle]  points, linepoints, line
- * @prop {string}  [xLabel]     label to use with x axis
- * @prop {string}  [yLabel]     label to use with y axis
- * @prop {string}  [xOptions]   comma separated list of x axis options: grid,flip,log
- * @prop {string}  [yOptions]   comma separated list of y axis options: grid,flip,log
- * @prop {string}  [xError]     column or expression for X error
- * @prop {string}  [yError]     column or expression for Y error
- */
 
 /**
  * @summary Convert shallow object with XYPlot parameters to scatter plot parameters object.
@@ -183,21 +186,6 @@ export function makeXYPlotParams(params) {
     return {data, layout};
 }
 
-
-/**
- * @global
- * @public
- * @typedef {Object} HistogramOptions
- * @summary shallow object with histogram parameters
- * @prop {string}  [source]     location of the ipac table, url or file path; ignored when histogram view is added to table
- * @prop {string}  [tbl_id]     table id of the table this plot is connected to
- * @prop {string}  [chartTitle] title of the chart
- * @prop {string}  col          column or expression to use for histogram, can contain multiple column names ex. log(col) or (col1-col2)/col3
- * @prop {number}  [numBins=50] number of bins for fixed bins algorithm (default)
- * @prop {number}  [falsePositiveRate] false positive rate for bayesian blocks algorithm
- * @prop {string}  [xOptions]   comma separated list of x axis options: flip,log
- * @prop {string}  [yOptions]   comma separated list of y axis options: flip,log
- */
 
 /**
  * @summary Convert shallow object with Histogram parameters to histogram plot parameters object.
@@ -262,7 +250,7 @@ export function makeHistogramParams(params) {
  */
 export function getRowIdx(traceData, pointIdx) {
     // firefly.rowIdx array in the trace data connects plotly points to table row indexes
-    return Number(get(traceData, `firefly.rowIdx.${pointIdx}`, pointIdx));
+    return get(traceData, `firefly.rowIdx.${pointIdx}`, pointIdx);
 }
 
 /**
@@ -336,19 +324,19 @@ export function combineAllTraceFrom(chartId, selIndexes, newTraceProps) {
 
 export function newTraceFrom(data, selIndexes, newTraceProps, traceAnnotations) {
 
-    const sdata = cloneDeep(pick(data, ['x', 'y', 'z', 'legendgroup', 'error_x', 'error_y', 'text', 'hovertext', 'marker', 'hoverinfo', 'firefly' ]));
+    const sdata = simpleCloneDeep(pick(data, ['x', 'y', 'z', 'legendgroup', 'error_x', 'error_y', 'text', 'hovertext', 'marker', 'hoverinfo', 'firefly' ]));
     Object.assign(sdata, {showlegend: false, type: get(data, 'type', 'scatter'), mode: 'markers'});
 
     // the rowIdx doesn't exist for generic plotly chart case
     if (isScatter2d(get(data, 'type', '')) &&
         !get(sdata, 'firefly.rowIdx') &&
         get(sdata, 'x.length', 0) !== 0) {
-        const rowIdx = range(get(sdata, 'x.length')).map(String);
+        const rowIdx = Array.from({ length: sdata.x.length }, (_, i) => i);
         set(sdata, 'firefly.rowIdx', rowIdx);
     }
 
     if (isArray(traceAnnotations) && traceAnnotations.length > 0) {
-        const annotations = cloneDeep(traceAnnotations);
+        const annotations = simpleCloneDeep(traceAnnotations);
         const color = get(newTraceProps, 'marker.color');
 
         flattenAnnotations(annotations).forEach((a) => {a && (a.arrowcolor = color);});
@@ -389,8 +377,11 @@ export function flattenAnnotations(annotations) {
     return [];
 }
 
-export function updateSelected(chartId, selectInfo) {
+export function updateSelection(chartId, selectInfo) {
     const {data, activeTrace=0} = getChartData(chartId);
+
+    if (!data?.some((t) => isSelectionSupported(t?.type))) return;      // skip if no trace support selection
+
     const selectInfoCls = SelectInfo.newInstance(selectInfo);
     const selIndexes = getSelIndexes(data, selectInfoCls, activeTrace);
     if (selIndexes) {
@@ -465,6 +456,7 @@ export function handleBigInt(v) {
  * @param {object} p
  * @param {string} p.chartId
  * @param {object[]} p.data
+ * @param {object[]} p.fireflyData
  */
 export function handleTableSourceConnections({chartId, data, fireflyData}) {
     const tablesources = makeTableSources(chartId, data, fireflyData);
@@ -503,7 +495,7 @@ export function handleTableSourceConnections({chartId, data, fireflyData}) {
         }
 
         // make sure table watcher is set for all non-empty table sources
-        if (!isEmpty(traceTS) && !traceTS._cancel) {
+        if (!isEmpty(traceTS)) {
             //creates a new one.. and save the cancel handle
             if (doUpdate) {
                 // fetch data syncs highlighted and selected with the table
@@ -514,10 +506,10 @@ export function handleTableSourceConnections({chartId, data, fireflyData}) {
                     const tableModel = getTblById(traceTS.tbl_id);
                     const {highlightedRow, selectInfo={}} = tableModel;
                     updateHighlighted(chartId, idx, highlightedRow);
-                    updateSelected(chartId, selectInfo);
+                    updateSelection(chartId, selectInfo);
                 }
             }
-            traceTS._cancel = setupTableWatcher(chartId, traceTS, idx);
+            if (!traceTS._cancel) traceTS._cancel = setupTableWatcher(chartId, traceTS, idx);
         }
         tablesources[idx] = traceTS;
     });
@@ -541,6 +533,17 @@ export function setupTableWatcher(chartId, ts, idx) {
         uniqueId(`ucd-${ts.tbl_id}-trace`)); // watcher id for debugging
 }
 
+
+/**
+ * Get feedback as boolean on whether chart is fully loaded or not
+ * @param chartId - chartId of the current chart
+ */
+export function isChartLoading(chartId) {
+    const {fireflyData=[]} = getChartData(chartId);
+    const isChartLoading = fireflyData.some((e)=>  e.isLoading);
+    return isChartLoading; //true when chart is still loading
+}
+
 function tablesourcesEqual(newTS, oldTS) {
 
     // checking if the table or mappings options have changed
@@ -554,16 +557,17 @@ function tablesourcesEqual(newTS, oldTS) {
 
 function updateChartData(chartId, traceNum, tablesource, action={}) {
 
+    const chartData = getChartData(chartId);
+
+    // make sure the chart is not yet removed
+    if (isEmpty(chartData) || !chartData?.mounted) { return; }
+
     // Only Scatter Plot does update on a table sort event.
     if (action.type === TABLE_LOADED && action.payload.invokedBy === TABLE_SORT) {
-        const {data} = getChartData(chartId);
-        const traceType = get(data, [traceNum, 'type'], 'scatter');
+        const traceType = get(chartData, ['data', traceNum, 'type'], 'scatter');
         if (!traceType.includes('scatter')) return;
     }
 
-
-    // make sure the chart is not yet removed
-    if (isEmpty(getChartData(chartId))) { return; }
     const {tbl_id, resultSetID, mappings} = tablesource;
     if (action.type === TABLE_HIGHLIGHT) {
         // ignore if traceNum is not active
@@ -575,10 +579,12 @@ function updateChartData(chartId, traceNum, tablesource, action={}) {
         const {activeTrace=0} = getChartData(chartId);
         if (traceNum !== activeTrace) return;
         const {selectInfo={}} = action.payload;
-        updateSelected(chartId, selectInfo);
+        updateSelection(chartId, selectInfo);
     } else {
         if (!isFullyLoaded(tbl_id)) return;
         const tableModel = getTblById(tbl_id);
+
+        // may not need to call it as often.  if this becomes a performance issue, then optimize.
         dispatchLoadTblStats(tableModel.request);
 
         const changes = getDataChangesForMappings({mappings, traceNum});
@@ -602,6 +608,11 @@ function updateChartData(chartId, traceNum, tablesource, action={}) {
 export function isSpectralOrder(chartId) {
     const {activeTrace=0, fireflyData} = getChartData(chartId) || {};
     return fireflyData?.[activeTrace]?.spectralOrder;
+}
+
+export function isSpectrum(chartId) {
+    const {activeTrace=0, fireflyData} = getChartData(chartId) || {};
+    return fireflyData?.[activeTrace]?.dataType === spectrumType;
 }
 
 
@@ -679,7 +690,6 @@ export function applyDefaults(chartData={}, resetColor = true) {
         xaxis: {
             autorange:true,
             showgrid: false,
-            lineColor: '#e9e9e9',
             tickwidth: 1,
             ticklen: 5,
             title: {
@@ -696,7 +706,6 @@ export function applyDefaults(chartData={}, resetColor = true) {
         yaxis: {
             autorange:true,
             showgrid: !noXYAxis,
-            lineColor: '#e9e9e9',
             tickwidth: 1,
             ticklen: 5,
             title: {
@@ -729,6 +738,10 @@ export function applyDefaults(chartData={}, resetColor = true) {
         // default dragmode is select if box selection is supported
         type && !chartData.layout.dragmode && (chartData.layout.dragmode = isBoxSelectionSupported(type) ? 'select' : 'zoom');
     });
+}
+
+export function isSelectionSupported(type) {
+    return [SCATTER, SCATTERGL].includes(type);
 }
 
 export function isBoxSelectionSupported(type) {
@@ -787,7 +800,7 @@ export const TRACE_COLORSCALE = ALL_COLORSCALE_NAMES;
 
 export function toRGBA(c, alpha) {
     if (!alpha) { alpha = DEFAULT_ALPHA; }
-    const [r, g, b, a] = Color.toRGBA(c, alpha);
+    const [r, g, b, a] = colorToRGBA(c, alpha);
     return `rgba(${r},${g},${b},${a})`;
 }
 
@@ -958,7 +971,14 @@ function getDefaultColorAttributes(traceData, type, idx) {
 }
 
 
-export function getDefaultChartProps(tbl_id) {
+/**
+ *
+ * @param tbl_id
+ * @param {String} [fbXCol] fallback X column, if defined use as a last resort for x column before guessing
+ * @param {String} [fbYCol] fallback Y column, if defined use as a last resort for y column before guessing
+ * @return {{data: {}, layout:{}}}
+ */
+export function getDefaultChartProps(tbl_id,fbXCol,fbYCol) {
 
     const tblModel = getTblById(tbl_id);
     const {tableMeta, tableData, totalRows} = tblModel || {};
@@ -980,7 +1000,18 @@ export function getDefaultChartProps(tbl_id) {
     if (!isEmpty(spectrumDM)) return spectrumPlot({tbl_id, spectrumDM});
 
 
-    let xCol, yCol;
+    // test to see if meta set the default x and y coloumns
+    let xCol= getMetaEntry(tblModel,MetaConst.DEFAULT_CHART_X_COL);
+    let yCol= getMetaEntry(tblModel,MetaConst.DEFAULT_CHART_Y_COL);
+    if (xCol) {
+        return genericXYChart({tbl_id, xCol, yCol:yCol||xCol});
+    }
+
+    // if defined, use these columns if nothing is specifically defined in the meta
+    if (fbXCol && fbYCol) {
+        return genericXYChart({tbl_id, xCol:fbXCol, yCol:fbYCol});
+    }
+
     // for catalogs use lon and lat columns
     const centerColumns = findTableCenterColumns(tblModel);
     xCol = centerColumns?.lonCol;
@@ -1020,7 +1051,7 @@ function fireflyHistogram({tbl_id, xCol}) {
                     columnOrExpr: `${xColName}`
                 }
             },
-            name: `${xColName}`
+            name: `${xColName}`,
         }]
     };
 }
@@ -1046,11 +1077,11 @@ function scatterOrHeatmap({tbl_id, xCol, yCol, xOptions}) {
             firefly: {
                 scatterOrHeatmap: true,
                 colorscale: colorscaleName
-            }
+            },
         }],
         layout: {
             xaxis: {autorange},
-            yaxis: {showgrid: false}
+            yaxis: {showgrid: false},
         }
     };
 
@@ -1079,10 +1110,14 @@ function isNonNumColumn(tbl_id, colExp) {
     if (colType) {
         return !numTypes.includes(colType);
     } else {
-        const colValidator = getColValidator(getColValStats(tbl_id));
-        const {valid} = colValidator(colExp);
-
-        return !valid;
+        const colValStats = getColValStats(tbl_id);
+        if (colValStats) {
+            const colValidator = getColValidator(colValStats);
+            const {valid} = colValidator(colExp);
+            return !valid;
+        } else {
+            return false;
+        }
     }
 }
 
@@ -1132,4 +1167,37 @@ export function getChartProps(chartId, tbl_id, activeTrace) {
 
     return {activeTrace, data, fireflyData, layout, fireflyLayout, tablesources, tablesource, mappings, tbl_id, type, noXY,
         dataType, noColor, isYNotNumeric, isXNotNumeric, xNoLog, yNoLog, color, multiTrace, spectralAxis, fluxAxis};
+}
+
+
+export function getTblIdFromChart(chartId, traceNum) {
+    const {data, fireflyData, activeTrace} = getChartData(chartId) || {};
+    traceNum = traceNum ?? activeTrace;
+    return data?.[traceNum]?.tbl_id || fireflyData?.[traceNum]?.tbl_id;
+}
+
+export function hasTracesFromSameTable(chartId) {
+    const {data=[], fireflyData=[]} = getChartData(chartId) || {};
+    const tracesTblIds = data.map(({tbl_id}, traceIdx) => tbl_id ?? fireflyData?.[traceIdx]?.tbl_id);
+    return tracesTblIds.every((traceTblId, idx, arr) => traceTblId===arr[0] && traceTblId);
+}
+
+/**
+ * This implementation prioritizes performance over robustness.
+ * It only handles plain objects and arrays, skipping more complex cases such as Map, Set, Date, RegExp, and others.
+ * Also, it does not include type checking or manage circular references.
+ * @param {object} obj
+ * @returns {object} a deep clone of the given object
+ */
+function simpleCloneDeep(obj) {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(simpleCloneDeep);
+
+    const copy = {};
+    for (const key of Object.keys(obj)) {
+        if (obj.hasOwnProperty(key)) {
+            copy[key] = simpleCloneDeep(obj[key]);
+        }
+    }
+    return copy;
 }

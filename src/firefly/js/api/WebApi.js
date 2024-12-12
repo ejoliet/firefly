@@ -1,9 +1,14 @@
 import {isEmpty, isArray, isObject} from 'lodash';
+import React from 'react';
 import {WSCH} from '../core/History';
+import {dispatchAddActionWatcher} from '../core/MasterSaga.js';
+import {Logger} from '../util/Logger.js';
 import {makeWorldPt, parseWorldPt} from '../visualize/Point';
 
 
 const API_STR= 'api';
+
+export const WEB_API_CMD= 'WebApi.Launch';
 
 export const WebApiStat= {
     API_NOT_USED: 'API_NOT_USED',
@@ -37,6 +42,16 @@ export const ReservedParams= {
             'sr=1.1d or sr=1.1 - 1.1 degrees',
             'sr=150s - 150 arcseconds',
             'sr=22m - 22 arcminutes',
+        ]
+    },
+    imageSize : {
+        name: 'imageSize',
+        replace: ['imagesize'],
+        desc: [
+            'imageSize format options: d or none - degrees, m - arcminutes, s - arcseconds',
+            'imageSize=1.1d or imageSize=1.1 - 1.1 degrees',
+            'imageSize=150s - 150 arcseconds',
+            'imageSize=22m - 22 arcminutes',
         ]
     },
 };
@@ -96,9 +111,49 @@ export const ReservedParams= {
 /**
  * Returns true if the URL is attempting to use the firefly web api and that the commands array is non-empty
  * @param {Array.<WebApiCommand>} commandsAry - checks to see if array is non-empty
+ * @param {String} url - override url
  * @return {boolean}
  */
-export const isUsingWebApi= (commandsAry) => !isEmpty(commandsAry) && validAPIURL(document.location);
+export const isUsingWebApi= (commandsAry, url) => !isEmpty(commandsAry) && validAPIURL(url ?? document.location);
+
+export function initWebApi(webApiCommands) {
+    dispatchAddActionWatcher({
+        id: 'webApiWatcher',
+        actions: [WEB_API_CMD],
+        callback: receiveRemoteWebApiRequest,
+        params: {webApiCommands,callId:0}
+    });
+}
+
+let firstRemoteApiCall= true;
+
+function receiveRemoteWebApiRequest(action, cancelSelf, {webApiCommands,callId}) {
+    const {payload,type}= action ?? {};
+    if (type!==WEB_API_CMD) return;
+    if (!payload.paramStr) return;
+    const workingUrl= new URL(document.location);
+    const url= workingUrl.origin+workingUrl.pathname + '?'+ payload.paramStr;
+    const webApi= isUsingWebApi(webApiCommands, url);
+    if (!webApi) return;
+    const {status, cmd, execute, params}= evaluateWebApi(webApiCommands, url);
+    const logger = Logger('remote web api');
+    switch (status) {
+        case WebApiStat.EXECUTE_API_CMD:
+            const callParams= {...params, callId: `callid-${callId}` };
+            // setTimeout(() => execute?.(cmd,callParams), firstRemoteApiCall ? 2000 : 10);
+            execute?.(cmd,callParams);
+            firstRemoteApiCall= false;
+            callId++;
+            break;
+        case WebApiStat.SHOW_HELP:
+            logger.warn('show help');
+           break;
+        default:
+            logger.error(`Unexpect status, can't handle web api: ${status}`);
+            break;
+    }
+    return {webApiCommands,callId};
+}
 
 
 
@@ -108,11 +163,12 @@ const {NONE, OVERVIEW_HELP, COMMAND_NOT_FOUND, NO_COMMAND, INVALID_PARAMS, COMMA
 /**
  *
  * @param {Array.<WebApiCommand>} commandsAry
+ * @param {String} [overrideUrl] - is passed use this instead of location
  * @return {UrlApiStatus}
  */
-export function evaluateWebApi(commandsAry) {
+export function evaluateWebApi(commandsAry, overrideUrl) {
 
-    const url= document.location;
+    const url= overrideUrl ?? document.location;
 
     if (isEmpty(commandsAry) || !validAPIURL(url) ) return {status:WebApiStat.API_NOT_USED};
 
@@ -241,6 +297,24 @@ function findInsensitiveStr(list, str) {
     return list.find( (aStr) => aStr.toLowerCase()===lowerStr);
 }
 
+
+function getDegreeVal(inVal) {
+    if (!isNaN(Number(inVal))) {
+        return Number(inVal);
+    }
+    else if (inVal.endsWith('d') && !isNaN(Number(inVal.substring(0,inVal.length-1)))) {
+        return Number(inVal.substring(0,inVal.length-1));
+    }
+    else if (inVal.endsWith('m') && !isNaN(Number(inVal.substring(0,inVal.length-1)))) {
+        return Number(inVal.substring(0,inVal.length-1)) /60;
+    }
+    else if (inVal.endsWith('s') && !isNaN(Number(inVal.substring(0,inVal.length-1)))) {
+        return Number(inVal.substring(0,inVal.length-1)) /3600;
+    }
+}
+
+const getV= (v) => isArray(v) ? v[0] : v;
+
 function convertReservedParams(inParams, parameters) {
 
     const outParams= {...inParams};
@@ -252,12 +326,12 @@ function convertReservedParams(inParams, parameters) {
         const decKey= findInsensitiveStr(pKeys,'dec');
         let wp;
         if (inParams[worldPtKey]) {
-            wp= parseWorldPt(inParams[worldPtKey]);
+            wp= parseWorldPt(getV(inParams[worldPtKey]));
             Reflect.deleteProperty(outParams, worldPtKey);
             if (!wp) badParams.push(worldPtKey);
         }
         if (inParams[raKey] || inParams[decKey]) {
-            if (!wp) wp= makeWorldPt(Number(inParams[raKey]), Number(inParams[decKey]));
+            if (!wp) wp= makeWorldPt(Number(getV(inParams[raKey])), Number(getV(inParams[decKey])));
             Reflect.deleteProperty(outParams, raKey);
             Reflect.deleteProperty(outParams, decKey);
             if (!wp) {
@@ -270,26 +344,28 @@ function convertReservedParams(inParams, parameters) {
     if (parameters[ReservedParams.SR.name]) {
         const srKey= findInsensitiveStr(pKeys,'sr');
         if (inParams[srKey]) {
-            const srVal= inParams[srKey].toLowerCase();
-            let degVal;
-            if (!isNaN(Number(srVal))) {
-                degVal= Number(srVal);
-            }
-            else if (srVal.endsWith('d') && !isNaN(Number(srVal.substring(0,srVal.length-1)))) {
-                degVal= Number(srVal.substring(0,srVal.length-1));
-            }
-            else if (srVal.endsWith('m') && !isNaN(Number(srVal.substring(0,srVal.length-1)))) {
-                degVal= Number(srVal.substring(0,srVal.length-1)) /60;
-            }
-            else if (srVal.endsWith('s') && !isNaN(Number(srVal.substring(0,srVal.length-1)))) {
-                degVal= Number(srVal.substring(0,srVal.length-1)) /3600;
-            }
+            const srVal= getV(inParams[srKey]);
+            const degVal= getDegreeVal(srVal);
             if (!isNaN(degVal)) {
                 Reflect.deleteProperty(outParams, srKey);
                 outParams[ReservedParams.SR.name]= degVal;
             }
             else {
                 badParams.push(srKey);
+            }
+        }
+    }
+    if (parameters[ReservedParams.imageSize.name]) {
+        const isKey= findInsensitiveStr(pKeys,'imageSize');
+        if (inParams[isKey]) {
+            const isVal= inParams[isKey].toLowerCase();
+            const degVal= getDegreeVal(isVal);
+            if (!isNaN(degVal)) {
+                Reflect.deleteProperty(outParams, isKey);
+                outParams[ReservedParams.imageSize.name]= degVal;
+            }
+            else {
+                badParams.push(isKey);
             }
         }
     }

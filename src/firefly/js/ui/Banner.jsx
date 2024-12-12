@@ -2,85 +2,88 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {memo} from 'react';
-import shallowequal from 'shallowequal';
-import PropTypes from 'prop-types';
-import {useStoreConnector} from './SimpleComponent.jsx';
-import {getUserInfo} from '../core/AppDataCntlr.js';
-import {logout} from '../rpc/CoreServices.js';
-import {getVersionInfoStr, showFullVersionInfoDialog} from '../ui/DropDownContainer.jsx';
-import './Banner.css';
+import MenuRoundedIcon from '@mui/icons-material/MenuRounded.js';
+import {Box, IconButton, Sheet, Stack, Typography} from '@mui/joy';
+import React, {isValidElement, memo, useContext} from 'react';
+import {bool, element, node, object, shape, string} from 'prop-types';
+import {dispatchShowDialog, SIDE_BAR_ID} from '../core/ComponentCntlr.js';
+import {AppPropertiesCtx} from './AppPropertiesCtx.jsx';
+import {getVersionInfoStr, showFullVersionInfoDialog} from 'firefly/ui/VersionInfo.jsx';
+import {menuTabsBorderSx} from 'firefly/ui/Menu';
 
-const getVersionTipStr= (appTitle) => `${appTitle?appTitle+' ':''}Version:\n${getVersionInfoStr(true)}`;
+const getVersionTipStr= (appTitle) => `${appTitle?appTitle+' ':''}Version:\n${getVersionInfoStr(true,true)}`;
 
-export const Banner = memo( ({menu, readout, appIcon, visPreview, appTitle, additionalTitleStyle = {},
-                                 showUserInfo=false, enableVersionDialog= false, showTitleOnBanner=false,
-                             bannerMiddleStyle={}, bannerLeftStyle={}}) => {
+// todo - evaluate if we want soft/primary as our banner color
+const variant='soft';
+const color='primary';
+
+export const Banner = memo( ({menu, enableVersionDialog= false, appIcon:pAppIdon, appTitle:pAppTitle, title, slotProps, sx, ...props}) => {
+    const ctx = useContext(AppPropertiesCtx);
+    const {appIcon=pAppIdon, appTitle=pAppTitle} = ctx;
+    const appIconEl = appIcon && isValidElement(appIcon) ? React.cloneElement( appIcon, {
+                                        onClick: () => enableVersionDialog && showFullVersionInfoDialog(appTitle),
+                                        title: enableVersionDialog ? getVersionTipStr(appTitle) : ''
+                                    }) : undefined;
     return (
-        <div className='banner__main'>
-            <div className='banner__left' style={{ cursor: enableVersionDialog ? 'pointer' : 'inherit', ...bannerLeftStyle}}>
-                {appIcon ?
-                    <img src={appIcon}
-                         onClick={() => enableVersionDialog && showFullVersionInfoDialog(appTitle) }
-                         title={enableVersionDialog ? getVersionTipStr(appTitle) : ''}/> :
-                    <div style={{width: 75}}/>}
-            </div>
-            <div className='banner__middle' style={bannerMiddleStyle}>
+        <Sheet {...{variant, color,
+            sx: (theme) => ({
+                width:1, position:'relative',
+                ...menuTabsBorderSx(theme),
+                ...sx
+            }),
+            ...props
+        }}>
+            {Boolean(menu) && <Stack {...{direction:'row', minHeight:40, alignItems:'center', px:1,spacing: 0.5}}>
+                <AppConfigButton/>
 
-                {showTitleOnBanner && <div className='banner__middle--title' style={{marginLeft:'10px', ...additionalTitleStyle}}>{appTitle}</div>}
-                <div className='banner__middle--menu'>
-                    {menu}
-                </div>
-            </div>
-            <div className='banner__right'>
-                {visPreview}
-            </div>
-            {showUserInfo && <UserInfo/>}
-        </div>
+                <Stack direction='row' {...slotProps?.icon} sx={{flexGrow:0, cursor: enableVersionDialog ? 'pointer' : 'inherit', ...slotProps?.icon?.sx}} >
+                    {appIconEl || <Box width={75}/>}
+                </Stack>
+
+                <Stack {...{alignSelf:'flex-end', flexGrow:1, direction:'row', ...slotProps?.tabs}}>
+                    {title}
+                    <Stack {...{ flexGrow: 0, width: 1}}>
+                        {menu}
+                    </Stack>
+                </Stack>
+            </Stack> }
+        </Sheet>
     );
 });
 
 Banner.propTypes= {
-    menu: PropTypes.object,
-    readout: PropTypes.object,
-    appIcon: PropTypes.string,
-    visPreview: PropTypes.object,
-    appTitle: PropTypes.oneOfType([
-        PropTypes.string,
-        PropTypes.element
-    ]),
-    additionalTitleStyle: PropTypes.object,
-    showUserInfo: PropTypes.bool,
-    enableVersionDialog: PropTypes.bool,
+    menu: object,
+    appIcon: element,
+    appTitle: string,
+    enableVersionDialog: bool,
+    title: node,
+    sx: object,
+    slotProps: shape({
+        icon: object,
+        tabs: object
+    })
 };
 
-
-const UserInfo= memo(() => {
-    const [userInfo={}]= useStoreConnector(
-        (prev) => {
-            const userInfo= getUserInfo();
-            if (!prev) return userInfo;
-            return shallowequal(prev,userInfo) ? prev : userInfo;
-        });
-
-    const {loginName='Guest', firstName='', lastName='', login_url, logout_url} = userInfo;
-    const isGuest = loginName === 'Guest';
-    const onLogin = () => login_url && (window.location = login_url);
-    const onLogout = () => {
-        if (logout_url) window.location = logout_url;
-        logout();
-    };
-
-    const fn= (firstName && firstName.trim().toLowerCase()!=='null') ? firstName : '';
-    const ln= (lastName && lastName.trim().toLowerCase()!=='null') ? lastName : '';
-
-    const displayName = (fn || ln) ? `${fn} ${ln}` : loginName;
-
+function AppConfigButton({sx}) {
     return (
-        <div className='banner__user-info'>
-            <span>{displayName}</span>
-            {!isGuest && <div className='banner__user-info--links' onClick={onLogout}>Logout</div>}
-            {isGuest && <div className='banner__user-info--links' onClick={onLogin}>Login</div>}
-        </div>
+        <Stack sx={sx}>
+            <IconButton variant='outlined'  onClick={() => dispatchShowDialog(SIDE_BAR_ID)}>
+                <MenuRoundedIcon/>
+            </IconButton>
+        </Stack>
     );
-});
+}
+
+ export function makeBannerTitle(title,subTitle) {
+     if (title && subTitle) {
+         return (
+             <Stack pr={1}>
+                 <Typography {...{level:'h3', sx:{lineHeight:1, whiteSpace:'nowrap'} }}>{title}</Typography>
+                 <Typography {...{level:'title-sm', sx:{lineHeight:1, textAlign:'end'} }} >
+                     {subTitle}
+                 </Typography>
+             </Stack>
+         );
+     }
+     return <Typography {...{color, variant, level:'h4' }}>{title}</Typography>;
+}

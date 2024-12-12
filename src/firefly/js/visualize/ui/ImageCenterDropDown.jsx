@@ -1,3 +1,4 @@
+import {Stack} from '@mui/joy';
 import React, {useState} from 'react';
 import {get} from 'lodash';
 import {primePlot} from '../PlotViewUtil.js';
@@ -5,9 +6,6 @@ import {isImage} from '../WebPlot.js';
 import {PlotAttribute} from '../PlotAttribute';
 import {SingleColumnMenu} from '../../ui/DropDownMenu.jsx';
 import {DropDownVerticalSeparator, ToolbarButton} from '../../ui/ToolbarButton.jsx';
-import {DropDownToolbarButton} from '../../ui/DropDownToolbarButton.jsx';
-
-import CENTER_DROP from 'html/images/center-dropdown.png';
 import {getActivePlotView, getDrawLayersByType} from '../PlotViewUtil';
 import {dispatchChangeTableAutoScroll, dispatchRecenter} from '../ImagePlotCntlr';
 import {getTableGroup} from '../../tables/TableUtil';
@@ -19,8 +17,8 @@ import {dispatchAddPreference, getPreference} from '../../core/AppDataCntlr';
 import {DropDownSubMenu} from '../../ui/DropDownMenu';
 import FixedMarker from '../../drawingLayers/FixedMarker';
 import {dispatchAttachLayerToPlot, dispatchCreateDrawLayer, getDlAry} from '../DrawLayerCntlr';
+import {CenterDropdown} from './Buttons.jsx';
 import {formatWorldPt, formatWorldPtToString, formatWorldPtToStringSimple} from './WorldPtFormat';
-import {SimpleLayerOnOffButton} from './SimpleLayerOnOffButton';
 
 
 const MAX_TARGET_LEN= 10;
@@ -124,23 +122,25 @@ export function ImageCenterDropDown({visRoot:vr, visible, mi}) {
                            onClick={() => dispatchRecenter({plotId, centerOnImage:true})} />
 
             <DropDownVerticalSeparator useLine={true}/>
-            <FieldGroup style={{display:'flex', fontSize:'10pt', padding:'5px 0 0 0'}}
-                        groupKey='TARGET_DROPDOWN' keepState={false}>
-                <TargetPanel groupKey={'target-move-group'} labelWidth={80}
-                             label={'Center On:'} defaultToActiveTarget={false}
-                             showResolveSourceOp={false} showExample={false}/>
-                <div style={{display:'flex', flexDirection:'column'}}>
-                    <CompleteButton text= 'Go' innerStyle={{width:'100%'}} onSuccess={moveToTarget} fireOnEnter={true} />
-                    <CompleteButton style={{ marginTop:4}} innerStyle={{width:'100%'}}
-                                    text= 'Go & Mark' onSuccess={createMarkerAndMoveToTarget} />
-                </div>
+            <FieldGroup groupKey='TARGET_DROPDOWN'>
+                <Stack direction='row' spacing={1}>
+                    <TargetPanel groupKey={'target-move-group'}
+                                 label={'<Enter position to center on>'} defaultToActiveTarget={false}
+                                 showResolveSourceOp={false} showExample={false}/>
+                    <Stack {...{alignItems:'stretch'}}>
+                        <CompleteButton text= 'Go' onSuccess={moveToTarget} fireOnEnter={true}
+                                        sx={{'& button': {width:1}}}/>
+                        <CompleteButton style={{ marginTop:4, whiteSpace:'nowrap' }} innerStyle={{width:'100%'}}
+                                        text= 'Go & Mark' onSuccess={createMarkerAndMoveToTarget} />
+                    </Stack>
+                </Stack>
             </FieldGroup>
             {recentAry.length>0 && <DropDownVerticalSeparator useLine={true}/>}
             <DropDownSubMenu text={'Recent Positions'} visible={recentAry.length>0}>
                 {() =>
                     getRecentTargets().map( (t) => <ToolbarButton text={formatWorldPt(t)} tip={formatWorldPtToString(t)}
                                                                   style={{width:'100%'}}
-                                                                  enabled={Boolean(plot)} horizontal={false} key={t.toString()}
+                                                                  enabled={Boolean(plot)} key={t.toString()}
                                                                   onClick={() => dispatchRecenter({plotId:pv.plotId, centerPt:t})} />)
                 }
             </DropDownSubMenu>
@@ -149,11 +149,8 @@ export function ImageCenterDropDown({visRoot:vr, visible, mi}) {
     );
 
     return (
-        <DropDownToolbarButton icon={CENTER_DROP}
-                               tip='Center images'
-                               enabled={Boolean(plot)} horizontal={true} visible={visible}
-                               useDropDownIndicator={true}
-                               imageStyle={{width:24, height:24}}
+        <CenterDropdown tip='Image center drop down: center images'
+                               enabled={Boolean(plot)} visible={visible}
                                dropDown={dropDown}/>
 
     );

@@ -1,68 +1,61 @@
-import React, {Component} from 'react';
+import React from 'react';
 import PropTypes from 'prop-types';
-import shallowequal from 'shallowequal';
-import {omit} from 'lodash';
+import {Typography, Stack} from '@mui/joy';
 
 import {InputField} from './InputField.jsx';
 import {intValidator} from '../util/Validate.js';
 import LOADING from 'html/images/gxt/loading.gif';
 import {MAX_ROW} from '../tables/TableRequestUtil.js';
+import {ToolbarButton} from 'firefly/ui/ToolbarButton.jsx';
 
-export class PagingBar extends Component {
-    constructor(props) {
-        super(props);
-    }
+import FirstPage from '@mui/icons-material/FirstPage';
+import LastPage from '@mui/icons-material/LastPage';
+import NavigateNext from '@mui/icons-material/NavigateNext';
+import NavigateBefore from '@mui/icons-material/NavigateBefore';
 
-    shouldComponentUpdate(nProps, nState) {
-        return !shallowequal(omit(nProps, 'callbacks'), omit(this.props, 'callbacks'));
-    }
+export function PagingBar(props) {
+    const {currentPage=1, totalRows, pageSize=100, showLoading=false, callbacks} = props;
 
-    render() {
-        const {currentPage, totalRows, pageSize, showLoading, callbacks} = this.props;
+    const showAll = (totalRows === 0) || (pageSize === MAX_ROW);
+    const startIdx = (currentPage-1) * pageSize;
+    const endIdx = Math.min(startIdx+pageSize, totalRows);
+    var totalPages = Math.ceil((totalRows || 0)/pageSize);
 
-        const showAll = (totalRows === 0) || (pageSize === MAX_ROW);
-        const startIdx = (currentPage-1) * pageSize;
-        const endIdx = Math.min(startIdx+pageSize, totalRows);
-        var totalPages = Math.ceil((totalRows || 0)/pageSize);
-
-        const onPageChange = (pageNum) => {
-            if (pageNum.valid) {
-                callbacks.onGotoPage(pageNum.value);
-            }
-        };
-        const nchar = totalPages.toString().length;
-
-        const pagestr = (totalRows === 0) ? '' :
-                        `(${(startIdx+1).toLocaleString()} - ${endIdx.toLocaleString()} of ${totalRows.toLocaleString()})`;
-        const showingLabel = (  <div style={{fontSize: 'smaller', marginLeft: 3, display: 'inline-flex', alignItems: 'center', width: `${3 * nchar + 7}ch`}} >
-                                    {pagestr}
-                                </div>
-                            );
-        if (showAll) {
-            return showingLabel;
-        } else {
-            return (
-                <div className='PanelToolbar__group'>
-                    <div onClick={() => callbacks.onGotoPage(1)} className='PagingBar__button first' title='First Page'/>
-                    <div onClick={() => callbacks.onGotoPage(currentPage - 1)} className='PagingBar__button previous' title='Previous Page'/>
-                    <div style={{display: 'inline-flex', alignItems: 'center'}}>
-                        <InputField
-                            style={{textAlign: 'right', width: `${nchar}ch`}}
-                            validator = {intValidator(1, totalPages, 'Page Number')}
-                            tooltip = 'Jump to this page'
-                            value = {currentPage+''}
-                            onChange = {onPageChange}
-                            actOn={['blur','enter']}
-                            showWarning={false}
-                        /> <div style={{fontSize: 'smaller', marginLeft: 3, width: `${nchar + 3}ch`}}> of {totalPages}</div>
-                    </div>
-                    <div onClick={() => callbacks.onGotoPage(currentPage + 1)} className='PagingBar__button next'  title='Next Page'/>
-                    <div onClick={() => callbacks.onGotoPage(totalPages)} className='PagingBar__button last'  title='Last Page'/>
-                    {showingLabel}
-                    {showLoading ? <img style={{width:14,height:14,marginTop: '3px'}} src={LOADING}/> : false}
-                </div>
-            );
+    const onPageChange = (pageNum) => {
+        if (pageNum.valid) {
+            callbacks.onGotoPage(pageNum.value);
         }
+    };
+    const nchar = totalPages.toString().length;
+
+    const pagestr = (totalRows === 0) ? '' :
+                    `(${(startIdx+1).toLocaleString()} - ${endIdx.toLocaleString()} of ${totalRows?.toLocaleString()??''})`;
+    const showingLabel = (  <Typography level='body-sm' noWrap lineHeight={1}>{pagestr}</Typography> );
+    if (showAll) {
+        return showingLabel;
+    } else {
+        return (
+            <Typography component='div' display='flex' alignItems='center' direction='row' level='body-sm' noWrap>
+                <ToolbarButton icon={<FirstPage/>} tip='First Page' onClick={() => callbacks.onGotoPage(1)}/>
+                <ToolbarButton icon={<NavigateBefore/>} tip='Previous Page' onClick={() => callbacks.onGotoPage(currentPage - 1)}/>
+                <Stack direction='row' alignItems='center' spacing={1/2}>
+                    <InputField
+                        slotProps={{ input: { size: 'sm', sx: {width:'3em'} } }}
+                        style={{textAlign: 'right', width: `${nchar+1}ch`}}
+                        validator = {intValidator(1, totalPages, 'Page Number')}
+                        tooltip = 'Jump to this page'
+                        value = {currentPage+''}
+                        onChange = {onPageChange}
+                        actOn={['blur','enter']}
+                        showWarning={false}
+                    /> <div> of {totalPages}</div>
+                </Stack>
+                <ToolbarButton icon={<NavigateNext/>} tip='Next Page' onClick={() => callbacks.onGotoPage(currentPage + 1)}/>
+                <ToolbarButton icon={<LastPage/>} tip='Last Page' onClick={() => callbacks.onGotoPage(totalPages)}/>
+                {showingLabel}
+                {showLoading ? <img style={{width:14,height:14,marginTop: '3px'}} src={LOADING}/> : false}
+            </Typography>
+        );
     }
 }
 
@@ -72,13 +65,8 @@ PagingBar.propTypes = {
     pageSize: PropTypes.number,
     showLoading: PropTypes.bool,
     callbacks: PropTypes.shape({
-        onGotoPage: PropTypes.func.required
+        onGotoPage: PropTypes.func.isRequired
     })
 };
 
-PagingBar.defaultProps = {
-    currentPage: 1,
-    showLoading: false,
-    pageSize: 100
-};
 

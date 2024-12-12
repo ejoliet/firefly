@@ -3,45 +3,47 @@
  */
 
 
-import React, {memo, useEffect, useRef, useState} from 'react';
-import PropTypes from 'prop-types';
+import {Box, Stack} from '@mui/joy';
+import React, {memo, useEffect, useState} from 'react';
+import {object, array, bool, string, func} from 'prop-types';
 import shallowequal from 'shallowequal';
 import {isEmpty,omit,isFunction} from 'lodash';
+import {getSearchActions} from '../../core/AppDataCntlr.js';
+import HpxCatalog from '../../drawingLayers/hpx/HpxCatalog';
+import {getTblById} from '../../tables/TableUtil';
+import {EXPANDED_MODE_RESERVED, getMultiViewRoot, getViewer, GRID, IMAGE} from '../MultiViewCntlr.js';
 import {getPlotGroupById}  from '../PlotGroup.js';
-import {ExpandType, dispatchChangeActivePlotView} from '../ImagePlotCntlr.js';
-import {VisCtxToolbarView, canConvertHipsAndFits} from '../ui/VisCtxToolbarView';
+import {ExpandType, dispatchChangeActivePlotView, MOUSE_CLICK_REASON} from '../ImagePlotCntlr.js';
+import {ExpandButton} from '../ui/Buttons.jsx';
+import {VisCtxToolbarView, ctxToolbarBG} from '../ui/VisCtxToolbarView';
 import {VisInlineToolbarView} from '../ui/VisInlineToolbarView.jsx';
-import {primePlot, isActivePlotView, getAllDrawLayersForPlot, getPlotViewById} from '../PlotViewUtil.js';
+import {
+    primePlot, isActivePlotView, getAllDrawLayersForPlot, getPlotViewById, canConvertBetweenHipsAndFits
+} from '../PlotViewUtil.js';
 import {ImageViewerLayout}  from '../ImageViewerLayout.jsx';
 import {isImage, isHiPS} from '../WebPlot.js';
 import {PlotAttribute} from '../PlotAttribute.js';
 import {AnnotationOps} from '../WebPlotRequest.js';
 import {AREA_SELECT,LINE_SELECT,POINT} from '../../core/ExternalAccessUtils.js';
-import {PlotTitle, TitleType} from './PlotTitle.jsx';
-import Catalog from '../../drawingLayers/Catalog.js';
+import {PlotTitle} from './PlotTitle.jsx';
+import Catalog, {CatalogType} from '../../drawingLayers/Catalog.js';
 import LSSTFootprint from '../../drawingLayers/ImageLineBasedFootprint';
 import {DataTypes} from '../draw/DrawLayer.js';
 import {wrapResizer} from '../../ui/SizeMeConfig.js';
 import {getNumFilters} from '../../tables/FilterInfo';
 import {ZoomButton, ZoomType} from 'firefly/visualize/ui/ZoomButton.jsx';
-import './ImageViewerDecorate.css';
+import {expand} from 'firefly/visualize/ui/VisMiniToolbar.jsx';
 
 const EMPTY_ARRAY=[];
 
 const briefAnno= [
     AnnotationOps.INLINE_BRIEF,
-    AnnotationOps.INLINE_BRIEF_TOOLS,
-    AnnotationOps.TITLE_BAR_BRIEF,
-    AnnotationOps.TITLE_BAR_BRIEF_TOOLS,
-    AnnotationOps.TITLE_BAR_BRIEF_CHECK_BOX
 ];
 
-const toolsAnno= [
-    AnnotationOps.INLINE,
-    AnnotationOps.TITLE_BAR,
-    AnnotationOps.TITLE_BAR_BRIEF_TOOLS,
-    AnnotationOps.INLINE_BRIEF_TOOLS
-];
+const isCatDl= (dl) => (dl?.drawLayerTypeId === Catalog.TYPE_ID || dl?.drawLayerTypeId === HpxCatalog.TYPE_ID);
+
+const isCatalogPtData= (dl) => isCatDl(dl) && dl.catalogType===CatalogType.POINT;
+
 
 /**
  * todo
@@ -52,21 +54,22 @@ const toolsAnno= [
  */
 function showSelect(pv,dlAry) {
     return getAllDrawLayersForPlot(dlAry, pv.plotId,true)
-        .some( (dl) => (dl.drawLayerTypeId === Catalog.TYPE_ID && (dl.canSelect && !dl.dataTooBigForSelection) && dl.catalog) ||
+        .some( (dl) => (isCatalogPtData(dl) && (dl.canSelect && !dl.dataTooBigForSelection) ) ||
                         (dl.drawLayerTypeId === LSSTFootprint.TYPE_ID && dl.canSelect) );
 }
 
 function showFilter(pv,dlAry) {
     return getAllDrawLayersForPlot(dlAry, pv.plotId,true)
-        .some( (dl) => (dl.drawLayerTypeId===Catalog.TYPE_ID && dl.canFilter && dl.catalog) ||
+        .some( (dl) => (isCatalogPtData(dl) && dl.canFilter) ||
                        (dl.drawLayerTypeId === LSSTFootprint.TYPE_ID && dl.canFilter) );
 }
 
 function showClearFilter(pv,dlAry) {
     return getAllDrawLayersForPlot(dlAry, pv.plotId,true)
         .some( (dl) => {
-            const filterCnt= getNumFilters(dl.tableRequest);
-            return (dl.drawLayerTypeId===Catalog.TYPE_ID &&  filterCnt && dl.catalog ) ||
+            const request= dl.tableRequest ?? getTblById(dl.tbl_id)?.request;
+            const filterCnt= getNumFilters(request);
+            return (isCatalogPtData(dl) &&  filterCnt) ||
                    (dl.drawLayerTypeId === LSSTFootprint.TYPE_ID && filterCnt);
         });
 }
@@ -82,13 +85,15 @@ function showClearFilter(pv,dlAry) {
 function showUnselect(pv,dlAry) {
     return getAllDrawLayersForPlot(dlAry, pv.plotId,true)
         .filter( (dl) => {
-            return (dl.drawLayerTypeId===Catalog.TYPE_ID && dl.catalog) ||
-                   (dl.drawLayerTypeId===LSSTFootprint.TYPE_ID);
+            return (isCatalogPtData(dl) || dl.drawLayerTypeId===LSSTFootprint.TYPE_ID);
         })
         .some( (dl) => {
-                  const selectIdxs=dl.drawData[DataTypes.SELECTED_IDXS];
-                  const hasIndexes= isFunction(selectIdxs) || !isEmpty(selectIdxs);
-                  return (hasIndexes && dl.canSelect);
+
+            const {exceptions= new Set(), selectAll= false}= getTblById(dl.tbl_id)?.selectInfo ?? {};
+            const hasSelections= exceptions.size || (selectAll && !exceptions.size);
+            // const selectIdxs=dl.drawData[DataTypes.SELECTED_IDXS];
+            // const hasIndexes= isFunction(selectIdxs) || !isEmpty(selectIdxs);
+            return (hasSelections && dl.canSelect);
         });
 }
 
@@ -115,12 +120,12 @@ function showUnselect(pv,dlAry) {
 
 
 
-function contextToolbar(plotView,dlAry,extensionList, width) {
+function contextToolbar(plotView,dlAry,extensionList, width, makeToolbar) {
     const plot= primePlot(plotView);
     if (!plot) return;
 
     const showMultiImageController= isImage(plot) ? plotView.plots.length>1 : plot.cubeDepth>1;
-    const hipsFits= canConvertHipsAndFits(plotView);
+    const hipsFits= canConvertBetweenHipsAndFits(plotView);
 
     if (plot.attributes[PlotAttribute.SELECTION]) {
         const select= showSelect(plotView,dlAry);
@@ -129,10 +134,11 @@ function contextToolbar(plotView,dlAry,extensionList, width) {
         const clearFilter= showClearFilter(plotView,dlAry);
         const selAry= extensionList.filter( (ext) => ext.extType===AREA_SELECT);
         const extensionAry= isEmpty(selAry) ? EMPTY_ARRAY : selAry;
+        const searchActions= getSearchActions();
         return (
             <VisCtxToolbarView {...{plotView, extensionAry, width,
-                showSelectionTools:true, showCatSelect:select, showCatUnSelect:unselect,
-                showFilter:filter, showClearFilter:clearFilter, showMultiImageController}} />
+                showSelectionTools:true, showCatSelect:select, showCatUnSelect:unselect, searchActions,
+                showFilter:filter, showClearFilter:clearFilter, showMultiImageController, makeToolbar}} />
         );
     }
     else if (plot.attributes[PlotAttribute.ACTIVE_DISTANCE]) {
@@ -140,7 +146,7 @@ function contextToolbar(plotView,dlAry,extensionList, width) {
         if (!distAry.length && !showMultiImageController && !hipsFits) return;
         return (
                 <VisCtxToolbarView {...{plotView, extensionAry:isEmpty(distAry)?EMPTY_ARRAY:distAry,
-                    width, showMultiImageController}}/>
+                    width, showMultiImageController, makeToolbar}}/>
         );
     }
     else if (plot.attributes[PlotAttribute.ACTIVE_POINT]) {
@@ -148,34 +154,46 @@ function contextToolbar(plotView,dlAry,extensionList, width) {
         if (!ptAry.length && !showMultiImageController && !hipsFits) return;
         return (
                 <VisCtxToolbarView {...{plotView, extensionAry:isEmpty(ptAry)?EMPTY_ARRAY:ptAry, width,
-                    showMultiImageController}}/>
+                    showMultiImageController, makeToolbar}}/>
         );
     }
     else if (showUnselect(plotView, dlAry)) {
         return (
                <VisCtxToolbarView {...{plotView, extensionAry:EMPTY_ARRAY, width,
                        showCatUnSelect:true, showClearFilter:showClearFilter(plotView,dlAry),
-                       showMultiImageController}} />
+                       showMultiImageController, makeToolbar}} />
         );
     }
     else if (showClearFilter(plotView,dlAry)) {
         return (
                 <VisCtxToolbarView {...{plotView, extensionAry:EMPTY_ARRAY,  width,
-                    showClearFilter:true, showMultiImageController}} />
+                    showClearFilter:true, showMultiImageController, makeToolbar}} />
         );
     }
     else if (showMultiImageController || hipsFits || isHiPS(plot)) {
-        return ( <VisCtxToolbarView {...{plotView, extensionAry:EMPTY_ARRAY, showMultiImageController, width}}/> );
+        return ( <VisCtxToolbarView {...{plotView, extensionAry:EMPTY_ARRAY, showMultiImageController, width, makeToolbar}}/> );
     }
 }
 
+function hasManyPlots(pv,visRoot) {
+    const expandedViewer= getViewer(getMultiViewRoot(), EXPANDED_MODE_RESERVED);
+    const manyExpanded= visRoot.expandedMode!==ExpandType.COLLAPSE &&
+        expandedViewer.itemIdAry.length>1 && expandedViewer.layout===GRID;
+    const containerList= getMultiViewRoot().filter( (v) => v.containerType===IMAGE && v.mounted);
+    const manyPlots= manyExpanded ||
+        containerList.length>1 ||
+        (containerList[0]?.layout===GRID && containerList[0]?.itemIdAry?.length>1);
+    return manyPlots;
+}
 
-function getBorderColor(pv,visRoot) {
-    if (!pv && !pv.plotId) return 'rgba(0,0,0,.4)';
-    if (isActivePlotView(visRoot,pv.plotId)) return 'orange';
+function getBorderColor(manyPlots, theme, pv,visRoot) {
+    if (!pv?.plotId) return 'rgba(0,0,0,.4)';
+    if (!pv.plotViewCtx.highlightFeedback) return 'rgba(0,0,0,.1)';
+    if (isActivePlotView(visRoot,pv.plotId) || pv.subHighlight) {
+        return manyPlots ? `rgba(${theme.vars.palette.warning.mainChannel} / 1)` : 'rgba(0,0,0,.02)';
+    }
     const group= getPlotGroupById(visRoot,pv.plotGroupId);
-    // if (group && group.overlayColorLock) return 'rgba(0, 93, 164, .2)';
-    if (group && group.overlayColorLock) return 'rgba(0, 0, 0, .1)';
+    if (group?.overlayColorLock) return 'rgba(0, 0, 0, .1)';
     else return 'rgba(0,0,0,.2)';
 }
 
@@ -197,29 +215,46 @@ function arePropsEquals(props, np) {
 } //todo: look at closely for optimization
 
 
-function ZoomPair({pv, show}) {
+function ZoomGroup({visRoot, pv, show}) {
+
+    const {showImageToolbar=true}= pv?.plotViewCtx.menuItemKeys ?? {};
+    const manageExpand= !showImageToolbar && visRoot.expandedMode===ExpandType.COLLAPSE;
+    const p= primePlot(pv);
+    if (!p) return <div/>;
+
+    const sxFunc= (theme) => ({
+        visibility: show ? 'visible' : 'hidden',
+        opacity: show ? 1 : 0,
+        transition: show ? 'opacity .15s linear' : 'visibility 0s .15s, opacity .15s linear',
+        background:ctxToolbarBG(theme, 85),
+        borderRadius:'0 0 5px ',
+        position: 'relative',
+        maxWidth: '100%',
+        alignSelf: 'flex-start',
+    });
+
     return (
-        primePlot(pv) ? <div
-            style={{
-                visibility: show ? 'visible' : 'hidden',
-                opacity: show ? 1 : 0,
-                transition: show ? 'opacity .15s linear' : 'visibility 0s .15s, opacity .15s linear',
-                background:'rgba(227, 227, 227, .8)',
-                display:'inline-flex',
-                borderRadius:'0 0 5px ',
-                position: 'relative',
-                alignSelf: 'flex-start',
-                }}>
-            <ZoomButton size={20} plotView={pv} zoomType={ZoomType.UP} horizontal={true}/>
-            <ZoomButton size={20} plotView={pv} zoomType={ZoomType.DOWN} horizontal={true}/>
-        </div> : <div/>
+        <Stack direction='row' alignItems='flex-start' sx={sxFunc}>
+            {manageExpand && <ExpandButton tip='Expand this panel to take up a larger area'
+                                            onClick={() =>expand(pv?.plotId, false)}/>}
+
+            <Stack direction='row' alignItems='flex-start'>
+                <ZoomButton size={20} plotView={pv} zoomType={ZoomType.UP} />
+                <ZoomButton size={20} plotView={pv} zoomType={ZoomType.DOWN} />
+            </Stack>
+            <Stack direction='row' alignItems='flex-start'>
+                <ZoomButton size={20} plotView={pv} zoomType={ZoomType.FIT} />
+                <ZoomButton size={20} plotView={pv} zoomType={ZoomType.FILL} />
+                {isImage(p) && <ZoomButton size={20} plotView={pv} zoomType={ZoomType.ONE} />}
+            </Stack>
+        </Stack>
     );
     
 }
 
 const ImageViewerDecorate= memo((props) => {
-    const {plotView:pv,drawLayersAry,extensionList,visRoot,mousePlotId, workingIcon,
-        size:{width,height}, inlineTitle=true, aboveTitle= false }= props;
+    const {plotView:pv,drawLayersAry,extensionList,visRoot,mousePlotId, workingIcon,makeToolbar,
+        size:{width,height}}= props;
 
     const [showDelAnyway, setShowSelAnyway]= useState(false);
 
@@ -235,76 +270,64 @@ const ImageViewerDecorate= memo((props) => {
     },[mousePlotId]);
 
     const showDelete= pv.plotViewCtx.userCanDeletePlots;
-    const ctxToolbar= contextToolbar(pv,drawLayersAry,extensionList,width);
-    // const topOffset= ctxToolbar?32:0;
-    // const top= ctxToolbar?32:0;
+    const ctxToolbar= contextToolbar(pv,drawLayersAry,extensionList,width, makeToolbar);
     const expandedToSingle= (visRoot.expandedMode===ExpandType.SINGLE);
     const plot= primePlot(pv);
-    const iWidth= Math.max(expandedToSingle ? width : width-4,0);
-    const iHeight=Math.max(expandedToSingle ? height :height-5,0);
+    const iWidth= Math.trunc(width);
+    const iHeight=Math.trunc(height);
 
     const brief= briefAnno.includes(pv.plotViewCtx.annotationOps);
-    const titleLineHeaderUI= (plot && aboveTitle) ?
-                <PlotTitle brief={brief} titleType={TitleType.HEAD} plotView={pv} /> : undefined;
 
     const outerStyle= { width: '100%', height: '100%', overflow:'hidden', position:'relative'};
 
-    const innerStyle= {
-        width:'calc(100% - 4px)',
-        bottom: 0,
-        top: titleLineHeaderUI ? 20 : 0,
-        overflow: 'hidden',
-        position: 'absolute',
-        borderStyle: 'solid',
-        borderWidth: expandedToSingle ? '0 0 0 0' : '3px 2px 2px 2px',
-        borderColor: getBorderColor(pv,visRoot)
+    const innerStyle= (theme) => {
+        const manyPlots= hasManyPlots(pv,visRoot);
+        const active= isActivePlotView(visRoot,pv.plotId);
+        return {
+            width: !manyPlots  ? 1 : 'calc(100% - 4px)',
+            bottom: 0,
+            top: 0,
+            overflow: 'hidden',
+            position: 'absolute',
+            borderStyle: !manyPlots ? undefined : (pv.subHighlight && !active) ? 'dashed' : 'solid' ,
+            borderWidth: (expandedToSingle || !manyPlots) ? '0 0 0 0' : '1px',
+            borderRadius: manyPlots ? '5px' : undefined,
+            borderColor: getBorderColor(manyPlots, theme, pv,visRoot),
+        };
     };
 
-    if (titleLineHeaderUI) {
-        outerStyle.boxShadow= 'inset 0 0 3px #000';
-        outerStyle.padding= '3px';
-        outerStyle.width='calc(100% - 6px)';
-        outerStyle.height='calc(100% - 6px)';
-        innerStyle.bottom= 2;
-        innerStyle.width= 'calc(100% - 10px)';
-    }
-
-    const makeActive= () => pv?.plotId && dispatchChangeActivePlotView(pv.plotId);
+    const makeActive= () => pv?.plotId && dispatchChangeActivePlotView(pv.plotId,MOUSE_CLICK_REASON);
     const showZoom= mousePlotId===pv?.plotId;
-    const showDel= showDelAnyway || mousePlotId===pv?.plotId || !plot;
+    const showDel= showDelAnyway || mousePlotId===pv?.plotId || !plot || pv.nonRecoverableFail;
 
     return (
-        <div style={outerStyle} className='disable-select' onTouchStart={makeActive} onClick={makeActive} >
-            {titleLineHeaderUI}
-            <div className='image-viewer-decorate' style={innerStyle}>
-                <div style={{position: 'absolute', width:'100%', top:0, bottom:0, display:'flex', flexDirection:'column'}}>
+        <Box style={outerStyle} className='disable-select' onTouchStart={makeActive} onClick={makeActive} >
+            <Stack className='image-viewer-decorate' direction='row' sx={innerStyle}>
+                <Stack {...{position: 'absolute', width:1, top:0, bottom:0, mr:2 }}>
                     <ImageViewerLayout plotView={pv} drawLayersAry={drawLayersAry}
                                        width={iWidth} height={iHeight}
                                        externalWidth={width} externalHeight={height}/>
                     {ctxToolbar}
-                    {(plot && inlineTitle) ?
-                        <PlotTitle brief={brief} titleType={TitleType.INLINE} plotView={pv}
-                                   working={workingIcon} /> : undefined}
-                    <ZoomPair pv={pv} show={showZoom} />
-                </div>
-                <VisInlineToolbarView pv={pv} showDelete={showDelete} show={showDel}/>
-            </div>
-        </div>
+                    {(plot) ? <PlotTitle brief={brief}  plotView={pv} working={workingIcon} /> : undefined}
+                    <ZoomGroup visRoot={visRoot} pv={pv} show={showZoom} />
+                </Stack>
+                <VisInlineToolbarView pv={pv} showDelete={showDelete} deleteVisible={showDel}/>
+            </Stack>
+        </Box>
         );
 
 }, arePropsEquals);
 
 
 ImageViewerDecorate.propTypes= {
-    plotView : PropTypes.object.isRequired,
-    drawLayersAry: PropTypes.array.isRequired,
-    visRoot: PropTypes.object.isRequired,
-    extensionList : PropTypes.array.isRequired,
-    mousePlotId : PropTypes.string,
-    size : PropTypes.object.isRequired,
-    workingIcon: PropTypes.bool,
-    inlineTitle: PropTypes.bool,
-    aboveTitle: PropTypes.bool
+    plotView : object.isRequired,
+    drawLayersAry: array.isRequired,
+    visRoot: object.isRequired,
+    extensionList : array.isRequired,
+    mousePlotId : string,
+    size : object.isRequired,
+    workingIcon: bool,
+    makeToolbar: func,
 };
 
 export const ImageViewerView= wrapResizer(ImageViewerDecorate);

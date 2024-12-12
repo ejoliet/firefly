@@ -9,180 +9,47 @@ import edu.caltech.ipac.firefly.visualize.Band;
 import edu.caltech.ipac.firefly.visualize.PlotState;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.visualize.plot.plotdata.FitsRead;
-import edu.caltech.ipac.visualize.plot.WorldPt;
 
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.text.DecimalFormat;
 
 /**
  * @author Trey Roby
  */
-abstract class ModFileWriter {
+public class ModFileWriter {
 
-    private static final Logger.LoggerImpl _log= Logger.getLogger();
-    private final Band _band;
-    private final File _targetFile;
-    private final boolean _markAsOriginal;
+    private final Band band;
+    private final File targetFile;
+    private final FitsRead fr;
 
-    private ModFileWriter(Band band, File targetFile, boolean markAsOriginal) {
-        _band= band;
-        _targetFile= targetFile;
-        _markAsOriginal= markAsOriginal;
+    public ModFileWriter(File templateFile, int idx, FitsRead fr, Band band) {
+        this.band = band;
+        this.targetFile = makeFile(templateFile, idx);
+        this.fr = fr;
     }
 
-    protected File getTargetFile() { return _targetFile; }
-    protected boolean doTask() { return true; }
+    public File getTargetFile() { return targetFile; }
 
     /**
      * Write the fits file and update data structures
      * @param state the PlotState to update
      */
     public void writeFile(PlotState state) {
-        PlotStateUtil.setWorkingFitsFile(state, _targetFile, _band);
-        if (_markAsOriginal) {
-            PlotStateUtil.setOriginalFitsFile(state, _targetFile, _band);
-        }
-        if (doTask()) write();
-    }
-
-    public boolean getCreatesOnlyOneImage() { return true; }
-
-    protected abstract void write();
-
-    static class UnzipFileWriter extends ModFileWriter {
-
-        private File _checkFile;
-        private final boolean _unzipNecessary;
-
-        UnzipFileWriter(Band band, File checkFile) {
-            super(band, PlotServUtils.findWorkingFitsName(checkFile),true);
-            _checkFile= checkFile;
-            String ext= FileUtil.getExtension(_checkFile);
-            _unzipNecessary= (ext!=null && ext.equalsIgnoreCase(FileUtil.GZ));
-        }
-
-        protected boolean doTask() { return _unzipNecessary; }
-
-        protected void write() {
-            try {
-                int buffer= (int)FileUtil.MEG;
-                FileUtil.gUnzipFile(_checkFile, getTargetFile(),buffer);
-            } catch (IOException e) {
-                _log.warn(e,"zip expand failed",
-                          "zip file: "+_checkFile.getPath());
-            }
-        }
-
-        public boolean getCreatesOnlyOneImage() { return false; }
-    }
-
-    static class GeomFileWriter extends ModFileWriter {
-
-        private final FitsRead _fr;
-
-        GeomFileWriter(File templateFile, int idx, FitsRead fr, Band band, boolean markAsOriginal) {
-            super(band, makeFile(templateFile, idx), markAsOriginal);
-            _fr= fr;
-        }
-
-        public GeomFileWriter(File f, FitsRead fr, Band band) {
-            super(band, f, true);
-            _fr= fr;
-        }
-
-        static File makeFile(File templateFile, int idx) {
-            String geomTmp= templateFile.getName();
-            File f;
-            try {
-                f=  File.createTempFile(geomTmp + "-"+idx +"-geomed",
-                                            "."+FileUtil.FITS,
-                                            ServerContext.getVisSessionDir());
-            } catch (IOException e) {
-                f= new File(ServerContext.getVisSessionDir(),
-                                  geomTmp + "-"+idx +"-geomed." + FileUtil.FITS);
-            }
-            return f;
-        }
-
-        protected void write() {
-            File f= getTargetFile();
-            try {
-                OutputStream os= new BufferedOutputStream(new FileOutputStream(f), 1024*16);
-                _fr.writeSimpleFitsFile(os);
-                FileUtil.silentClose(os);
-                _fr.clearHDU();
-            } catch (Exception e) {
-                _log.warn(e,"geom write failed", "geom file: "+f.getPath());
-            }
-        }
-    }
-
-
-
-
-    public static File makeRotFileName(File templateFile, int idx, double angle) {
-        String geomTmp= templateFile.getName();
-
-        File f;
+        PlotStateUtil.setWorkingFitsFile(state, targetFile, band);
         try {
-            String angleDesc= Double.isNaN(angle) ? "north" : angle+"";
-            f= File.createTempFile(geomTmp + "-"+idx +"-rot-"+angleDesc,
-                                   "."+FileUtil.FITS,
-                                   ServerContext.getVisSessionDir());
+            fr.writeSimpleFitsFile(targetFile);
         } catch (IOException e) {
-            f= new File(ServerContext.getVisSessionDir(),
-                        geomTmp + "-"+idx +"-rot-north." + FileUtil.FITS);
+            Logger.getLogger().warn(e,"geom write failed", "geom file: "+targetFile.getPath());
         }
-        return f;
     }
 
-
-    static File makeCropCenterFileName(File templateFile, int idx, WorldPt wpt, double size) {
+    private static File makeFile(File templateFile, int idx) {
         String geomTmp= templateFile.getName();
-
-        File f;
         try {
-            DecimalFormat df = new DecimalFormat("##.##");
-            String cropDesc= (df.format(wpt.getLon())+"+"+df.format(wpt.getLat())+"x"+df.format(size)+"-")
-                    .replaceAll("\\+\\-","\\-");
-            f= File.createTempFile(geomTmp + "-"+idx +"-cropCenter-"+cropDesc,
-                                   "."+FileUtil.FITS,
-                                   ServerContext.getVisSessionDir());
+            return File.createTempFile(geomTmp + "-"+idx +"-geomed", "."+FileUtil.FITS,
+                    ServerContext.getVisSessionDir());
         } catch (IOException e) {
-            f= new File(ServerContext.getVisSessionDir(),
-                        geomTmp + "-"+idx +"-cropAndCenter." + FileUtil.FITS);
+            return new File(ServerContext.getVisSessionDir(), geomTmp + "-"+idx +"-geomed." + FileUtil.FITS);
         }
-        return f;
-    }
-
-    public static File makeFlipYFileName(File templateFile, int idx) {
-        String geomTmp= templateFile.getName();
-
-        File f;
-        try {
-            f= File.createTempFile(geomTmp+ "-"+idx + "-flipedY-", "."+FileUtil.FITS,
-                                   ServerContext.getVisSessionDir());
-        } catch (IOException e) {
-            f= new File(ServerContext.getVisSessionDir(), geomTmp +"-"+idx + "-flipedY."+FileUtil.FITS);
-        }
-        return f;
-    }
-
-    public static File makeFlipXFileName(File templateFile, int idx) {
-        String geomTmp= templateFile.getName();
-
-        File f;
-        try {
-            f= File.createTempFile(geomTmp+ "-"+idx + "-flipedX-", "."+FileUtil.FITS,
-                                   ServerContext.getVisSessionDir());
-        } catch (IOException e) {
-            f= new File(ServerContext.getVisSessionDir(), geomTmp +"-"+idx + "-flipedX."+FileUtil.FITS);
-        }
-        return f;
     }
 }
-

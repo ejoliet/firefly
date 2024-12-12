@@ -4,31 +4,34 @@
 
 import React, {useCallback, useState} from 'react';
 import PropTypes from 'prop-types';
-import {set, cloneDeep, get, omit} from 'lodash';
+import {cloneDeep, get} from 'lodash';
 import DialogRootContainer from './DialogRootContainer.jsx';
 import {PopupPanel} from './PopupPanel.jsx';
 import {dispatchShowDialog, dispatchHideDialog} from '../core/ComponentCntlr.js';
 import {FormPanel} from './FormPanel.jsx';
 import {FieldGroup} from './FieldGroup.jsx';
 import Validate from '../util/Validate.js';
-import {InputField} from './InputField.jsx';
 import {ValidationField} from './ValidationField.jsx';
 import {ListBoxInputField} from './ListBoxInputField.jsx';
 import {showInfoPopup} from './PopupUtil.jsx';
 import {getActiveTableId, getTblById, hasRowAccess, getProprietaryInfo} from '../tables/TableUtil.js';
 import {makeTblRequest} from '../tables/TableRequestUtil.js';
-import {dispatchPackage, dispatchBgSetEmailInfo} from '../core/background/BackgroundCntlr.js';
+import {dispatchPackage} from '../core/background/BackgroundCntlr.js';
 import {WS_HOME} from '../visualize/WorkspaceCntlr.js';
-import {getBgEmailInfo} from '../core/background/BackgroundUtil.js';
 import {SelectInfo} from '../tables/SelectInfo.js';
-import {DataTagMeta} from '../tables/TableRequestUtil.js';
 import {useStoreConnector} from './SimpleComponent.jsx';
 import {BgMaskPanel} from '../core/background/BgMaskPanel.jsx';
 import {WsSaveOptions} from './WorkspaceSelectPane.jsx';
 import {NotBlank} from '../util/Validate.js';
+import {CheckboxGroupInputField} from './CheckboxGroupInputField.jsx';
+import {getFieldVal} from '../fieldGroup/FieldGroupUtils.js';
+import {Stack, Typography, Box} from '@mui/joy';
+import {ToolbarButton} from 'firefly/ui/ToolbarButton';
 
 const DOWNLOAD_DIALOG_ID = 'Download Options';
 const OptionsContext = React.createContext();
+const emailNotif = 'enableEmailNotification';
+const emailKey = 'Email';          // should match server DownloadRequest.EMAIL
 
 /**
  * This download button does 2 things:
@@ -63,7 +66,6 @@ const OptionsContext = React.createContext();
  *                         label : 'Title for this download:'
  *                     }}
  *                 fieldKey='Title'
- *                 labelWidth={110}/>
  *         </DownloadOptionPanel>
  *     </DownloadButton>
  * </code>
@@ -71,15 +73,20 @@ const OptionsContext = React.createContext();
  * 'All levels associated with this AOR will be downloaded.'
  * PreTitleMessage can be added to the dlParams from the parent and passed here (FIREFLY-723)
  * @param props
+ * @param props.tbl_id
+ * @param props.tbl_grp
+ * @param props.children
+ * @param props.checkSelectedRow
+ * @param props.makeButton
  * @returns {*}
  */
-export function DownloadButton(props) {
+export function DownloadButton({tbl_id:inTblId , tbl_grp, children, checkSelectedRow=true, makeButton}) {
 
-    const {tbl_grp, children, checkSelectedRow} = props;
-    const tblIdGetter = () => props.tbl_id || getActiveTableId(tbl_grp);
+    const tblIdGetter = () => inTblId || getActiveTableId(tbl_grp);
     const selectInfoGetter = () => get(getTblById(tblIdGetter()), 'selectInfo');
 
-    const [tbl_id, selectInfo] = useStoreConnector(tblIdGetter, selectInfoGetter);
+    const tbl_id = useStoreConnector(tblIdGetter);
+    const selectInfo = useStoreConnector(selectInfoGetter);
     const selectInfoCls = SelectInfo.newInstance(selectInfo);
 
     const onClick = useCallback(() => {
@@ -98,13 +105,13 @@ export function DownloadButton(props) {
         }
     }, [selectInfo]);
 
-    const style = selectInfoCls.getSelectedCount() ? 'button std attn' : 'button std hl';
+    const isRowSelected = selectInfoCls.getSelectedCount()>0;
+
+    const defButton=
+        <ToolbarButton variant={isRowSelected?'solid':'soft'} color='warning' onClick={() =>onClick()} text='Prepare Download'/>;
+
     return (
-        <button style={{display: 'inline-block'}}
-                type = 'button'
-                className = {style}
-                onClick = {onClick}
-        >Prepare Download</button>
+        makeButton?.(onClick,tbl_id,isRowSelected) ?? defButton
     );
 }
 
@@ -115,38 +122,18 @@ DownloadButton.propTypes = {
     checkSelectedRow:PropTypes.bool
 };
 
-
-DownloadButton.defaultProps = {
-    checkSelectedRow:true
-};
-const noticeCss = {
-    backgroundColor: 'beige',
-    color: 'brown',
-    border: '1px solid #cacaae',
-    padding: 3,
-    borderRadius: 2,
-    marginBottom: 10,
-    whiteSpace: 'nowrap',
-    textAlign: 'center'
-};
-
-const preTitleCss = {
-    padding: 3,
-    marginBottom: 10,
-    whiteSpace: 'wrap',
-};
-
 let dlTitleIdx = 0;
 const newBgKey = () => 'DownloadOptionPanel-' + Date.now();
 
-export function DownloadOptionPanel (props) {
-    const {groupKey, cutoutSize, help_id, children, style, title, dlParams, dataTag, updateSearchRequest=null, updateDownloadRequest=null} = props;
-    const { cancelText='Cancel', showZipStructure=true, showEmailNotify=true, showFileLocation=true, showTitle=true } = props;
+// TODO: showEmailNotify changed to default of false, when we make a notification plan we can change it back.
 
+export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, help_id, children, style, title, dlParams,
+                                         updateSearchRequest, updateDownloadRequest, validateOnSubmit,
+                                         cancelText='Cancel', showZipStructure=true, showEmailNotify=false,
+                                         showFileLocation=true, showTitle=true, ...props}) {
     const {tbl_id:p_tbl_id, checkSelectedRow} = React.useContext(OptionsContext);
     const tbl_id = props.tbl_id || p_tbl_id;
 
-    const labelWidth = 110;
     const [bgKey, setBgKey] = useState(newBgKey());
 
     const onSubmit = useCallback((formInputs={}) => {
@@ -159,12 +146,21 @@ export function DownloadOptionPanel (props) {
             return showInfoPopup('You have not chosen any data to download', 'No Data Selected');
         }
 
+        const {valid, message} = validateOnSubmit?.(formInputs) ?? {valid : true};
+        if (!valid) {
+            showInfoPopup(message ?? 'Invalid form input(s)', 'Error in form inputs');
+            return false; // to prevent FormPanel to submit
+        }
+
         formInputs.wsSelect = formInputs.wsSelect && formInputs.wsSelect.replace(WS_HOME, '');
         //make a download request
         let dlRequest = makeTblRequest(FileGroupProcessor, formInputs.Title, Object.assign(dlParams, {cutoutSize}, formInputs));
 
+        if (!dlParams[emailNotif]) Reflect.deleteProperty(dlRequest, emailKey);
+        Reflect.deleteProperty(dlRequest, emailNotif);
+
         //make a search request
-        let searchRequest = set(cloneDeep(request), DataTagMeta, dataTag);
+        let searchRequest = cloneDeep(request);
 
         /*If a calling application has its own parameters to be added, deleted or updated, those parameters
           can be provided by using getOverrideRequestParams function.
@@ -183,56 +179,49 @@ export function DownloadOptionPanel (props) {
         dispatchPackage(dlRequest, searchRequest, SelectInfo.newInstance(selectInfo).toString(), akey);
         dlTitleIdx++;
         setBgKey(akey);
-    }, [cutoutSize, dataTag, dlParams, tbl_id]);
+    }, [cutoutSize, dlParams, tbl_id]);
 
-    const showWarnings = hasProprietaryData(getTblById(tbl_id));
+    // const showWarnings = hasProprietaryData(getTblById(tbl_id)); // it feature is not working correctly
 
-    const maskStyle = {
-        position: 'absolute',
-        top:-26,
-        bottom:-4,
-        right:-4,
-        left:-4,
-        width:undefined,
-        height:undefined,
-        backgroundColor: 'rgba(0,0,0,0.2)'
-    };
-    const maskPanel = <BgMaskPanel key={bgKey} componentKey={bgKey} style={maskStyle}/>;
+    const maskPanel = (<BgMaskPanel key={bgKey} componentKey={bgKey}
+                                   onMaskComplete={() =>hideDownloadDialog()}/>);
 
     const saveAsProps = {
         initialState: {
             value: get(dlParams, 'BaseFileName')
         }
     };
-
     const dlTitle = get(dlParams, 'TitlePrefix', 'Download') + '-' + dlTitleIdx;
     const preTitleMessage = dlParams?.PreTitleMessage ?? '';
     return (
-        <div style = {Object.assign({margin: '4px', position: 'relative', minWidth:400, height:'auto'}, style)}>
+        <Stack sx ={{m:1/2, position: 'relative', minWidth:400, height:'auto', ...style}}>
             <FormPanel
-                submitText = 'Prepare Download'
-                cancelText = {cancelText}
                 groupKey = {groupKey}
-                onSubmit = {onSubmit}
-                onCancel = {() => dispatchHideDialog(DOWNLOAD_DIALOG_ID)}
+                onSuccess= {onSubmit}
+                onCancel= {() => dispatchHideDialog(DOWNLOAD_DIALOG_ID)}
+                completeText='Prepare Download'
+                cancelText={cancelText}
                 help_id  = {help_id}>
+
                 <FieldGroup groupKey={groupKey} keepState={true}>
-                    {showWarnings && <div style={noticeCss}>This table contains proprietary data. Only data to which you have access will be downloaded.</div>}
-                    {preTitleMessage && <div style={preTitleCss}>{preTitleMessage}</div>}
-                    <div className='FieldGroup__vertical--more'>
-                        {showTitle && <TitleField {...{labelWidth, value:dlTitle }}/>}
+                    {preTitleMessage && (<Typography sx={{p:1,mb:1,whiteSpace: 'wrap'}}>
+                            {preTitleMessage}
+                        </Typography>
+                    )}
+                    <Stack spacing={1}>
+                        {showTitle && <TitleField {...{value:dlTitle}}/>}
 
                         {children}
 
-                        {cutoutSize         && <DownloadCutout {...{labelWidth}} />}
-                        {showZipStructure   && <ZipStructure {...{labelWidth}} />}
-                        {showFileLocation   && <WsSaveOptions {...{groupKey, labelWidth, saveAsProps}}/>}
-                        {showEmailNotify    && <EmailNotification/>}
-                    </div>
+                        {cutoutSize         && <DownloadCutout />}
+                        {showZipStructure   && <ZipStructure />}
+                        {showFileLocation   && <WsSaveOptions {...{groupKey, labelWidth:110, saveAsProps}}/>}
+                        {showEmailNotify    && <EmailNotification {...{groupKey}}/>}
+                    </Stack>
                 </FieldGroup>
             </FormPanel>
             {maskPanel}
-        </div>
+        </Stack>
     );
 }
 
@@ -243,7 +232,6 @@ DownloadOptionPanel.propTypes = {
     help_id:    PropTypes.string,
     title:      PropTypes.string,           // title of the dialog, appears at top of the dialog
     style:      PropTypes.object,
-    dataTag:    PropTypes.string,
 
     showTitle:        PropTypes.bool,           // layout Title field.  This is the title of the package request.  It will be displayed in background monitor.
     showZipStructure: PropTypes.bool,           // layout ZipStructure field
@@ -251,6 +239,7 @@ DownloadOptionPanel.propTypes = {
     showFileLocation: PropTypes.bool,           // layout FileLocation field
     updateSearchRequest: PropTypes.func,   // customized parameters to be added or updated in request
     updateDownloadRequest:PropTypes.func,
+    validateOnSubmit: PropTypes.func,      // to validate form inputs on submit
     dlParams:   PropTypes.shape({               // these params should be used as defaults value if they appears as input fields
         TitlePrefix:    PropTypes.string,           // default title of the download..  an index number will be appended to this.
         FilePrefix:     PropTypes.string,           // packaged file prefix
@@ -261,27 +250,21 @@ DownloadOptionPanel.propTypes = {
     })
 };
 
-DownloadOptionPanel.defaultProps= {
-    groupKey: 'DownloadDialog',
-};
-
-
-export function TitleField({style={}, labelWidth, value, label='Title:', size=30}) {
+export function TitleField({style={}, value, label='Title:', size=30}) {
 
     return (
         <ValidationField
             forceReinit={true}
             fieldKey='Title'
             tooltip='Enter a description to identify this download.'
-            {...{validator:NotBlank, initialState:{value}, label, labelWidth, size, style}}
+            {...{validator:NotBlank, initialState:{value}, label, size, style}}
         />
     );
 }
 
-export function ZipStructure({style={}, fieldKey='zipType', labelWidth}) {
+export function ZipStructure({fieldKey='zipType'}) {
     return (
         <ListBoxInputField
-            wrapperStyle={style}
             fieldKey = {fieldKey}
             initialState = {{
                 tooltip: 'Zip File Structure',
@@ -291,16 +274,14 @@ export function ZipStructure({style={}, fieldKey='zipType', labelWidth}) {
                 {label: 'Structured (with folders)', value: 'folder'},
                 {label: 'Flattened (no folders)', value: 'flat'}
             ]}
-            labelWidth = {labelWidth}
         />
 
     );
 }
 
-export function DownloadCutout({style={}, fieldKey='dlCutouts', labelWidth}) {
+export function DownloadCutout({fieldKey='dlCutouts'}) {
     return (
         <ListBoxInputField
-            wrapperStyle = {style}
             fieldKey = {fieldKey}
             initialState = {{
                 tooltip: 'Download Cutouts Option',
@@ -310,43 +291,32 @@ export function DownloadCutout({style={}, fieldKey='dlCutouts', labelWidth}) {
                 {label: 'Specified Cutouts', value: 'cut'},
                 {label: 'Original Images', value: 'orig'}
             ]}
-            labelWidth = {labelWidth}
         />
     );
 }
-export function EmailNotification({style}) {
-
-    const [{email, enableEmail}] = useStoreConnector(getBgEmailInfo);
-
-    const toggleEnableEmail = (e) => {
-        const checked = e.target.checked;
-        const m_email = checked ? email : '';
-        dispatchBgSetEmailInfo({email: m_email, enableEmail: checked});
-    };
-
-    const onEmailChanged = (v) => {
-        if (get(v, 'valid')) {
-            if (email !== v.value) dispatchBgSetEmailInfo({email: v.value});
-        }
-    };
+export function EmailNotification({style, groupKey}) {
+    const enableEmail = useStoreConnector(() => getFieldVal(groupKey, emailNotif));
 
     return (
-        <div style={style}>
-            <div style={{width: 250, marginTop: 15}}><input type='checkbox' checked={enableEmail} onChange={toggleEnableEmail}/>Enable email notification</div>
+        <Box sx={{...style}} spacing={1}>
+            <Stack width={250} mt={2}>
+                <CheckboxGroupInputField fieldKey={emailNotif}
+                                     initialState= {{value: ''}}
+                                     options={[{label:'Enable email notification', value: 'true'}]}/>
+            </Stack>
             {enableEmail &&
-                <InputField
+                <ValidationField
+                    fieldKey={emailKey}
                     validator={Validate.validateEmail.bind(null, 'an email field')}
                     tooltip='Enter an email to be notified when a process completes.'
                     label='Email:'
-                    labelStyle={{display: 'inline-block', marginLeft: 18, width: 32, fontWeight: 'bold'}}
-                    value={email}
+                    labelStyle={{marginLeft: 18, fontWeight: 'bold'}}
                     placeholder='Enter an email to get notification'
                     style={{width: 170}}
-                    onChange={onEmailChanged}
                     actOn={['blur', 'enter']}
                 />
             }
-        </div>
+        </Box>
     );
 }
 
@@ -387,19 +357,16 @@ function hasOnlyProprietaryData(tableModel={}){
 /**
  * creates and show the DownloadDialog.
  * @param {Component}  panel  the panel to show in the popup.
- * @param {boolean} [show=true] show or hide this dialog
  */
-function showDownloadDialog(panel, show=true) {
+function showDownloadDialog(panel) {
     const title = get(panel, 'props.title', DOWNLOAD_DIALOG_ID);
-    if (show) {
-        const content= (
-            <PopupPanel title={title} >
-                {panel}
-            </PopupPanel>
-        );
-        DialogRootContainer.defineDialog(DOWNLOAD_DIALOG_ID, content);
-        dispatchShowDialog(DOWNLOAD_DIALOG_ID);
-    } else {
-        dispatchHideDialog(DOWNLOAD_DIALOG_ID);
-    }
+    const content= (
+        <PopupPanel title={title} >
+            {panel}
+        </PopupPanel>
+    );
+    DialogRootContainer.defineDialog(DOWNLOAD_DIALOG_ID, content);
+    dispatchShowDialog(DOWNLOAD_DIALOG_ID);
 }
+
+const hideDownloadDialog= () => dispatchHideDialog(DOWNLOAD_DIALOG_ID);

@@ -1,24 +1,47 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import SplitPane from 'react-split-pane';
+import {Stack, Box} from '@mui/joy';
+
+import {dispatchComponentStateChange, getComponentState} from '../../core/ComponentCntlr.js';
+import {useStoreConnector} from '../SimpleComponent.jsx';
+
+
+/**
+ * A wrapper for SplitPane with persistent split position
+ * @param p  component properties
+ * @param p.children  pass through children component
+ * @param p.defaultSize   the default split size
+ * @param p.pKey  an identifier for this panel.  One will be created if not given
+ * @returns {JSX.Element}
+ */
+export const SplitPanel = ({children, defaultSize, pKey, ...rest}) => {
+    pKey = 'SplitPanel-' + pKey;
+    const {pos}  = useStoreConnector(() => getComponentState(pKey));
+    const onChange = (pos) => dispatchComponentStateChange(pKey, {pos});
+
+    return (
+        <SplitPane split='horizontal' defaultSize={pos ?? defaultSize} onChange={onChange} {...rest}>
+            {children}
+        </SplitPane>
+    );
+};
+
 
 /**
  * decorate the content with DockLayoutPanel's look and feel.
- * @param content
- * @returns {XML}
+ * @param p  component props
+ * @param p.sx
+ * @param p.style  additional style to container; (deprecated use sx instead)
+ * @param p.className  additional className to container
+ * @param p.children  content of this panel
  */
-export function createContentWrapper(content) {
-   return ( <div className='wrapper'> <div className='content'>{content}</div> </div> );
-}
-
-/**
- * decorate the content with DockLayoutPanel's look and feel.
- * @param children  content of this panel
- */
-export function SplitContent({style, children}) {
-    return ( <div className='wrapper'>
-                <div style={style} className='content'>{children}</div>
-             </div>
+export function SplitContent({sx={}, style={}, className='', children}) {
+    return ( <Stack overflow='hidden' position='relative' width={1} m={1/2}>
+                <Box overflow='hidden' position='absolute' sx={{inset:'0', ...style, ...sx}} className={className}>
+                    {children}
+                </Box>
+             </Stack>
             );
 }
 
@@ -28,11 +51,11 @@ function one(config, items){
     const item = config.center || config.north || config.east || config.west || config.south;
 
     return (
-        <div className='Pane vertical' style={{height: '100%'}}>
+        <Stack height={1} direction='row'>
             <SplitContent>
                 {items[item.index]}
             </SplitContent>
-        </div>
+        </Stack>
     );
 }
 
@@ -43,28 +66,28 @@ function two(config, items){
         const top = config.north || config.center;
         const bottom = config.south || config.center;
         return (
-            <SplitPane split='horizontal'  {...top}>
+            <SplitPanel {...top} pKey='one'>
                 <SplitContent>
                     {items[top.index]}
                 </SplitContent>
                 <SplitContent>
                     {items[bottom.index]}
                 </SplitContent>
-            </SplitPane>
+            </SplitPanel>
 
         );
     } else if (config.east || config.west) {
         const left = config.east || config.center;
         const right = config.west || config.center;
         return (
-            <SplitPane split='vertical' {...left}>
+            <SplitPanel split='vertical' {...left} pKey='one'>
                 <SplitContent>
                     {items[left.index]}
                 </SplitContent>
                 <SplitContent>
                     {items[right.index]}
                 </SplitContent>
-            </SplitPane>
+            </SplitPanel>
         );
     }
 }
@@ -76,37 +99,37 @@ function three(config, items){
         if (config.south) {
             const two = config.east || config.center || config.west;
             return (
-                <SplitPane split='horizontal' {...config.north}>
+                <SplitPanel  {...config.north} pKey='one'>
                     <SplitContent>
                         {items[config.north.index]}
                     </SplitContent>
-                    <SplitPane split='horizontal' {...two}>
+                    <SplitPanel  {...two} pKey='two'>
                         <SplitContent>
                             {items[two.index]}
                         </SplitContent>
                         <SplitContent>
                             {items[config.south.index]}
                         </SplitContent>
-                    </SplitPane>
-                </SplitPane>
+                    </SplitPanel>
+                </SplitPanel>
             );
         } else {
             const two = config.east || config.center;
             const three = config.west || config.center;
             return (
-                <SplitPane split='horizontal' {...config.north}>
+                <SplitPanel  {...config.north} pKey='one'>
                     <SplitContent>
                         {items[config.north.index]}
                     </SplitContent>
-                    <SplitPane split='vertical' {...two.config}>
+                    <SplitPanel split='vertical' {...two.config} pKey='two'>
                         <SplitContent>
                             {items[two.index]}
                         </SplitContent>
                         <SplitContent>
                             {items[three.index]}
                         </SplitContent>
-                    </SplitPane>
-                </SplitPane>
+                    </SplitPanel>
+                </SplitPanel>
             );
         }
     } else {
@@ -114,35 +137,35 @@ function three(config, items){
             const one = config.east || config.center;
             const two = config.west || config.center;
             return (
-                <SplitPane split='horizontal' {...config.south}>
-                    <SplitPane split='vertical' {...one}>
+                <SplitPanel  {...config.south} pKey='one'>
+                    <SplitPanel split='vertical' {...one} pKey='two'>
                         <SplitContent>
                             {items[one.index]}
                         </SplitContent>
                         <SplitContent>
                             {items[two.index]}
                         </SplitContent>
-                    </SplitPane>
+                    </SplitPanel>
                     <SplitContent>
                         {items[config.south.index]}
                     </SplitContent>
-                </SplitPane>
+                </SplitPanel>
             );
         } else {
             return (
-                <SplitPane split='vertical' {...config.east}>
+                <SplitPanel split='vertical' {...config.east} pKey='one'>
                     <SplitContent>
                         {items[config.east.index]}
                     </SplitContent>
-                    <SplitPane split='vertical' {...config.west}>
+                    <SplitPanel split='vertical' {...config.west} pKey='two'>
                         <SplitContent>
                             {items[config.center.index]}
                         </SplitContent>
                         <SplitContent>
                             {items[config.west.index]}
                         </SplitContent>
-                    </SplitPane>
-                </SplitPane>
+                    </SplitPanel>
+                </SplitPanel>
             );
         }
     }
@@ -163,11 +186,11 @@ const DockLayoutPanel = function (props) {
     var {config, children} = props;
 
     return (
-        <div style={{position: 'relative',  flex: 'auto'}}>
-            <div style={{position: 'absolute', top: '0', bottom: 0, left: 0, right: 0}}>
+        <Box position='relative'  flex='auto'>
+            <Box position='absolute' sx={{inset:'0'}}>
                 {layoutDom(config, children)}
-            </div>
-        </div>
+            </Box>
+        </Box>
     );
 };
 

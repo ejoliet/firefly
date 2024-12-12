@@ -4,6 +4,7 @@
 
 
 import {get, isEmpty} from 'lodash';
+import {findTableCenterColumns} from '../voAnalyzer/TableAnalysis.js';
 import {isPlotIdInPvNewPlotInfoAry,
          isDrawLayerVisible, getDrawLayerById, getPlotViewById} from '../visualize/PlotViewUtil.js';
 import {getRelatedDataById} from '../visualize/RelatedDataUtil.js';
@@ -18,9 +19,9 @@ import DrawLayerCntlr, {dlRoot, dispatchModifyCustomField} from '../visualize/Dr
 import {makeWorldPt} from '../visualize/Point.js';
 import {doFetchTable} from '../tables/TableUtil.js';
 import {getUIComponent} from './CatalogUI.jsx';
-import {findTableCenterColumns} from '../util/VOAnalyzer.js';
 import {dispatchAddActionWatcher} from '../core/MasterSaga';
 import {logger} from '../util/Logger.js';
+import {MAX_ROW} from 'firefly/tables/TableRequestUtil.js';
 
 const TYPE_ID= 'ARTIFACT_TYPE';
 
@@ -84,7 +85,7 @@ function retrieveArtifactsTable(drawLayer) {
 
     if (!rd) return;
 
-    const sendReq= clone(rd.searchParams,{ startIdx : 0, pageSize : 1000000 });
+    const sendReq= clone(rd.searchParams,{ startIdx : 0, pageSize : MAX_ROW });
 
     doFetchTable(sendReq).then(
         (tableModel) => {

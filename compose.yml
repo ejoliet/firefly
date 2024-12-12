@@ -1,0 +1,35 @@
+services:
+  firefly:
+    image: ipac/firefly:${BUILD_TAG:-latest}  # value taken from shell, or latest
+    build:
+      context: ../
+      dockerfile: firefly/docker/Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./firefly-docker.env
+
+  test:
+    build:
+      context: ../
+      dockerfile: firefly/docker/Dockerfile
+      target: deps
+    command: bash -c "cd firefly && gradle firefly:test"
+    volumes: &volInfo
+      - ../firefly_test_data:/opt/work/firefly_test_data
+      - ../firefly:/opt/work/firefly
+      - /opt/work/firefly/.gradle
+      - /opt/work/firefly/build
+      - /opt/work/firefly/jars/build
+      - /opt/work/firefly/node_modules
+  dev:
+    build:
+      context: ../
+      dockerfile: firefly/docker/Dockerfile
+      target: dev_env
+    ports:
+      - "8080:8080"
+      - "5050:5050"
+    env_file:
+      - ./firefly-docker.env
+    volumes: *volInfo

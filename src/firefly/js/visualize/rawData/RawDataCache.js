@@ -8,26 +8,15 @@ import {RawDataThreadActions} from '../../threadWorker/WorkerThreadActions.js';
  * @typedef RawDataStoreEntry
  *
  * @prop plotImageId
- * @prop {Float32Array} float1d
- * @prop {HistogramData} histogram
- * @prop {number} dataWidth
- * @prop {number} dataHeight
- * @prop {Array<Int8Array>} stretchedDataTiles
- * @prop {Array<Int8Array>} color
- * @prop {ThumbnailImage} thumbnailData
+ * @prop {Canvas} thumbnailEncodedImage
  * @prop {Array.<{x:number,y:number,width:number,height:number,local:boolean}>} localScreenTileDefList
- * @prop {number} datamin
- * @prop {number} datamax
- * @prop {Object} processHeader
- * @prop {Object} imageTileDataGroup
- * @prop {Array.<Canvas>} rawDataTiles
+ * @prop {RawTileDataGroup}
+ *
  * @prop {number} loadingCnt - number of times this is loading, it should be 0,1,2
  */
 
-export const FULL= 'FULL';
 export const STRETCH_ONLY= 'STRETCH_ONLY';
 export const CLEARED= 'CLEARED';
-
 
 export const {addRawDataToCache, getEntry, removeRawData}= (() => {
 
@@ -41,7 +30,7 @@ export const {addRawDataToCache, getEntry, removeRawData}= (() => {
      * @param band
      * @param dataType
      */
-    const addRawDataToCache= (plotImageId, processHeader, workerKey, band= Band.NO_BAND, dataType=FULL) => {
+    const addRawDataToCache= (plotImageId, processHeader, workerKey, band= Band.NO_BAND, dataType='FULL') => {
         const bandEntry= {processHeader, rawTileDataAry:[], thumbnailEncodedImage: undefined};
         const entry= rawDataStore.find( (e) => e.plotImageId===plotImageId);
         if (entry) {

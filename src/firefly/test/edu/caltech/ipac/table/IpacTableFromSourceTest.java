@@ -6,18 +6,23 @@ package edu.caltech.ipac.table;
 import edu.caltech.ipac.firefly.ConfigTest;
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
+import edu.caltech.ipac.firefly.server.SrvParam;
+import edu.caltech.ipac.firefly.server.query.DataAccessException;
+import edu.caltech.ipac.firefly.server.query.SearchManager;
+import edu.caltech.ipac.firefly.server.query.SearchServerCommands;
 import edu.caltech.ipac.firefly.server.query.tables.IpacTableFromSource;
 import edu.caltech.ipac.firefly.util.FileLoader;
+import edu.caltech.ipac.table.io.VoTableReader;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 
 import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_INDEX;
-import static edu.caltech.ipac.table.JsonTableUtil.getPathValue;
 
 public class IpacTableFromSourceTest extends ConfigTest {
 
@@ -54,7 +59,7 @@ public class IpacTableFromSourceTest extends ConfigTest {
     public void fromUrl() {
         try {
             TableServerRequest req = new TableServerRequest(IpacTableFromSource.PROC_ID);
-            req.setParam(ServerParams.SOURCE, "http://web.ipac.caltech.edu/staff/loi/demo/sample_multi_votable.xml");
+            req.setParam(ServerParams.SOURCE, "https://web.ipac.caltech.edu/staff/loi/demo/sample_multi_votable.xml");
 
             DataGroup results = new IpacTableFromSource().fetchDataGroup(req);
             verifyTableData(results, null);
@@ -68,6 +73,60 @@ public class IpacTableFromSourceTest extends ConfigTest {
             Assert.fail("IpacTableFromSourceTest.fromUrl failed with exception: " + e.getMessage());
         }
     }
+
+    @Test
+    public void votableError() {
+        try {
+            // bad request, but returned 200 with error votable
+            TableServerRequest req = new TableServerRequest(IpacTableFromSource.PROC_ID);
+            req.setParam(ServerParams.SOURCE, "https://irsa.ipac.caltech.edu/SIA?POS=xxx%2083.633107%2022.014486%200.002777777777777778&MAXREC=50000");
+            new SearchManager().getDataGroup(req);
+            Assert.fail("should have thrown an exception");
+        } catch (Exception e) {
+            Assert.assertTrue(e.getCause().getMessage().contains("BAD_REQUEST"));
+        }
+
+        try {
+            // bad request.  returned 400 with error votable
+            TableServerRequest req = new TableServerRequest(IpacTableFromSource.PROC_ID);
+            req.setParam(ServerParams.SOURCE, "https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/argus/sync?REQUEST%3DdoQuery");
+            SrvParam sp = new SrvParam(new HashMap<>());
+            sp.setParam(ServerParams.REQUEST, JsonTableUtil.toJsonTableRequest(req).toJSONString());
+            new SearchServerCommands.TableSearch().doCommand(sp);
+            Assert.fail("should have thrown an exception");
+        } catch (Exception e) {
+            Assert.assertTrue(e.getCause().getMessage().contains("400 Bad Request"));
+        }
+
+        try {
+            // bad request, returned 404 with text/html;  the html body is ignored.
+            TableServerRequest req = new TableServerRequest(IpacTableFromSource.PROC_ID);
+            req.setParam(ServerParams.SOURCE, "https://irsa.ipac.caltech.edu/SxxxxIA");
+            new SearchManager().getDataGroup(req);
+            Assert.fail("should have thrown an exception");
+        } catch (Exception e) {
+            Assert.assertTrue(e.getCause().getMessage().contains("404 Not Found"));
+        }
+    }
+
+    @Test
+    public void misplacedVotableError() {
+        String errorTable = """
+<?xml version="1.0" encoding="utf-8"?>
+  <VOTABLE version="1.3" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+    <RESOURCE>
+      <INFO name="QUERY_STATUS" value="ERROR">UsageFault: Unrecognized shape in POS string &#39;XXXXX 62 -37 0.027777777777777776&#39;</INFO>
+    </RESOURCE>
+  </VOTABLE>
+          """;
+        try {
+            String error = VoTableReader.getError(new ByteArrayInputStream(errorTable.getBytes()), "n/a");
+            Assert.assertEquals("UsageFault: Unrecognized shape in POS string 'XXXXX 62 -37 0.027777777777777776'", error);
+        } catch (DataAccessException e) {
+            Assert.fail("should not have thrown an exception");
+        }
+    }
+
 
     private void verifyTableData(DataGroup data, String suffix) {
         suffix = suffix == null ? "" : suffix;
@@ -110,7 +169,7 @@ public class IpacTableFromSourceTest extends ConfigTest {
         Assert.assertEquals(1, groups.get(0).getParamInfos().size());
         Assert.assertEquals("cooframe", groups.get(0).getParamInfos().get(0).getKeyName());
         Assert.assertEquals("pos.frame", groups.get(0).getParamInfos().get(0).getUCD());
-        Assert.assertEquals("UTC-ICRS-TOPO", groups.get(0).getParamInfos().get(0).getValue());
+        Assert.assertEquals("UTC-ICRS-TOPO", groups.get(0).getParamInfos().get(0).getStringValue());
         Assert.assertEquals("char", groups.get(0).getParamInfos().get(0).getTypeDesc());
         Assert.assertEquals("stc:AstroCoords.coord_system_id", groups.get(0).getParamInfos().get(0).getUType());
     }

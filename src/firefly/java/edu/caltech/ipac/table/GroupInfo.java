@@ -1,8 +1,10 @@
 package edu.caltech.ipac.table;
 
-import java.io.Serializable;
-import java.util.*;
 import edu.caltech.ipac.util.StringUtils;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Object representing the info. for group of columns, like GROUP element under the TABLE element in VOTable
@@ -24,6 +26,11 @@ public class GroupInfo implements Serializable, Cloneable{
     public GroupInfo(String name, String desc) {
         this.name = name;
         this.desc = desc;
+    }
+
+    public GroupInfo(String name, String desc, List<RefInfo> columnRefs) {
+        this(name,desc);
+        setColumnRefs(columnRefs);;
     }
 
     public void setName(String name) { this.name =  name;}
@@ -72,13 +79,13 @@ public class GroupInfo implements Serializable, Cloneable{
     public List<RefInfo> getColumnRefs() { return columnRefs; }
     public void setColumnRefs(List<RefInfo> refs) {
         columnRefs.clear();
-        columnRefs.addAll(refs);
+        if (refs != null) columnRefs.addAll(refs);
     }
 
     public List<RefInfo> getParamRefs() { return paramRefs; }
     public void setParamRefs(List<RefInfo> refs) {
         paramRefs.clear();
-        paramRefs.addAll(refs);
+        if (refs != null) paramRefs.addAll(refs);
     }
 
     // convert FieldRef into DataType

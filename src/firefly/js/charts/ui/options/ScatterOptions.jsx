@@ -1,5 +1,6 @@
-import React, {useEffect} from 'react';
-import {get, isUndefined, omit, range} from 'lodash';
+import React, {useCallback, useEffect} from 'react';
+import {get, isUndefined, omit, range, isString, defaultsDeep, memoize} from 'lodash';
+import {Stack, Typography} from '@mui/joy';
 
 import {Expression} from '../../../util/expr/Expression.js';
 import {getChartData, hasUpperLimits} from '../../ChartsCntlr.js';
@@ -8,25 +9,27 @@ import {FieldGroup} from '../../../ui/FieldGroup.jsx';
 import {VALUE_CHANGE} from '../../../fieldGroup/FieldGroupCntlr.js';
 
 import {ListBoxInputField} from '../../../ui/ListBoxInputField.jsx';
-import {basicFieldReducer, basicOptions, helpStyle, LayoutOptions, submitChanges,} from './BasicOptions.jsx';
-import {updateSet} from '../../../util/WebUtil.js';
+import {basicFieldReducer, LayoutOptions, submitChanges, useBasicOptions,} from './BasicOptions.jsx';
+import {toBoolean, updateSet} from '../../../util/WebUtil.js';
 import {useStoreConnector} from '../../../ui/SimpleComponent.jsx';
 import {getColValStats} from '../../TableStatsCntlr.js';
 import {ColumnOrExpression} from '../ColumnOrExpression.jsx';
 import {
-    Error_X, Error_Y, errorFieldKey, errorMinusFieldKey, errorTypeFieldKey, getDefaultErrorType
+    Error_X, Error_Y, errorFieldKey, errorMinusFieldKey, errorShowFieldKey, errorTypeFieldKey, getDefaultErrorType
 } from './Errors.jsx';
 import {getAppOptions} from '../../../core/AppDataCntlr.js';
 import {getTblById} from '../../../tables/TableUtil.js';
 import {PlotlyCS} from '../../Colorscale.js';
 import {getSpectrumProps, spectrumType} from '../../dataTypes/FireflySpectrum.js';
-import {FieldGroupCollapsible} from '../../../ui/panel/CollapsiblePanel.jsx';
+import {
+    CollapsibleGroup,
+    CollapsibleItem
+} from '../../../ui/panel/CollapsiblePanel.jsx';
 import {hideColSelectPopup} from '../ColSelectView.jsx';
 import {CheckboxGroupInputField} from '../../../ui/CheckboxGroupInputField.jsx';
 import {getFieldVal} from '../../../fieldGroup/FieldGroupUtils.js';
 
 
-const fieldProps = {labelWidth: 60, size: 20};
 
 /**
  * Should we display Upper Limit field under Y?
@@ -38,24 +41,24 @@ export function yLimitUI() {
 }
 
 /**
- *
- * @param pActiveTrace  given when adding a new chart or a new trace
- * @param tbl_id        given when adding a new chart
- * @param chartId
- * @param groupKey
+ * @param p
+ * @param p.activeTrace  given when adding a new chart or a new trace
+ * @param p.tbl_id       given when adding a new chart
+ * @param p.chartId
+ * @param p.groupKey
  * @returns {*}
  * @constructor
  */
 export function ScatterOptions({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey}) {
 
-    const [activeTrace] = useStoreConnector(() => pActiveTrace ?? getChartData(chartId)?.activeTrace);
+    const activeTrace = useStoreConnector(() => pActiveTrace ?? getChartData(chartId)?.activeTrace);
     useEffect(() => {
         return () => hideColSelectPopup();
     }, []);
 
     groupKey = groupKey || `${chartId}-scatter-${activeTrace}`;
     const {tbl_id, tablesource, dataType} = getChartProps(chartId, ptbl_id, activeTrace);
-    const {UseSpectrum, X, Y, Yerrors, Xerrors, Ymax, Ymin, Mode} = scatterInputs({activeTrace, tbl_id, chartId, groupKey, fieldProps});
+    const {UseSpectrum, X, Y, Yerrors, Xerrors, Ymax, Ymin, Mode} = useScatterInputs({activeTrace, tbl_id, chartId, groupKey});
     const showUseSpectrum = !isSpectralOrder(chartId) && dataType === spectrumType;
 
     const reducerFunc = fieldReducer({chartId, activeTrace, tbl_id});
@@ -63,59 +66,62 @@ export function ScatterOptions({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartI
 
     return (
         <FieldGroup keepState={false} groupKey={groupKey} reducerFunc={reducerFunc}>
-
-            {showUseSpectrum && <UseSpectrum/>}
-
-            {tablesource &&
-                <div className='FieldGroup__vertical'>
-                    <div style={helpStyle}>
-                        For X and Y, enter a column or an expression<br/>
-                        ex. log(col); 100*col1/col2; col1-col2
-                    </div>
-                    <X/>
-                    <Xerrors/>
-                    <br/>
-                    <Y/>
-                    {(yLimitUI() || hasUpperLimits(chartId, activeTrace)) && <Ymax/>}
-                    {(yLimitUI() || hasUpperLimits(chartId, activeTrace)) && <Ymin/>}
-                    <Yerrors/>
-                    <br/>
-                </div>
-            }
-            <Mode/>
-
-            <div style={{margin: '5px 0 0 -22px'}}>
-                <ScatterCommonOptions {...{activeTrace, tbl_id, chartId, groupKey, fieldProps}}/>
-                <LayoutOptions {...{activeTrace, tbl_id, chartId, groupKey}}/>
-            </div>
-
+            <Stack spacing={3}>
+                <Stack spacing={2} sx={{'.MuiFormLabel-root': {width: '5rem'}}}>
+                    {showUseSpectrum && <UseSpectrum/>}
+                    {tablesource &&
+                        <Stack spacing={2}>
+                            <Typography level='body-sm'>
+                                For X and Y, enter a column or an expression<br/>
+                                ex. log(col); 100*col1/col2; col1-col2
+                            </Typography>
+                            <Stack spacing={1}>
+                                <X/>
+                                <Xerrors/>
+                            </Stack>
+                            <Stack spacing={1}>
+                                <Y/>
+                                {(yLimitUI() || hasUpperLimits(chartId, activeTrace)) && <Ymax/>}
+                                {(yLimitUI() || hasUpperLimits(chartId, activeTrace)) && <Ymin/>}
+                                <Yerrors/>
+                            </Stack>
+                        </Stack>
+                    }
+                    <Mode/>
+                </Stack>
+                <CollapsibleGroup>
+                    <ScatterCommonOptions {...{activeTrace, tbl_id, chartId, groupKey}}/>
+                    <LayoutOptions {...{activeTrace, tbl_id, chartId, groupKey}}/>
+                </CollapsibleGroup>
+            </Stack>
         </FieldGroup>
     );
 }
 
-export function ScatterCommonOptions({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey, fieldProps}) {
+export function ScatterCommonOptions({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey, ...props}) {
 
     const {activeTrace, tbl_id, noColor, multiTrace} = getChartProps(chartId, ptbl_id, pActiveTrace);
-    const {Symbol, ColorMap, ColorSize, ColorScale} = scatterInputs({activeTrace, tbl_id, chartId, groupKey, fieldProps});
-    const {Name, Color} = basicOptions({activeTrace, tbl_id, chartId, groupKey, fieldProps});
+    const {Symbol, ColorMap, ColorSize, ColorScale} = useScatterInputs({activeTrace, tbl_id, chartId, groupKey});
+    const {Name, Color} = useBasicOptions({activeTrace, tbl_id, chartId, groupKey});
     const colValStats = getColValStats(tbl_id);
     const isOrder = isSpectralOrder(chartId);
 
     return (
-        <FieldGroupCollapsible header='Trace Options' initialState={{value: 'closed'}} fieldKey='traceOptions'>
-            <div className='FieldGroup__vertical'>
+        <CollapsibleItem header='Trace Options' componentKey='chart-scatter-options'
+                                   {...props /* to allow AccordionGroup styling props inserted by joy UI, propagate to Accordion */}>
+            <Stack spacing={2} sx={{'.MuiFormLabel-root': {width: '6rem'}}}>
                 {multiTrace && <Name/>}
                 <Symbol/>
                 {!noColor && <Color/>}
                 {colValStats && !isOrder && (
-                    <div className='FieldGroup__vertical'>
+                    <Stack spacing={1}>
                         <ColorMap/>
                         <ColorScale/>
                         <ColorSize/>
-                    </div>
+                    </Stack>
                 )}
-            </div>
-        </FieldGroupCollapsible>
+            </Stack>
+        </CollapsibleItem>
     );
 }
 
@@ -145,7 +151,7 @@ export function fieldReducer({chartId, activeTrace, tbl_id}) {
             // when field changes, clear error fields
             ['x','y'].forEach((a) => {
                 if (fieldKey === `_tables.data.${activeTrace}.${a}`) {
-                    inFields = updateSet(inFields, [errorTypeFieldKey(activeTrace, `${a}`), 'value'], 'none');
+                    inFields = updateSet(inFields, [errorTypeFieldKey(activeTrace, `${a}`), 'value'], undefined);
                     inFields = updateSet(inFields, [errorFieldKey(activeTrace, `${a}`), 'value'], undefined);
                     inFields = updateSet(inFields, [errorMinusFieldKey(activeTrace, `${a}`), 'value'], undefined);
                 }
@@ -214,7 +220,7 @@ export function submitChangesScatter({chartId, activeTrace, fields, tbl_id, rend
     // check if error should be visible or symmetric
     ['x','y'].forEach((a) => {
         const errorsType = fields[errorTypeFieldKey(activeTrace, a)];
-        const errorsVisible = errorsType && errorsType !== 'none';
+        const errorsVisible = toBoolean(fields[errorShowFieldKey(activeTrace, a)]);
         changes[`data.${activeTrace}.error_${a}.visible`] = errorsVisible;
         if (highlighted) { changes[`highlighted.error_${a}.visible`] = errorsVisible; }
         if (selected) { changes[`selected.error_${a}.visible`] = errorsVisible; }
@@ -247,80 +253,89 @@ function getTraceType(chartId, tbl_id, activeTrace) {
     return type;
 }
 
-
-
-export function scatterInputs ({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey, fieldProps={}}) {
+/*
+ * This function returns a collection of components using `useCallback`, ensuring they are not recreated between re-renders.
+ * To modify this behavior, you can set the `deps` parameter accordingly.
+ */
+export const useScatterInputs = ({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey, orientation='horizontal'}, deps=[]) => {
     const {activeTrace, tbl_id, data, fireflyData, mappings} = getChartProps(chartId, ptbl_id, pActiveTrace);
     const colValStats = getColValStats(tbl_id);
+    const strOrNull = (v) => isString(v) ? v : undefined;
+
+    const withDefaults = (props) => {
+        const defaults = {slotProps: {control: {orientation}}};
+        // deep-merge defaults to props only if they don't exist already
+        return defaultsDeep({...props}, defaults); //pass a copy of props to avoid mutation
+    };
 
     return {
-        Mode: (props={}) => ( <ListBoxInputField fieldKey={`data.${activeTrace}.mode`}
+        Mode: useCallback((props) => ( <ListBoxInputField fieldKey={`data.${activeTrace}.mode`}
                                                  label='Trace Style:'
-                                                 initialState= {{value: get(data, `${activeTrace}.mode`)}}
+                                                 initialState= {{value: strOrNull(get(data, `${activeTrace}.mode`))}}
                                                  options={[{label: 'points', value:'markers'},
                                                      {label: 'connected points', value:'lines+markers'},
                                                      {label: 'lines', value:'lines'}]}
-                                                  {...fieldProps} {...props}/>),
-        Symbol: (props={}) => (<ListBoxInputField fieldKey={`data.${activeTrace}.marker.symbol`}
+                                                 {...withDefaults(props)}/>), deps),
+        Symbol: useCallback((props) => (<ListBoxInputField fieldKey={`data.${activeTrace}.marker.symbol`}
                                                   label='Symbol:'
-                                                  initialState= {{value: get(data, `${activeTrace}.marker.symbol`)}}
+                                                  initialState= {{value: strOrNull(get(data, `${activeTrace}.marker.symbol`))}}
                                                   options={[{value:'circle'}, {value:'circle-open'}, {value:'square'}, {value:'square-open'},
                                                       {value:'diamond'}, {value:'diamond-open'},{value:'cross'}, {value:'x'},
                                                       {value:'triangle-up'}, {value:'hexagon'}, {value:'star'}]}
-                                                   {...fieldProps} {...props}/>),
-        X: (props={}) => (<ColumnOrExpression fldPath={`_tables.data.${activeTrace}.x`}
+                                                  {...withDefaults(props)}/>), deps),
+        X: useCallback((props) => (<ColumnOrExpression fldPath={`_tables.data.${activeTrace}.x`}
                                       initValue= {get(mappings, 'x', '')}
                                       label='X:'
                                       name='X'
                                       nullAllowed={false}
                                       colValStats={colValStats}
-                                      groupKey={groupKey}  {...fieldProps} {...props}/>),
-        Y: (props={}) => (<ColumnOrExpression fldPath={`_tables.data.${activeTrace}.y`}
+                                      groupKey={groupKey} {...withDefaults(props)}/>), deps),
+        Y: useCallback((props) => (<ColumnOrExpression fldPath={`_tables.data.${activeTrace}.y`}
                                       initValue={get(mappings, 'y', '')}
                                       label='Y:'
                                       name='Y'
                                       nullAllowed={false}
                                       colValStats={colValStats}
-                                      groupKey={groupKey}  {...fieldProps} {...props}/>),
-        Xerrors: (props={}) => (<Error_X {...{chartId, groupKey, activeTrace, tbl_id, ...fieldProps, ...props}}/>),
-        Yerrors: (props={}) => (<Error_Y {...{chartId, groupKey, activeTrace, tbl_id, ...fieldProps ,...props}}/>),
-        Xmin: (props={}) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.xMin`}
+                                      groupKey={groupKey} {...withDefaults(props)}/>), deps),
+        Xerrors: useCallback((props) => (<Error_X {...{chartId, groupKey, activeTrace, tbl_id, ...withDefaults(props)}}/>), deps),
+        Yerrors: useCallback((props) => (<Error_Y {...{chartId, groupKey, activeTrace, tbl_id, ...withDefaults(props)}}/>), deps),
+        Xmin: useCallback((props) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.xMin`}
                                          initValue={getFieldVal(groupKey, `_tables.fireflyData.${activeTrace}.xMin`) ?? get(mappings, `fireflyData.${activeTrace}.xMin`, '')}
                                          label = 'Spectral axis lower limit column:'
                                          name = 'Lower Limit'
                                          nullAllowed = {true}
                                          colValStats={colValStats}
-                                         groupKey = {groupKey}  {...fieldProps} {...props}/>),
-        Xmax: (props={}) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.xMax`}
+                                         groupKey = {groupKey} {...withDefaults(props)}/>), deps),
+        Xmax: useCallback((props) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.xMax`}
                                          initValue={getFieldVal(groupKey, `_tables.fireflyData.${activeTrace}.xMax`) ?? get(mappings, `fireflyData.${activeTrace}.xMax`, '')}
                                          label = 'Spectral axis upper limit column:'
                                          name = 'Upper Limit'
                                          nullAllowed={true}
                                          colValStats={colValStats}
-                                         groupKey = {groupKey}  {...fieldProps} {...props}/>),
-        Ymin: (props={}) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.yMin`}
+                                         groupKey = {groupKey} {...withDefaults(props)}/>), deps),
+        Ymin: useCallback((props) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.yMin`}
                                          initValue={getFieldVal(groupKey, `_tables.fireflyData.${activeTrace}.yMin`) ??  get(mappings, `fireflyData.${activeTrace}.yMin`, '')}
                                          label = {'\u21A5:'}
                                          name = 'Lower Limit'
                                          nullAllowed = {true}
                                          colValStats={colValStats}
-                                         groupKey = {groupKey}  {...fieldProps} {...props}/>),
-        Ymax: (props={}) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.yMax`}
+                                         groupKey = {groupKey} {...withDefaults(props)}/>), deps),
+        Ymax: useCallback((props) => (<ColumnOrExpression fldPath = {`_tables.fireflyData.${activeTrace}.yMax`}
                                          initValue={getFieldVal(groupKey, `_tables.fireflyData.${activeTrace}.yMax`) ?? get(mappings, `fireflyData.${activeTrace}.yMax`, '')}
                                          label = {'\u21A7:'}
                                          name = 'Upper Limit'
                                          nullAllowed={true}
                                          colValStats={colValStats}
-                                         groupKey = {groupKey}  {...fieldProps} {...props}/>),
-        ColorMap: (props={}) => (<ColumnOrExpression fldPath = {`_tables.data.${activeTrace}.marker.color`}
+                                         groupKey = {groupKey} {...withDefaults(props)}/>), deps),
+        ColorMap: useCallback((props) => (<ColumnOrExpression fldPath = {`_tables.data.${activeTrace}.marker.color`}
                                          initValue={get(mappings, 'marker.color', '')}
                                          label = 'Color Map:'
                                          name = 'Color Map'
                                          key='colorMap'
                                          colValStats={colValStats}
                                          nullAllowed={true}
-                                         groupKey = {groupKey}  {...fieldProps} {...props}/>),
-        ColorSize: (props={}) => (<ColumnOrExpression fldPath = {`_tables.data.${activeTrace}.marker.size`}
+                                         groupKey = {groupKey} {...withDefaults(props)}/>), deps),
+        ColorSize: useCallback((props) => (<ColumnOrExpression fldPath = {`_tables.data.${activeTrace}.marker.size`}
                                          initValue={get(mappings, 'marker.size', '')}
                                          label = 'Size Map:'
                                          name = 'Size Map'
@@ -328,19 +343,18 @@ export function scatterInputs ({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartI
                                          nullAllowed={true}
                                          tooltip='marker size. Please use expression to convert column value to valid pixels'
                                          colValStats={colValStats}
-                                         groupKey = {groupKey}  {...fieldProps} {...props}/>),
-        ColorScale: (props={}) => ( <ListBoxInputField fieldKey={`data.${activeTrace}.marker.colorscale`}
+                                         groupKey = {groupKey} {...withDefaults(props)}/>), deps),
+        ColorScale: useCallback((props) => ( <ListBoxInputField fieldKey={`data.${activeTrace}.marker.colorscale`}
                                          label='Color Scale:'
-                                         initialState= {{value: get(data, `${activeTrace}.marker.colorscale`)}}
+                                         initialState= {{value: strOrNull(get(data, `${activeTrace}.marker.colorscale`))}}
                                          tooltip='Select colorscale for color map'
                                          options={PlotlyCS.map((e)=>({value:e}))}
                                          nullAllowed={true}
-                                          {...fieldProps} {...props}/>),
-        UseSpectrum: (props={}) => (null && <CheckboxGroupInputField fieldKey={`fireflyData.${activeTrace}.useSpectrum`}    // null to temporarily disable it
+                                         {...withDefaults(props)}/>), deps),
+        UseSpectrum: useCallback((props) => (null && <CheckboxGroupInputField fieldKey={`fireflyData.${activeTrace}.useSpectrum`}    // null to temporarily disable it
                                          initialState={{value: getFieldVal(groupKey, `fireflyData.${activeTrace}.useSpectrum`) ?? fireflyData?.[activeTrace]?.useSpectrum}}
-                                         wrapperStyle={{marginBottom: 10, marginLeft: -4}}
-                                         options={[{label: 'Use spectrum preset', value: 'true'}]} {...fieldProps} {...props}/>),
+                                         options={[{label: 'Use spectrum preset', value: 'true'}]} {...withDefaults(props)}/>), deps),
     };
-}
+};
 
 

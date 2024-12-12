@@ -7,10 +7,8 @@ import {TitleOptions, AnnotationOps} from '../../visualize/WebPlotRequest.js';
 import {logger} from '../../util/Logger.js';
 import {getWebPlotRequestViaPTFIbe} from './ptf/PTFPlotRequests.js';
 import {getWebPlotRequestViaWISEIbe} from './wise/WisePlotRequests.js';
-import {makeLsstSdssPlotRequest} from './lsst_sdss/LsstSdssPlotRequests.js';
 import {makeURLPlotRequest} from './generic/DefaultPlotRequests.js';
 import {basicURLPlotRequest} from './basic/BasicPlotRequests';
-import {LsstSdssSettingBox, lsstSdssOnNewRawTable, lsstSdssOnFieldUpdate, lsstSdssRawTableRequest} from './lsst_sdss/LsstSdssMissionOptions.js';
 import {DefaultSettingBox, defaultOnNewRawTable, defaultOnFieldUpdate, defaultRawTableRequest} from './generic/DefaultMissionOptions.js';
 import {BasicSettingBox, basicOnNewRawTable, basicOnFieldUpdate, basicRawTableRequest, imagesShouldBeDisplayed} from './basic/BasicMissionOptions.js';
 import {WiseSettingBox, wiseOnNewRawTable, wiseOnFieldUpdate, wiseRawTableRequest, wiseYColMappings, isValidWiseTable} from './wise/WiseMissionOptions.js';
@@ -22,7 +20,6 @@ import {LC} from './LcManager.js';
 import {getTblInfoById} from '../../tables/TableUtil';
 import {PlotAttribute} from '../../visualize/PlotAttribute';
 
-export const DL_DATA_TAG = 'timeseries-package';
 export const UNKNOWN_MISSION = 'generic';
 export const COORD_SYSTEM_OPTIONS = ['EQ_J2000', 'EQ_B1950', 'GALACTIC'];
 export const coordSysOptions = 'coordSysOptions';
@@ -104,25 +101,29 @@ const converters = {
         yNamesChangeImage: [],
         showPlotTitle:getPlotTitle
     },
-    'lsst_sdss': {
-        converterId: 'lsst_sdss',
-        defaultImageCount: 3,
-        defaultTimeCName: 'exposure_time_mid',
-        defaultYCname: 'mag',
-        defaultYErrCname: '',
-        missionName: 'LSST SDSS',
-        MissionOptions: LsstSdssSettingBox,
-        onNewRawTable: lsstSdssOnNewRawTable,
-        onFieldUpdate: lsstSdssOnFieldUpdate,
-        rawTableRequest: lsstSdssRawTableRequest,
-        timeNames: ['exposure_time_mid'],
-        yNames: ['mag', 'tsv_flux'],
-        yErrNames: ['magErr', 'tsv_fluxErr'],
-        webplotRequestCreator: makeLsstSdssPlotRequest,
-        shouldImagesBeDisplayed: () => {return true;},
-        isTableUploadValid: () => {return {errorMsg:undefined, isValid:true};},
-        yNamesChangeImage: []
-    },
+    //--------------------------------------------------------------
+    // This is not longer supported on the backend
+    // I am leaving it in as a template for future LSST time series code
+    // 'lsst_sdss': {
+    //     converterId: 'lsst_sdss',
+    //     defaultImageCount: 3,
+    //     defaultTimeCName: 'exposure_time_mid',
+    //     defaultYCname: 'mag',
+    //     defaultYErrCname: '',
+    //     missionName: 'LSST SDSS',
+    //     MissionOptions: LsstSdssSettingBox,
+    //     onNewRawTable: lsstSdssOnNewRawTable,
+    //     onFieldUpdate: lsstSdssOnFieldUpdate,
+    //     rawTableRequest: lsstSdssRawTableRequest,
+    //     timeNames: ['exposure_time_mid'],
+    //     yNames: ['mag', 'tsv_flux'],
+    //     yErrNames: ['magErr', 'tsv_fluxErr'],
+    //     webplotRequestCreator: makeLsstSdssPlotRequest,
+    //     shouldImagesBeDisplayed: () => {return true;},
+    //     isTableUploadValid: () => {return {errorMsg:undefined, isValid:true};},
+    //     yNamesChangeImage: []
+    // },
+    //--------------------------------------------------------------
     'ptf': {
         converterId: 'ptf',
         defaultImageCount: 5,
@@ -239,7 +240,7 @@ export function getConverter(converterId = UNKNOWN_MISSION) {
 
 export function getMissionName(converterId) {
     const converterData = converterId && converters[converterId];
-    return get(converterData, 'missionName', converterId);
+    return converterData?.missionName ?? converterId;
 }
 
 export function getYColMappings(tbl_id, yCol) {

@@ -10,8 +10,6 @@ import {ListBoxInputField} from './ListBoxInputField';
 import Validate from '../util/Validate.js';
 import {FileUpload} from './FileUpload';
 
-import {dispatchHideDropDown} from '../core/LayoutCntlr.js';
-
 import {dispatchTableSearch} from '../tables/TablesCntlr.js';
 import {makeFileRequest} from '../tables/TableRequestUtil.js';
 import {download} from '../util/fetch';
@@ -24,8 +22,9 @@ export const TestSearchPanel = (props) => {
             <FormPanel
                 width='640px' height='300px'
                 groupKey='TBL_BY_URL_PANEL'
-                onSubmit={(request) => onSearchSubmit(request)}
-                onCancel={hideSearchPanel}>
+                onSuccess={onSearchSubmit}
+                cancelText=''>
+
                 <p>
                     <input type='button' name='dowload' value='Download Sample File' onClick={doFileDownload} />
                 </p>
@@ -36,13 +35,11 @@ export const TestSearchPanel = (props) => {
                                                                 value: '/Users/loi/data/300k.tbl',
                                                                 tooltip: 'path to a table file',
                                                                 label : 'Source Table:',
-                                                                labelWidth : 120
                                                              }}
                     />
                     <ListBoxInputField initialState={{
                                           tooltip: 'db engine to use',
                                           label : 'dbType:',
-                                          labelWidth : 120
                                       }}
                                        options={[{value: 'hsql'},{value: 'h2'},{value: 'sqlite'}]}
                                        multiple={false}
@@ -55,12 +52,11 @@ export const TestSearchPanel = (props) => {
                                                                 placeholder: 'Apply this filter on the table above',
                                                                 value: '',
                                                                 label : 'Filters:',
-                                                                labelWidth : 120
                                                              }}
                     />
 
                     <FileUpload
-                        wrapperStyle = {{margin: '5px 0'}}
+                        sx = {{my:1/2}}
                         fieldKey = 'fileUpload'
                         initialState= {{
                                 tooltip: 'Select a file to upload',
@@ -73,7 +69,6 @@ export const TestSearchPanel = (props) => {
                                             size: 4,
                                             validator: Validate.intRange.bind(null, 0, 100000),
                                             label : 'Table Index:',
-                                            labelWidth : 60
                                          }}
                     />
                 </FieldGroup>
@@ -84,10 +79,6 @@ export const TestSearchPanel = (props) => {
 
 function doFileDownload() {
     download(getRootURL() + 'samplehistdata.csv');
-}
-
-function hideSearchPanel() {
-    dispatchHideDropDown();
 }
 
 function onSearchSubmit(request) {

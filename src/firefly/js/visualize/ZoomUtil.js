@@ -4,16 +4,45 @@
 import Enum from 'enum';
 import {sprintf} from '../externalSource/sprintf';
 import {logger} from '../util/Logger.js';
-import {getPixScaleArcSec, isImage} from './WebPlot.js';
+import {getPixScaleArcSec, isHiPS, isHiPSAitoff, isImage} from './WebPlot.js';
 import {PlotAttribute} from './PlotAttribute.js';
 import {getFoV, primePlot} from './PlotViewUtil.js';
 import {convertAngle} from './VisUtil.js';
 
 
+/**
+ * @typedef FullType
+ * enum can be one of
+ * @prop ONLY_WIDTH
+ * @prop WIDTH_HEIGHT
+ * @prop ONLY_HEIGHT
+ * @prop {Function} has
+ * @type {Enum}
+ */
 export const FullType = new Enum(['ONLY_WIDTH', 'WIDTH_HEIGHT', 'ONLY_HEIGHT']);
 
-export const imageLevels= [.0125, .025, .05,.1,.25,.3, .4, .5, .75, .8, .9, 1, 1.25, 1.5,2, 2.5,3, 3.5,
-    4,5, 6, 7,8, 9, 10, 11, 12, 13, 14, 15, 16, 18,20,22,24,28, 32];
+/**
+ * This is the master list of zoom levels for Firefly image displays.
+ * These zoom levels are used when clicking on the +/- icons, and are
+ * also used to construct the zoom-level dialog.  Scroll-wheel zooming
+ * can reach levels between the steps.
+ */
+
+export const imageLevels = [
+    /* For zoomed-out images we use large steps - factors of 2. */
+    0.015625, 0.03125, 0.0625, 0.125, 0.25,
+    /* Otherwise we use four steps per factor of two, */
+    /* i.e., the 4th root of 2 or about 1.189 / 19%,  */
+    /* rounded to three digits after the decimal.     */
+     0.297,  0.354,  0.420,  0.5,
+     0.595,  0.707,  0.841,  1,
+     1.189,  1.414,  1.682,  2,
+     2.378,  2.828,  3.364,  4,
+     4.757,  5.657,  6.727,  8,
+     9.514, 11.314, 13.454, 16,
+    19.027, 22.627, 26.909, 32
+];
+
 export const imageLevelsReversed= [...imageLevels].reverse();
 
 
@@ -34,10 +63,20 @@ const IMAGE_ZOOM_MAX= imageLevels[imageLevels.length-1];
 const HIPS_ZOOM_MAX= hipsLevels[hipsLevels.length-1];
 
 /**
+ * @typedef UserZoomTypes
  * can be 'UP','DOWN', 'FIT', 'FILL', 'ONE', 'LEVEL', 'WCS_MATCH_PREV'
+ * @prop UP,
+ * @prop DOWN,
+ * @prop FIT,
+ * @prop FILL,
+ * @prop ONE,
+ * @prop LEVEL,
+ * @prop WCS_MATCH_PREV,
+ * @type {Enum}
  * @public
  * @global
  */
+/** @type UserZoomTypes */
 export const UserZoomTypes= new Enum(['UP','DOWN', 'FIT', 'FILL', 'ONE', 'LEVEL', 'WCS_MATCH_PREV'], { ignoreCase: true });
 
 /**
@@ -75,11 +114,11 @@ export function getNextZoomLevel(plot, zoomType, upDownPercent=1) {
 
 /**
  * @param plot
- * @param screenDim
+ * @param viewDim
  * @param fullType
  */
-export function getEstimatedFullZoomFactor(plot, screenDim, fullType) {
-    const {width,height} = screenDim;
+export function getEstimatedFullZoomFactor(plot, viewDim, fullType) {
+    const {width,height} = viewDim;
     let overrideFullType= fullType;
 
     if (plot.attributes[PlotAttribute.EXPANDED_TO_FIT_TYPE]) {
@@ -87,13 +126,17 @@ export function getEstimatedFullZoomFactor(plot, screenDim, fullType) {
         if (FullType.has(s)) overrideFullType= FullType.get(s);
     }
     return getEstimatedFullZoomFactorDetails(overrideFullType, plot.dataWidth, plot.dataHeight,
-                                              width,height);
+                                              width,height, isHiPS(plot) && isHiPSAitoff(plot));
 }
 
 function getEstimatedFullZoomFactorDetails(fullType, dataWidth, dataHeight,
-                                           screenWidth, screenHeight) {
-    const zFactW =  screenWidth /  dataWidth;
-    const zFactH =  screenHeight /  dataHeight;
+                                           screenWidth, screenHeight, hipsAitoff) {
+    const zFactW =  screenWidth /  (dataWidth* (hipsAitoff?2.7:1));
+    const zFactH =  screenHeight / dataHeight;
+
+    if (hipsAitoff) {
+        return fullType===FullType.ONLY_WIDTH ? zFactW : zFactH*.7;
+    }
     if (fullType===FullType.ONLY_WIDTH || screenHeight <= 0 || dataHeight <= 0) {
         return  zFactW;
     } else if (fullType===FullType.ONLY_HEIGHT || screenWidth <= 0 || dataWidth <= 0) {

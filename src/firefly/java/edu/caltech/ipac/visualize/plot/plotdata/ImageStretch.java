@@ -4,7 +4,6 @@
 
 package edu.caltech.ipac.visualize.plot.plotdata;
 
-
 import nom.tam.fits.Header;
 import edu.caltech.ipac.visualize.plot.Histogram;
 import edu.caltech.ipac.visualize.plot.ImageHeader;
@@ -21,7 +20,7 @@ import static edu.caltech.ipac.visualize.plot.plotdata.ImageStretchUtil.*;
 public class ImageStretch {
 
     private static boolean isHuePreserving(RangeValues rv) {
-        return rv.rgbPreserveHue();
+        return rv!=null ? rv.rgbPreserveHue() : false;
     }
 
 
@@ -34,8 +33,8 @@ public class ImageStretch {
                                          int lastPixel,
                                          int startLine,
                                          int lastLine ) {
-        double slow = getSlow(rangeValues, float1d, hist, iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.bitpix, iH.blank_value);
-        double shigh = getShigh(rangeValues, float1d, hist, iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.bitpix, iH.blank_value);
+        double slow = getSlow(rangeValues, float1d, hist, iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.blank_value);
+        double shigh = getShigh(rangeValues, float1d, hist, iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.blank_value);
         stretchPixelsByBand(startPixel, lastPixel, startLine, lastLine, iH.naxis1, hist,
                 (byte)255, float1d, pixelData, rangeValues,slow,shigh);
     }
@@ -63,8 +62,8 @@ public class ImageStretch {
             for(int i=0; (i<float1dAry.length); i++) {
                 if (float1dAry[i]!=null) {
                     ImageHeader iH= imageHeaderAry[i];
-                    double slow = getSlow(rangeValuesAry[i], float1dAry[i], histAry[i], iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.bitpix, iH.blank_value);
-                    double shigh = getShigh(rangeValuesAry[i], float1dAry[i], histAry[i], iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.bitpix, iH.blank_value);
+                    double slow = getSlow(rangeValuesAry[i], float1dAry[i], histAry[i], iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.blank_value);
+                    double shigh = getShigh(rangeValuesAry[i], float1dAry[i], histAry[i], iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.blank_value);
                     stretchPixelsByBand(startPixel, lastPixel, startLine, lastLine,iH.naxis1, histAry[i],
                             (byte)0, float1dAry[i], pixelDataAry[i], rangeValuesAry[i],slow,shigh);
                 }
@@ -103,7 +102,7 @@ public class ImageStretch {
         for(int i=0; i<3; i++) {
             ImageHeader iH= imageHeaderAry[i];
             blankPxValAry[i]= iH.blank_value;
-            slowAry[i] = getSlow(rangeValuesAry[i], float1dAry[i], histAry[i], iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.bitpix, iH.blank_value);
+            slowAry[i] = getSlow(rangeValuesAry[i], float1dAry[i], histAry[i], iH.bzero, iH.bscale, iH.naxis1, iH.naxis2, iH.blank_value);
             slowAry[i] = getScaled(slowAry[i], imageHeaderAry[i], rangeValuesAry[i]);
         }
 
@@ -230,8 +229,6 @@ public class ImageStretch {
         if (rangeValues.getStretchAlgorithm()==RangeValues.STRETCH_ASINH) {
             stretchPixelsUsingAsinh( startPixel, lastPixel,startLine,lastLine, naxis1, hist.getDNMin(), hist.getDNMax(),
                     blank_pixel_value, float1dArray, pixeldata, rangeValues,slow,shigh);
-
-
         }
         else {
             stretchPixelsUsingOtherAlgorithms(startPixel, lastPixel, startLine, lastLine,naxis1, hist,
@@ -248,7 +245,8 @@ public class ImageStretch {
      * @return flux value to display
      */
     public static double getFluxPalomar(double  raw_dn, double blank_value, Header header) {
-        if ((raw_dn == blank_value) || (Double.isNaN(raw_dn))) {
+        int bitpix = header.getIntValue("BITPIX");
+        if ((bitpix > 0 && raw_dn == blank_value) || (Double.isNaN(raw_dn))) {
             return Double.NaN;
         }
         double exptime = header.getDoubleValue(ImageHeader.EXPTIME, 0.0);
@@ -263,8 +261,8 @@ public class ImageStretch {
 
 
 
-    public static double getFluxStandard(double  raw_dn, double blank_value, double bscale, double bzero){
-        if ((raw_dn == blank_value) || (Double.isNaN(raw_dn))) {
+    public static double getFluxStandard(double  raw_dn, double blank_value, double bscale, double bzero, int bitpix){
+        if ((bitpix > 0 && raw_dn == blank_value) || (Double.isNaN(raw_dn))) {
             return Double.NaN;
         }
         return raw_dn * bscale + bzero;
@@ -284,53 +282,33 @@ public class ImageStretch {
                                                          double shigh){
 
         double sdiff = slow == shigh ? 1.0 : shigh - slow;
-
-        double[] dtbl = new double[256];
-        if (rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_LOG
-                || rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_LOGLOG) {
-            dtbl = getLogDtbl(sdiff, slow, rangeValues);
-        }
-        else if (rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_EQUAL) {
-            dtbl = hist.getTblArray();
-        }
-        else if (rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_SQUARED){
-            dtbl = getSquaredDbl(sdiff, slow, rangeValues);
-        }
-        else if( rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_SQRT) {
-            dtbl = getSquaredDbl(sdiff, slow, rangeValues);
-        }
-        int deltasav = sdiff > 0 ? 64 : -64;
-
         double gamma=rangeValues.getGammaValue();
         int pixelCount = 0;
+
+        int stretchAlgorithm= rangeValues.getStretchAlgorithm();
+        double[] dtbl= switch (stretchAlgorithm) { // lookup table only used with certain algorithms
+            case RangeValues.STRETCH_LOG, RangeValues.STRETCH_LOGLOG ->  getLogDtbl(sdiff, slow, rangeValues);
+            case RangeValues.STRETCH_EQUAL ->  hist.getTblArray();
+            case RangeValues.STRETCH_SQUARED, RangeValues.STRETCH_SQRT ->  getSquaredDbl(sdiff, slow, rangeValues);
+            default -> new double[0];
+        };
+
+        interface StretchVal { byte getStretchValue(float val); }
+        StretchVal sv= switch (stretchAlgorithm) {
+            case RangeValues.STRETCH_LINEAR -> (val) -> getLinearStretchedPixelValue(val,slow,sdiff);
+            case RangeValues.STRETCH_POWERLAW_GAMMA -> (val) -> getPowerLawGammaStretchedPixelValue(val, gamma, slow, shigh);
+            default -> (val) -> getNoneLinerStretchedPixelValue(val,dtbl,sdiff);
+        };
         for (int line = startLine; line <= lastLine; line++) {
             int start_index = line * naxis1 + startPixel;
             int last_index = line * naxis1 + lastPixel;
 
             for (int index = start_index; index <= last_index; index++) {
-
-                if (Double.isNaN(float1dArray[index])) { //original pixel value is NaN, assign it to blank
-                    pixeldata[pixelCount] = blank_pixel_value;
-                } else {   // stretch each pixel
-                    if (rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_LINEAR) {
-
-                        double dRunval = ((float1dArray[index] - slow) * 254 / sdiff);
-                        pixeldata[pixelCount] = getLinearStretchedPixelValue(dRunval);
-
-                    } else if (rangeValues.getStretchAlgorithm() == RangeValues.STRETCH_POWERLAW_GAMMA) {
-
-                        pixeldata[pixelCount] = (byte) getPowerLawGammaStretchedPixelValue(float1dArray[index], gamma, slow, shigh);
-                    } else {
-
-                        pixeldata[pixelCount] = (byte) getNoneLinerStretchedPixelValue(float1dArray[index], dtbl, deltasav);
-                    }
-                    pixeldata[pixelCount] = rangeValues.computeBiasAndContrast(pixeldata[pixelCount]);
-                }
+                pixeldata[pixelCount]= Double.isNaN(float1dArray[index]) ?
+                        blank_pixel_value : sv.getStretchValue(float1dArray[index]);
                 pixelCount++;
-
             }
         }
-
     }
 
     /**
@@ -356,12 +334,9 @@ public class ImageStretch {
      * @return mapped color value from 0 to 244
      */
     private static double  getASinhStretchedPixelValue(double flux, double maxFlux, double minFlux, double qvalue)  {
-
         if (flux <= minFlux) { return 0d; }
-
         double color = 255 * 0.1 * asinh(qvalue*(flux - minFlux) / (maxFlux - minFlux)) / asinh(0.1 * qvalue);
-
-        return (color > 254d) ? 254d : color;
+        return Math.min(color, 254d);
 
     }
 
@@ -369,64 +344,28 @@ public class ImageStretch {
         return Math.log(x + Math.sqrt(x * x + 1));
     }
 
-    private static int getNoneLinerStretchedPixelValue(double dRunVal, double[] dtbl, int delta) {
+    public static final int[] shiftPosAry= new int[] {64,32,16,8,4,2,1};
+    public static final int[] shiftNegAry= new int[] {-64,-32,-16,-8,-4,-2,-1};
 
+    /**
+     * find the correct value from the lookup table
+     */
+    private static byte getNoneLinerStretchedPixelValue(double dRunVal, double[] dtbl, double sdiff) {
+        int[] ary= sdiff>0 ? shiftPosAry : shiftNegAry;
         int pixval = 128;
-
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-
-        delta >>= 1;
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-
-        delta >>= 1;
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-
-        delta >>= 1;
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-
-        delta >>= 1;
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-
-        delta >>= 1;
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-
-        delta >>= 1;
-        if (dtbl[pixval] < dRunVal)
-            pixval += delta;
-        else
-            pixval -= delta;
-        delta >>= 1;
-        if (dtbl[pixval] >= dRunVal)
-            pixval -= 1;
-        return pixval;
+        for(int delta : ary) {
+            if (dtbl[pixval] < dRunVal) pixval += delta;
+            else pixval -= delta;
+        }
+        if (dtbl[pixval] >= dRunVal) pixval -= 1;
+        return (byte)pixval;
     }
 
-    private static byte getLinearStretchedPixelValue(double dRenVal) {
-
-        if (dRenVal < 0)
-            return 0;
-        else if (dRenVal > 254)
-            return (byte) 254;
-        else
-            return (byte) dRenVal;
+    private static byte getLinearStretchedPixelValue(double val, double slow, double sdiff) {
+        var dRenVal= ((val - slow) * 254) / sdiff;
+        if (dRenVal < 0) return 0;
+        else if (dRenVal > 254) return (byte) 254;
+        else return (byte) dRenVal;
     }
 
     private static double[] getLogDtbl(double sdiff, double slow, RangeValues rangeValues) {
@@ -549,15 +488,13 @@ public class ImageStretch {
         return dtbl;
     }
 
-    private static double getPowerLawGammaStretchedPixelValue(double x, double gamma, double zp, double mp){
-        if (x <= zp) { return 0d; }
-        if (x >= mp) { return 254d; }
+    private static byte getPowerLawGammaStretchedPixelValue(double x, double gamma, double zp, double mp){
+        if (x <= zp) { return 0; }
+        if (x >= mp) { return (byte)254; }
         double  rd =  x-zp;
         double  nsd = Math.pow(rd, 1.0 / gamma)/ Math.pow(mp - zp, 1.0 / gamma);
         double pixValue = 255*nsd;
-
-        return pixValue;
-
+        return (byte)pixValue;
     }
 
     /**
@@ -581,8 +518,8 @@ public class ImageStretch {
             hist_bin_values[i] = (float) hist.getDNfromBin(i);
         }
 
-        double slow = getSlow(rangeValues, float1d, hist, bzero, bscale, naxis1, naxis2, bitpix, blank_value);
-        double shigh = getShigh(rangeValues, float1d, hist, bzero, bscale, naxis1, naxis2, bitpix, blank_value);
+        double slow = getSlow(rangeValues, float1d, hist, bzero, bscale, naxis1, naxis2, blank_value);
+        double shigh = getShigh(rangeValues, float1d, hist, bzero, bscale, naxis1, naxis2, blank_value);
 
         int start_pixel = 0;
         int last_pixel = 4095;
@@ -607,8 +544,7 @@ public class ImageStretch {
      * @param naxis1 number of pixels in a line
      * @param blank_pixel_value blank pixel value
      * @param float1dArray array of raw values
-     * @param pixeldata 
-     * @param pixelhist
+     * @param pixeldata array to populate
      */
     public static void stretchPixelsForMask(int startPixel,
                                             int lastPixel,

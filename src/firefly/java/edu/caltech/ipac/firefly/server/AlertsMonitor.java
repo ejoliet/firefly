@@ -10,8 +10,13 @@ import edu.caltech.ipac.util.FileUtil;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Timer;
 import java.util.TimerTask;
+
+import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
  * Date: 6/16/16
@@ -21,8 +26,7 @@ import java.util.TimerTask;
  */
 public class AlertsMonitor {
     private static final Logger.LoggerImpl LOG = Logger.getLogger();
-    private static final String ALERTS_DIR = AppProperties.getProperty("alerts.dir", "/hydra/alerts/");
-    private static final File alertDir = new File(ALERTS_DIR);
+    private static File alertDir;
     private static Alert alerts = null;
     private static Timer timer;
 
@@ -59,6 +63,15 @@ public class AlertsMonitor {
     }
 
     public static void startMonitor() {
+        String ALERTS_DIR = AppProperties.getProperty("alerts.dir");
+        if (!isEmpty(ALERTS_DIR) && Files.isDirectory(Paths.get(ALERTS_DIR))) {
+            alertDir = new File(ALERTS_DIR);
+        } else {
+            LOG.info("alerts.dir is not a directory: " + ALERTS_DIR, "Use workarea/alerts instead");
+            alertDir = new File(ServerContext.getWorkingDir().getParentFile(), "alerts");
+            if (!alertDir.exists()) alertDir.mkdirs();
+        }
+
         if (timer != null) {
             timer.cancel();
         }

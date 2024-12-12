@@ -4,7 +4,16 @@
 import {get} from 'lodash';
 import {sprintf} from '../../externalSource/sprintf.js';
 
-
+/**
+ * Return true if 'from' unit can be converted to 'to'.
+ * @param p
+ * @param p.from
+ * @param p.to
+ * @returns {boolean}
+ */
+export function canUnitConv({from, to}) {
+    return !! get(UnitXref, [from, to]);
+}
 
 /**
  * Return the SQL-like expression for unit conversion use cases.
@@ -30,12 +39,16 @@ export function getUnitConvExpr({cname, from, to, alias, args=[]}) {
 /**
  * returns an object containing the axis label and an array of options for unit conversion.
  * @param {string} unit         the unit to get the info for
- * @param {string} isSpectral   true if this unit is for a spectral axis
+ * @param {string} cname        the name of the column being evaluated
  * @returns {Object}
  */
-export function getUnitInfo(unit, isSpectral=true) {
+export function getUnitInfo(unit, cname) {
+    cname = cname?.match(/^"(.+)"$/)?.[1] ?? cname;          // remove enclosing double-quotes if exists
     const meas =  Object.values(UnitXref.measurement).find((m) => m?.options.find( (o) => o?.value === unit)) || {};
-    const label = meas.label ? sprintf(meas.label, unit) : isSpectral ? `𝛎 [${unit || 'Hz'}]` : `F𝛎 [${unit || 'Jy'}]`;
+    let label = meas.label ? sprintf(meas.label, unit) : '';
+    if (!label && cname) {
+        label = cname + (unit ? `[${unit}]` : '');
+    }
     return {options: meas.options, label};
 }
 
@@ -53,7 +66,7 @@ const UnitXref = {
             label: '𝛎 [%s]'
         },
         wavelength: {
-            options: [{value:'um'}, {value:'cm'}, {value:'m'}],
+            options: [{value: 'A'}, {value: 'nm'}, {value:'um'}, {value: 'mm'}, {value:'cm'}, {value:'m'}],
             label: 'λ [%s]'
         },
         flux_density: {
@@ -95,19 +108,52 @@ const UnitXref = {
         GHz : '%s'
     },
     // wavelength
+    A : {
+        A  : '%s',
+        nm : '%s / 10',
+        um : '%s / 1.0E+4',
+        mm : '%s / 1.0E+7',
+        cm : '%s / 1.0E+8',
+        m  : '%s / 1.0E+10'
+    },
+    nm : {
+        A  : '%s * 10',
+        nm : '%s',
+        um : '%s / 1.0E+3',
+        mm : '%s / 1.0E+6',
+        cm : '%s / 1.0E+7',
+        m  : '%s / 1.0E+9'
+    },
     um : {
+        A  : '%s * 1.0E+4',
+        nm : '%s * 1.0E+3',
         um : '%s',
-        cm : '%s / 10000.0',
-        m  : '%s / 1000000.0'
+        mm : '%s / 1.0E+3',
+        cm : '%s / 1.0E+4',
+        m  : '%s / 1.0E+6'
+    },
+    mm : {
+        A  : '%s * 1.0E+7',
+        nm : '%s * 1.0E+6',
+        um : '%s * 1.0E+3',
+        mm : '%s',
+        cm : '%s / 10',
+        m  : '%s / 1.0E+3'
     },
     cm : {
-        um : '%s * 10000.0',
+        A  : '%s * 1.0E+8',
+        nm : '%s * 1.0E+7',
+        um : '%s * 1.0E+4',
+        mm : '%s * 10',
         cm : '%s',
-        m  : '%s / 100.0'
+        m  : '%s / 100'
     },
     m  : {
-        um : '%s * 1000000.0',
-        cm : '%s * 100.0',
+        A  : '%s * 1.0E+10',
+        nm : '%s * 1.0E+9',
+        um : '%s * 1.0E+6',
+        mm : '%s * 1.0E+3',
+        cm : '%s * 100',
         m  : '%s'
     },
     //  flux density
@@ -129,4 +175,17 @@ const UnitXref = {
         'Jy*Hz' : '%s',
     }
 
+};
+
+/**
+ * returns X axis label using the required information like unit, spectral frame options, redshift, etc.
+ * @param {string} cname         the name of the column being evaluated
+ * @param {string} unit          the unit to get the info for
+ * @param {string} sfLabel       the label of spectral frame selected
+ * @param {string} redshiftLabel the label of redshift if rest frame, optional
+ * @returns {string}
+ */
+export const getXLabel = (cname, unit, sfLabel, redshiftLabel='') => {
+    const unitLabel = getUnitInfo(unit, cname).label;
+    return `${sfLabel} ${unitLabel}${redshiftLabel ? `<br>(${redshiftLabel})` : ''}`;
 };

@@ -1,38 +1,42 @@
 import React from 'react';
 import {get, set} from 'lodash';
 
-import {LayoutOptions, basicFieldReducer, submitChanges, basicOptions} from './BasicOptions.jsx';
+import {LayoutOptions, basicFieldReducer, submitChanges, useBasicOptions} from './BasicOptions.jsx';
 import {HistogramOptions} from '../HistogramOptions.jsx';
 import {getChartData} from '../../ChartsCntlr.js';
 
 import {useStoreConnector} from '../../../ui/SimpleComponent.jsx';
 import {getColValStats} from '../../TableStatsCntlr.js';
 import {getChartProps} from '../../ChartUtil.js';
-import {FieldGroupCollapsible} from '../../../ui/panel/CollapsiblePanel.jsx';
+import {
+    CollapsibleGroup,
+    FieldGroupCollapsibleItem
+} from '../../../ui/panel/CollapsiblePanel.jsx';
+import {Stack} from '@mui/joy';
 
 export function FireflyHistogramOptions({activeTrace:pActiveTrace, tbl_id:ptbl_id, chartId, groupKey}) {
 
-    const [activeTrace] = useStoreConnector(() => {
-        return pActiveTrace ?? getChartData(chartId)?.activeTrace;
-    });
+    const activeTrace = useStoreConnector(() => pActiveTrace ?? getChartData(chartId)?.activeTrace);
 
     groupKey = groupKey || `${chartId}-ffhist-${activeTrace}`;
     const {tbl_id, noColor, multiTrace} = getChartProps(chartId, ptbl_id, activeTrace);
     const colValStats = getColValStats(tbl_id);
 
     const histogramParams = toHistogramOptions(chartId, activeTrace);
-    const {Name, Color} = basicOptions({activeTrace, tbl_id, chartId, groupKey, fieldProps:{labelWidth: 60}});
+    const {Name, Color} = useBasicOptions({activeTrace, tbl_id, chartId, groupKey});
 
     const basicFields = (
-        <div style={{margin: '5px 0 0 -22px'}}>
-            { (multiTrace || !noColor) &&
-                <FieldGroupCollapsible  header='Trace Options' initialState= {{ value:'closed' }} fieldKey='traceOptions'>
-                    {multiTrace && <Name/>}
-                    {!noColor && <Color/>}
-                </FieldGroupCollapsible>
+        <CollapsibleGroup>
+            {(multiTrace || !noColor) &&
+                <FieldGroupCollapsibleItem  header='Trace Options' initialState= {{ value:'closed' }} fieldKey='traceOptions'>
+                    <Stack spacing={1} sx={{'.MuiFormLabel-root': {width: '6rem'}}}>
+                        {multiTrace && <Name/>}
+                        {!noColor && <Color/>}
+                    </Stack>
+                </FieldGroupCollapsibleItem>
             }
             <LayoutOptions {...{activeTrace, tbl_id, chartId, groupKey, xNoLog: true, noXY: false}}/>
-        </div>
+        </CollapsibleGroup>
     );
     const basicFieldsReducer = basicFieldReducer({chartId, activeTrace});
     basicFieldsReducer.ver = chartId+activeTrace;

@@ -66,8 +66,8 @@ import java.util.Locale;
         })
 public class SDSSQuery extends IpacTablePartProcessor {
 
-    public final static String SERVICE_URL="http://skyserver.sdss.org/dr10/en/tools/search/x_sql.aspx?";
-    public final static String SERVICE_URL_UPLOAD="http://skyserver.sdss.org/dr10/en/tools/crossid/x_crossid.aspx?";
+    public final static String SERVICE_URL="https://skyserver.sdss.org/dr10/en/tools/search/x_sql.aspx?";
+    public final static String SERVICE_URL_UPLOAD="https://skyserver.sdss.org/dr10/en/tools/crossid/x_crossid.aspx?";
 
     private static final Logger.LoggerImpl _log = Logger.getLogger();
     private MultiPartPostBuilder _postBuilder = null;
@@ -158,19 +158,13 @@ public class SDSSQuery extends IpacTablePartProcessor {
 
                 if (resp == null) {
                     throw new IOException("Exception during post");
-                } else if (resp.getStatusCode()<200 || resp.getStatusCode()>300) {
-                    // throw new IOException(resp.getStatusMsg());
-                    // try repeating the request through CasJobs
-                    boolean nearestOnly = request.getBooleanParam(SDSSRequest.NEAREST_ONLY);
-                    String radiusArcMin = request.getParam(SDSSRequest.RADIUS_ARCMIN);
-                    SDSSCasJobs.getCrossMatchResults(sdssUFile, nearestOnly, radiusArcMin, csv);
                 }
             }
 
             // check for errors in returned file
             evaluateCVS(csv);
 
-            DataGroup dg = DsvTableIO.parse(csv, CSVFormat.DEFAULT.withCommentStart('#'));
+            DataGroup dg = DsvTableIO.parse(csv, CSVFormat.DEFAULT.withCommentMarker('#'));
             if (dg == null) {
                     _log.briefInfo("no data found for search");
                     return null;
@@ -273,7 +267,7 @@ public class SDSSQuery extends IpacTablePartProcessor {
         DataType inRowIdType = uDg.getDataDefintion(CatalogRequest.UPDLOAD_ROW_ID);
         DataType raType = uDg.getDataDefintion("ra");
         DataType decType = uDg.getDataDefintion("dec");
-        File sdssUFile = File.createTempFile("sdss_upload", ".csv", ServerContext.getTempWorkDir());
+        File sdssUFile = File.createTempFile("sdss_upload", ".csv", QueryUtil.getTempDir());
         BufferedWriter writer = new BufferedWriter(new FileWriter(sdssUFile));
         try {
             writer.write("up_id,ra,dec\n");
@@ -293,7 +287,7 @@ public class SDSSQuery extends IpacTablePartProcessor {
     }
 
     /**
-     http://skyserver.sdss3.org/dr10/en/tools/search/x_sql.aspx?format=html
+     https://skyserver.sdss3.org/dr10/en/tools/search/x_sql.aspx?format=html
      &cmd=SELECT p.objId,p.run,p.rerun,p.camcol,p.field,
                  dbo.fPhotoModeN(mode) as mode,nChild,dbo.fPhotoTypeN(p.type) as type,clean,flags,
                  psfMag_u,psfMag_g,psfMag_r,psfMag_i,psfMag_z,
@@ -328,8 +322,8 @@ public class SDSSQuery extends IpacTablePartProcessor {
         if (CatalogRequest.Method.BOX.getDesc().equals(String.valueOf(method))) {
             double radiusArcsec = request.getDoubleParam(SDSSRequest.RADIUS_ARCMIN) * 60;
             VisUtil.Corners corners = VisUtil.getCorners(pt, radiusArcsec);
-            String upperLeft = String.format(Locale.US, "%8.6f,%8.6f", corners.getUpperLeft().getLon(), corners.getUpperLeft().getLat());
-            String lowerRight = String.format(Locale.US, "%8.6f,%8.6f", corners.getLowerRight().getLon(), corners.getLowerRight().getLat());
+            String upperLeft = String.format(Locale.US, "%8.6f,%8.6f", corners.upperLeft().getLon(), corners.upperLeft().getLat());
+            String lowerRight = String.format(Locale.US, "%8.6f,%8.6f", corners.lowerRight().getLon(), corners.lowerRight().getLat());
             sql = BOX_TGT_SQL.replace("%RA_MAX%,%DEC_MAX%", upperLeft).replace("%RA_MIN%,%DEC_MIN%",lowerRight);
         } else {
             String raDec = String.format(Locale.US, "%8.6f,%8.6f", pt.getLon(), pt.getLat());

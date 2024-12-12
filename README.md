@@ -1,15 +1,31 @@
 # Firefly
 
+## Intro
+
+Firefly is an open-source web-based UI library for astronomical data archive access and visualization developed at [Caltech](https://caltech.edu).
+The development was started in the context of archive-specific applications at the [NASA/IPAC Infrared Science Archive (IRSA)](https://irsa.ipac.caltech.edu), and was then generalized to serve data from many different archives at IRSA (and beyond). It was open sourced in 2015, hosted at GitHub.
+
+Firefly is designed to build complex web-based front-end applications making use of  reusable [React](https://reactjs.org) components to enable accessing and exploring astronomical data with advanced data visualization capabilities.
+
+The visualization provides user with an integrated experience with brushing and linking capabilities among images, catalogs, and plots. Firefly is used in [IRSA](https://irsa.ipac.caltech.edu) GUIs to query and visualize data from missions such as [WISE](https://irsa.ipac.caltech.edu/applications/wise/), [Spitzer](https://irsa.ipac.caltech.edu/applications/Spitzer/SHA/), [SOFIA](https://irsa.ipac.caltech.edu/applications/sofia/), [ZTF](https://irsa.ipac.caltech.edu/applications/ztf/), [PTF](https://irsa.ipac.caltech.edu/applications/ptf/), etc. and a large number of highly-used contributed data products from a diverse set of astrophysics projects. It is also used in various user interfaces of the NASA Exoplanet Science Institute ([NExScI](https://nexsci.caltech.edu)) and the NASA/IPAC Extragalactic Database ([NED](http://ned.ipac.caltech.edu)), as well as to construct the Portal Aspect of the Vera C. Rubin Observatory Science Platform.
+
+### Quick-start
+
+The fastest way to start using Firefly and check examples is to make use of Docker images.
+See the Docker quick-start [here](docs/firefly-docker.md).
+
+## Release note
 
 Note - if you are pulling, look at the [branches section](#branches)
 
+Firefly builds are available on Docker and additional notes for using it are on the [Docker Page](https://hub.docker.com/r/ipac/firefly).
+
 [Release Notes are Here](docs/release-notes.md).
 
-Firefly builds are available on Docker and the notes for using it are on the [Docker Page](https://hub.docker.com/r/ipac/firefly).
 
+## Firefly Framework
 
-### Firefly Framework
-Firefly is being reused for various archives because it is a framework of archive components. This has allowed us now to implement multiple archive systems at a fraction of the cost of the first system, Spitzer Heritage Archive. Firefly has undergone an extensive re-write since then, adopted React/Redux framework for the client side, making it much  easier to work with other JavaScript libraries. Recently we have adopted Plotly.js graphing library.
+Firefly is being reused for various archives because it is a framework of archive components. This has allowed us to implement multiple archive systems at a fraction of the cost of the first system, Spitzer Heritage Archive. Firefly has undergone an extensive re-write since then, adopted React/Redux framework for the client side, making it much  easier to work with other JavaScript libraries. Firefly's general scientific visualizations are based on the Plotly.js graphing library.
 
 ### Firefly Viewer
 
@@ -34,32 +50,31 @@ Firefly provides a first-class FITS visualization on the Web without any plugins
 In addition, Firefly is able to display all-sky images in the IVOA standard HiPS format, and display catalogs overlaid on them just as with FITS images.
 
 ### Scientific Plotting
-Firefly shows 2D graphs interactively so that a user can read the data point values as he moves his mouse around or zooms in to investigate the data at a finer level. These graphs are used for spectrum or plotting table columns. The user can specify any column that the tables are showing. The user can also define expressions from the columns for the XY Plot, such as (col1\*col2/tan(col3)). Table based charts share their data model with the table, so both table and chart can trigger or respond to the common events, such as filtering of the data. Firefly also supports creating and plotting 1D histograms and heatmaps (2D histograms).
+Firefly shows 2D graphs interactively so that a user can read the data point values as moves mouse around or zooms in to investigate the data at a finer level. These graphs are used for plotting table columns. The user can specify any column that the tables are showing. The user can also define expressions from the columns for the XY Plot, such as (col1\*col2/tan(col3)). Table based charts share their data model with the table, so both table and chart can trigger or respond to the common events, such as filtering of the data. Firefly also supports creating and plotting 1D histograms and heatmaps (2D histograms).
 
 
-## Branches
-There are several branches the this repository.  Here are the ones that you should care about.
+## Branches and tags
+There are several branches in the repository.  Here are the ones that you should care about.
 
  - rc-YYYY.N: The next release candidate branch.  This is generally the most stable branch.
  - dev: This branch could be updated every day. It is the active development branch. It is not stable. Nightly builds are performed.
  - firefly-xxx-reason, IRSA-xxx: These branches are temporary development feature branches and are associated with corresponding tickets in IPAC Jira.
- - master: No longer regularly updated and should not be used by anyone.
-
+ - Tags: Firefly is tagged for releases and pre-releases
+ - [See Details on tags and branches](docs/tags-and-branches.md)
 
 ## Setup
 
 ### Prerequisites
- -  [Java 1.8] http://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html
+ -  [Java 21] (https://openjdk.org/projects/jdk/21/)
     This is the version we are using to compile and run Firefly.  
 
- -  [Gradle 3.x] (https://gradle.org/downloads)
+ -  [Gradle 8.10] (https://gradle.org/install/)
     Gradle is an open source build automation system.
 
-
- -  [Tomcat 7+] (http://tomcat.apache.org/download-70.cgi)
+ -  [Tomcat 9] (https://tomcat.apache.org/download-90.cgi)
     Apache Tomcat is an open source software implementation of the Java Servlet and JavaServer Pages technologies.
 
- -  [Node v12+] (https://nodejs.org/) 
+ -  [Node v18] (https://nodejs.org/)
     Javascript interpreter for command line environment, used for development tools
 
 ### Prepare before the build

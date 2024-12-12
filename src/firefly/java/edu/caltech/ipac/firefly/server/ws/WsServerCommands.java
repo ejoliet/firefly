@@ -11,6 +11,7 @@ import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.SrvParam;
 import edu.caltech.ipac.firefly.server.query.SearchManager;
 import edu.caltech.ipac.firefly.server.servlets.AnyFileDownload;
+import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.table.TableUtil;
 import edu.caltech.ipac.util.FileUtil;
 import org.json.simple.JSONArray;
@@ -188,12 +189,13 @@ public class WsServerCommands {
 
             TableUtil.Format tblFormat = sp.getTableFormat();
             String fileNameExt = tblFormat.getFileNameExt();
+            TableUtil.Mode mode = sp.contains("mode") ? TableUtil.Mode.valueOf(sp.getOptional("mode")) : null;
 
-            File file = File.createTempFile(request.getRequestId(), fileNameExt, ServerContext.getTempWorkDir());
+            File file = File.createTempFile(request.getRequestId(), fileNameExt, QueryUtil.getTempDir(request));
 
             SearchManager am = new SearchManager();
             try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file), (int) (32 * FileUtil.K))) {
-                am.save(out, request, tblFormat);
+                am.save(out, request, tblFormat, mode);
             }
 
             WsServerParams wsParams = convertToWsServerParams(sp);

@@ -13,7 +13,9 @@ import ImagePlotCntlr, {dispatchPlotImage, visRoot, dispatchDeletePlotView,
         dispatchChangeActivePlotView,
         WcsMatchType, dispatchWcsMatch} from '../../visualize/ImagePlotCntlr.js';
 import {getPlotViewById} from '../../visualize/PlotViewUtil.js';
-import {getMultiViewRoot, dispatchReplaceViewerItems, getViewer} from '../../visualize/MultiViewCntlr.js';
+import {
+    getMultiViewRoot, dispatchReplaceViewerItems, getViewer, getLayoutDetails
+} from '../../visualize/MultiViewCntlr.js';
 import {CHANGE_VIEWER_LAYOUT} from '../../visualize/MultiViewCntlr.js';
 import FieldGroupUtils from '../../fieldGroup/FieldGroupUtils';
 import {VALUE_CHANGE, dispatchValueChange} from '../../fieldGroup/FieldGroupCntlr.js';
@@ -27,6 +29,7 @@ import {dispatchChartAdd} from '../../charts/ChartsCntlr.js';
 import {logger} from '../../util/Logger.js';
 
 
+const MAX_ROW = Math.pow(2,31) - 1; // same as in '../../tables/TableRequestUtil.js', couldn't import from there
 
 export const LC = {
     RAW_TABLE: 'raw_table',          // raw table id
@@ -70,7 +73,7 @@ export const LC = {
     MISSION_DATA: 'missionEntries',
     GENERAL_DATA:'generalEntries',
 
-    TABLE_PAGESIZE: 100
+    TABLE_PAGESIZE: MAX_ROW
 };
 
 const plotIdRoot= 'LC_FRAME-';
@@ -715,7 +718,7 @@ export function setupImages(layoutInfo, invokedBy=TABLE_FETCH){
     }
 
     const viewer = getViewer(getMultiViewRoot(), LC.IMG_VIEWER_ID);
-    const count = get(viewer, 'layoutDetail.count', converterData.defaultImageCount);
+    const count= getLayoutDetails(getMultiViewRoot(), LC.IMG_VIEWER_ID)?.count ?? converterData.defaultImageCount
 
 
     var vr = visRoot();

@@ -2,27 +2,14 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {
-    get,
-    set,
-    has,
-    isEmpty,
-    isUndefined,
-    uniqueId,
-    cloneDeep,
-    omitBy,
-    isNil,
-    isPlainObject,
-    isArray,
-    padEnd,
-    chunk,
-    isString,
-    isObject
-} from 'lodash';
+import {chunk, cloneDeep, get, has, isArray, isEmpty, isNil, isObject, isPlainObject, isString, isUndefined, omitBy,
+    padEnd, set, uniqueId, omit, uniq} from 'lodash';
 import Enum from 'enum';
 
 import {getWsConnId} from '../core/AppDataCntlr.js';
+import {doJsonRequest} from '../core/JsonUtils';
 import {sprintf} from '../externalSource/sprintf.js';
+import {fetchUrl} from '../util/fetch';
 import {makeFileRequest, MAX_ROW} from './TableRequestUtil.js';
 import * as TblCntlr from './TablesCntlr.js';
 import {SortInfo, SORT_ASC, UNSORTED} from './SortInfo.js';
@@ -30,14 +17,16 @@ import {FilterInfo, getNumFilters, FILTER_SEP} from './FilterInfo.js';
 import {SelectInfo} from './SelectInfo.js';
 import {flux} from '../core/ReduxFlux.js';
 import {encodeServerUrl, uniqueID} from '../util/WebUtil.js';
-import {fetchTable, queryTable, selectedValues} from '../rpc/SearchServicesJson.js';
+import {createTableSearchParams, fetchTable, queryTable, selectedValues} from '../rpc/SearchServicesJson.js';
 import {ServerParams} from '../data/ServerParams.js';
 import {dispatchAddActionWatcher, dispatchCancelActionWatcher} from '../core/MasterSaga.js';
 import {MetaConst} from '../data/MetaConst';
-import {getCmdSrvURL, toBoolean} from '../util/WebUtil';
+import {getCmdSrvSyncURL, toBoolean, strictParseInt} from '../util/WebUtil';
 import {upload} from '../rpc/CoreServices.js';
 import {dd2sex} from '../visualize/CoordUtil.js';
 
+export const SYS_COLUMNS = ['ROW_IDX', 'ROW_NUM'];
+export const DOC_FUNCTIONS_URL = 'https://duckdb.org/docs/sql/functions/overview.html';
 
 // this is so test can mock the function when used within it's module
 const local = {
@@ -45,14 +34,15 @@ const local = {
     getTblById,
     getTblInfoById,
     getColumn,
+    getColumns,
     getCellValue,
     getSelectedData
 };
 export default local;
 
-const TEXT  = ['char', 'c', 's', 'str'];
-const INT   = ['long', 'l', 'int', 'i'];
-const FLOAT = ['double', 'd', 'float', 'f'];
+const TEXT  = ['char'];
+const INT   = ['long', 'int', 'short', 'integer'];
+const FLOAT = ['double', 'float', 'real'];
 const BOOL  = ['boolean','bool'];
 const DATE  = ['date'];
 const NUMBER= [...INT, ...FLOAT];
@@ -60,7 +50,7 @@ const USE_STRING = [...TEXT, ...DATE];
 
 // export const COL_TYPE = new Enum(['ALL', 'NUMBER', 'TEXT', 'INT', 'FLOAT']);
 export const COL_TYPE = new Enum({ANY:[],TEXT, INT, FLOAT, BOOL, DATE, NUMBER, USE_STRING});
-
+export const TBL_STATE = new Enum(['ERROR', 'LOADING', 'NO_DATA', 'NO_MATCH', 'OK']);
 
 /**
  * @param {TableColumn} col
@@ -108,6 +98,17 @@ export function doFetchTable(tableRequest, hlRowIdx) {
     } else {
         return fetchTable(tableRequest, hlRowIdx);
     }
+}
+
+export async function fetchSpacialBinary(tableRequest) {
+    const params = createTableSearchParams(tableRequest);
+    const cmd= ServerParams.TABLE_SEARCH_SPATIAL_BINARY;
+    const response= await fetchUrl(getCmdSrvSyncURL()+`?${ServerParams.COMMAND}=${cmd}`,{method:'POST', params },false);
+    if (!response.ok) {
+        throw(new Error(`Error from Server for ${cmd}: code: ${response.status}, text: ${response.statusText}`));
+    }
+    const arrayBuffer= await response.arrayBuffer();
+    return arrayBuffer;
 }
 
 
@@ -190,7 +191,7 @@ export function getTableGroup(tbl_group='main') {
  * returns the table group name given a tbl_id.  it will return undefined if
  * the given tbl_id is not in a group.
  * @param {string} tbl_id    table id
- * @returns {TableGroup}
+ * @returns {String}
  * @public
  * @memberof firefly.util.table
  * @func findGroupByTblId
@@ -257,7 +258,7 @@ export function getTableUiById(tbl_ui_id) {
  */
 export function getTableUiByTblId(tbl_id) {
     const uiRoot = get(flux.getState(), [TblCntlr.TABLE_SPACE_PATH, 'ui'], {});
-    return Object.keys(uiRoot).find( (ui_id) => get(uiRoot, [ui_id, 'tbl_id']) === tbl_id);
+    return Object.values(uiRoot).find( (tblUiState) => tblUiState?.tbl_id === tbl_id);
 }
 
 /**
@@ -333,15 +334,16 @@ export function findIndex(tbl_id, filterInfo) {
  * Returns the column index with the given name; otherwise, -1.
  * @param {TableModel} tableModel
  * @param {string} colName
+ * @param {boolean} ignoreCase if true then case when finding columns
  * @returns {number}
  * @public
  * @func getColumnIdx
  * @memberof firefly.util.table
  */
-export function getColumnIdx(tableModel, colName) {
+export function getColumnIdx(tableModel, colName, ignoreCase= false) {
     const cols = getAllColumns(tableModel);
     return cols.findIndex((col) => {
-        return col.name === colName;
+        return ignoreCase? col?.name?.toLowerCase()===colName?.toLowerCase() : col?.name === colName;
     });
 }
 
@@ -362,13 +364,14 @@ export function getColumnType(tableModel, colName) {
  * returns column information for the given name.
  * @param {TableModel} tableModel
  * @param {string} colName
+ * @param {boolean} ignoreCase if true then case when finding columns
  * @returns {TableColumn}
  * @public
  * @func getColumn
  * @memberof firefly.util.table
  */
-export function getColumn(tableModel, colName) {
-    const colIdx = getColumnIdx(tableModel, colName);
+export function getColumn(tableModel, colName, ignoreCase= false) {
+    const colIdx = getColumnIdx(tableModel, colName, ignoreCase);
     if (colIdx >= 0) {
         return get(tableModel, `tableData.columns.${colIdx}`);
     }
@@ -417,8 +420,8 @@ export function getFilterCount(tableModel) {
 
 export function clearFilters(tableModel) {
     const {request, tbl_id} = tableModel || {};
-    if (request && request.filters) {
-        TblCntlr.dispatchTableFilter({tbl_id, filters: '', sqlFilters: ''});
+    if (request && (request.filters || request.sqlFilter)) {
+        TblCntlr.dispatchTableFilter({tbl_id, filters: '', sqlFilter: ''});
     }
 }
 
@@ -499,6 +502,30 @@ export function getRowValues(tableModel, rowIdx) {
 }
 
 /**
+ * Fold 1d array value according to column's arraySize specification.
+ * For example, if `col.arraySize` is `'2x3'` and `val` is `[1,2,3,4,5,6]`, the result will be `[[1,2],[3,4],[5,6]]`.
+ * @param {TableColumn} col
+ * @param {Object} val
+ * @returns {*} array value with right dimensions, if a column is an array, or an unchanged value
+ */
+export function convertToArraySize(col, val) {
+
+    const aryDim = (col.arraySize || '').split('x');
+
+    if (col.type === 'char' && aryDim.length > 0) {
+        aryDim.shift();    // remove first dimension because char array is presented as string
+    }
+
+    if (aryDim.length > 1) {
+        for(let i = 0; i < aryDim.length-1; i++) {
+            val = chunk(val, strictParseInt(aryDim[i]));
+        }
+    }
+    return val;
+}
+
+
+/**
  * Firefly has 3 column meta that affect the formatting of the column's data.  They are
  * listed below in order of highest to lowest precedence.
  *
@@ -523,17 +550,7 @@ export function formatValue(col, val) {
     if (isNil(val)) return (nullString || '');
 
     if (Array.isArray(val)) {
-        const aryDim = (col.arraySize || '').split('x');
-
-        if (col.type === 'char' && aryDim.length > 0) {
-           aryDim.shift();    // remove first dimension because char array is presented as string
-        }
-
-        if (aryDim.length > 1) {
-            for(let i = 0; i < aryDim.length-1; i++) {
-                val = chunk(val, aryDim[i]);
-            }
-        }
+        val = convertToArraySize(col, val);
         return isString(val) ? val : JSON.stringify(val);
     }
 
@@ -542,6 +559,7 @@ export function formatValue(col, val) {
     } else if (format) {
         return sprintf(format, val);
     } else if (isColumnType(col, COL_TYPE.INT)) {
+        if (typeof val !== 'bigint' && isNaN(val)) return Number.NaN+'';
         return sprintf('%i', val);
     } else if (isColumnType(col, COL_TYPE.FLOAT)) {
         if (precision) {
@@ -551,6 +569,7 @@ export function formatValue(col, val) {
             } else if (type === 'DMS') {
                 return dd2sex(val, true, true);     // use prec+4 to get num of decimal places
             } else {
+                if (typeof val !== 'bigint' && isNaN(val)) return Number.NaN+'';
                 if (!type || type === 'F') type = 'f';
                 prec = '.' + prec;
                 return sprintf('%' + prec + type, val);
@@ -608,13 +627,14 @@ export function getSelectedData(tbl_id, columnNames=[]) {
  * It will not attempt to fetch required data.  This is good for client table.
  * @param tbl_id
  * @param columnNames
+ * @return {TableModel}
  */
 export function getSelectedDataSync(tbl_id, columnNames=[]) {
     const {tableModel, tableMeta, selectInfo} = local.getTblInfoById(tbl_id);
     const selectedRows = [...SelectInfo.newInstance(selectInfo).getSelected()];  // get selected row idx as an array
 
     if (columnNames.length === 0) {
-        columnNames = local.getColumns(tableModel).map( (c) => c.name);       // return all columns
+        columnNames = getAllColumns(tableModel).map( (c) => c.name);       // return all columns
     }
     const meta = cloneDeep(tableMeta);
 
@@ -709,9 +729,7 @@ export function sortTableData(tableData, columns, sortInfoStr) {
     var comparator;
     if (!col.type || ['char', 'c'].includes(col.type) ) {
         comparator = (r1, r2) => {
-            let [s1, s2] = [r1[colIdx], r2[colIdx]];
-            s1 = s1 === '' ? '\u0002' : s1 === null ? '\u0001' : isUndefined(s1) ? '\u0000' : s1;
-            s2 = s2 === '' ? '\u0002' : s2 === null ? '\u0001' : isUndefined(s2) ? '\u0000' : s2;
+            const [s1, s2] = [alterFalsyVal(r1[colIdx]), alterFalsyVal(r2[colIdx])];
             return multiplier * (s1 > s2 ? 1 : -1);
         };
     } else {
@@ -724,6 +742,10 @@ export function sortTableData(tableData, columns, sortInfoStr) {
     }
     tableData.sort(comparator);
     return tableData;
+}
+
+export function alterFalsyVal(s) {
+    return s === '' ? '\u0002' : s === null ? '\u0001' : isUndefined(s) ? '\u0000' : s;
 }
 
 /**
@@ -772,7 +794,7 @@ export function processRequest(tableModel, tableRequest, hlRowIdx) {
     let {data, columns} = nTable.tableData;
 
     nTable.request = tableRequest;
-    pageSize = pageSize || data.length || MAX_ROW;
+    pageSize = pageSize > 0 ? pageSize : data.length || MAX_ROW;
 
     if (filters) {
         filterTable(nTable, filters);
@@ -834,8 +856,8 @@ export function processRequest(tableModel, tableRequest, hlRowIdx) {
 /**
  * collects all available table information given the tbl_id
  * @param {string} tbl_id
- * @param {number} aPageSize  use this pageSize instead of the one in the request.
- * @returns {{tableModel, tbl_id, title, totalRows, request, startIdx, endIdx, hlRowIdx, currentPage, pageSize, totalPages, highlightedRow, selectInfo, error, tableMeta, bgStatus}}
+ * @param {number} [aPageSize]  use this pageSize instead of the one in the request.
+ * @returns {{tableModel, tbl_id, title, totalRows, request, startIdx, endIdx, hlRowIdx, currentPage, pageSize, totalPages, highlightedRow, selectInfo, error, tableMeta, backgroundable}}
  * @public
  * @memberof firefly.util.table
  * @func getTblInfoById
@@ -857,8 +879,8 @@ export function getTblInfoById(tbl_id, aPageSize) {
 export function getTblInfo(tableModel, aPageSize) {
     if (!tableModel) return {};
     var {tbl_id, request, highlightedRow=0, totalRows=0, tableMeta={}, selectInfo, error} = tableModel;
-    const title = tableMeta.title || request?.META_INFO?.title;
-    const pageSize = aPageSize || get(request, 'pageSize', MAX_ROW);  // there should be a pageSize.. default to 1 in case of error.  pageSize cannot be 0 because it'll overflow.
+    const title = tableMeta.title || request?.META_INFO?.title || 'untitled';
+    const pageSize = aPageSize > 0 ? aPageSize : fixPageSize(request?.pageSize);
     if (highlightedRow < 0 ) {
         highlightedRow = 0;
     } else  if (highlightedRow >= totalRows-1) {
@@ -877,7 +899,7 @@ export function getTblInfo(tableModel, aPageSize) {
 
 /**
  * Return the row data as an object keyed by the column name
- * @param {TableModel} tableModel
+ * @param {TableModel|undefined} tableModel
  * @param {Number} [rowIdx] = the index of the row to return, default to highlighted row
  * @return {Object<String,String>} the values of the row keyed by the column name
  * @public
@@ -931,14 +953,14 @@ export function getAsyncTableSourceUrl(tbl_ui_id, params) {
     });
 }
 
-function makeTableSourceUrl(columns, request, otherParams) {
+export function makeTableSourceUrl(columns, request, otherParams) {
     const tableRequest = Object.assign(cloneDeep(request), {startIdx: 0,pageSize : MAX_ROW});
     const visiCols = columns.filter( (col) => get(col, 'visibility', 'show') === 'show')
                             .map( (col) => col.name);
     if (visiCols.length !== columns.length) {
         tableRequest['inclCols'] = visiCols.map( (c) => c.includes('"') ? c : '"' + c + '"').join();  // add quotes to cname unless it's already quoted.
     }
-    const origTable = getTblById(request);
+    const origTable = getTblById(request?.tbl_id);
     const precision = columns.filter( (col) => col.precision)
                              .filter( (col) => col.precision !== get(getColumn(origTable, col.name), 'precision'))
                              .map( (col) => [`col.${col.name}.precision`, col.precision]);
@@ -967,7 +989,7 @@ function makeTableSourceUrl(columns, request, otherParams) {
     if (otherParams) {
         Object.assign(params, omitBy(otherParams, isNil));
     }
-    return wsCmd ? params : encodeServerUrl(getCmdSrvURL(), params);
+    return wsCmd ? params : encodeServerUrl(getCmdSrvSyncURL(), params);
 }
 
 export function setHlRowByRowIdx(nreq, tableModel) {
@@ -976,6 +998,35 @@ export function setHlRowByRowIdx(nreq, tableModel) {
         set(nreq, ['META_OPTIONS', MetaConst.HIGHLIGHTED_ROW_BY_ROWIDX], hlRowIdx);
     }
 }
+
+
+/**
+ *
+ * @param {TableModel|String} tableOrId - parameters accepts the table model or tha table id
+ * @param {number} rowIdx - rowIdx to check
+ * @param {number} [hlRowIdx] - highlighted row index, defaults to tableModel.highlightedRow
+ * @return {boolean} true if it is sub-highlight
+ */
+export function isSubHighlightRow(tableOrId, rowIdx, hlRowIdx) {
+    const tableModel = getTM(tableOrId);
+    if (!tableModel?.tableMeta) return false;
+    const relatedCols = tableModel.tableMeta['tbl.relatedCols'];
+    if (!relatedCols) return false;
+    const colNameAry= relatedCols.split(',').map( (c) => c.trim());
+    const highlightedRow= hlRowIdx ?? tableModel.highlightedRow;
+
+    const makeCellKey= (row) => colNameAry.map((cname) => getCellValue(tableModel, row, cname)).join('|');
+        
+    return makeCellKey(highlightedRow) === makeCellKey(rowIdx);
+}
+
+export function hasSubHighlightRows(tableOrId) {
+    const tableModel = getTM(tableOrId);
+    if (!tableModel?.tableMeta) return false;
+    return Boolean(tableModel.tableMeta['tbl.relatedCols']);
+}
+
+
 
 /**
  * convert this table into IPAC format
@@ -1018,7 +1069,7 @@ export function tableToIpac(tableModel) {
 
 export function tableTextView(columns, dataAry, tableMeta) {
 
-    const colWidths = calcColumnWidths(columns, dataAry);
+    const colWidths = calcColumnWidths(columns, dataAry, {useWidth: false});
     const meta = tableMeta && Object.entries(tableMeta).map(([k,v]) => `\\${k} = ${v}`).join('\n');
 
     const cols = columns.map((c, idx) => get(c,'visibility', 'show') === 'show' ? [c, idx] : null).filter((c) => c);  // only visible columns: [col, colIdx]
@@ -1056,22 +1107,31 @@ export function tableDetailsView(tbl_id, highlightedRow, details_tbl_id) {
         return {tbl_id: nTblId, error: 'No Data Found'};
     }
 
+    const allColKeys = Object.keys(Object.assign({}, ...dataCols));
+
     const columns = [
-        {name: 'Name', type: 'char', desc: 'Column name'},
-        {name: 'Value', type: 'char'},
-        {name: 'Type', type: 'char'},
-        {name: 'Units', type: 'char'},
-        {name: 'Description', type: 'char'}
-    ];
+        { key: 'name', name: 'Name', type: 'char', desc: 'Column name', dataGetter: (c) => c.label || c.name },
+        { key: 'value', name: 'Value', type: 'char', dataGetter: (c) => formatValue(c, getCellValue(tableModel, highlightedRow, c.name)) },
+        { key: 'units', name: 'Units', type: 'char', dataGetter: (c) => c.units || '' },
+        { key: 'desc', name: 'Description', type: 'char', dataGetter: (c) => c.desc || '' },
+        { key: 'type', name: 'Type', type: 'char', dataGetter: (c) => getTypeLabel(c) },
+        { key: 'UCD', name: 'UCD', type: 'char', dataGetter: (c) => c.UCD || '' },
+        { key: 'utype', name: 'UType', type: 'char', dataGetter: (c) => c.utype || '' },
+    ].filter((col, index) =>
+        index < 2 || allColKeys.includes(col.key) // filter columns if not present in given data columns, except name and value
+    );
 
-    const data = dataCols.map((c) => {
-        const name  = c.label || c.name;
-        const value = getCellValue(tableModel, highlightedRow, c.name) || '';
-        const type  = getTypeLabel(c);
-        const units = c.units || '';
-        const desc  = c.desc || '';
+    const data = dataCols.map((c) =>
+        columns.map((col) => (col.dataGetter ? col.dataGetter(c) : ''))
+    );
 
-        return [name, value, type, units, desc];
+    // add enum values for filtering of the following columns
+    ['type', 'units', 'UCD'].forEach((colKey) => {
+        if (allColKeys.includes(colKey)) {
+            const colIdx = columns.findIndex((col) => col.key === colKey);
+            const colValues = data.map((rowData) => rowData[colIdx]);
+            columns[colIdx].enumVals = uniq(colValues.filter((d) => d)).join(',');
+        }
     });
 
     const prevDetails = getTblById(nTblId) || {};
@@ -1080,7 +1140,7 @@ export function tableDetailsView(tbl_id, highlightedRow, details_tbl_id) {
         tbl_id: nTblId,
         request,
         title: 'Additional Information',
-        tableData: {columns, data},
+        tableData: {columns: columns.map((col) => omit(col, ['key', 'dataGetter'])), data},
         totalRows: data.length,
         highlightedRow: prevDetails.highlightedRow
     };
@@ -1092,36 +1152,70 @@ export function tableDetailsView(tbl_id, highlightedRow, details_tbl_id) {
 }
 
 /**
- * returns an object map of the column name and its width.
+ * returns an array of the value with the maximum length for each column.
  * The width is the number of characters needed to display
  * the header and the data in a table given columns and dataAry.
  * @param {TableColumn[]} columns  array of column object
  * @param {TableData} dataAry  array of array.
- * @param {int} maxAryWidth  maximum size of column with array values
+ * @param {object} opt options
+ * @param {number} opt.maxAryWidth  maximum width of column with array values
+ * @param {number} opt.maxColWidth  maximum width of column without array values
+ * @param {boolean} opt.useWidth    use width and prefWidth props in calculation
+ * @returns {string[]} an array of values corresponding to the given columns array.
+ * @memberof firefly.util.table
+ * @func calcColumnWidths
+ */
+export function getColMaxValues(columns, dataAry, opt) {
+    return columns.map( (cv, idx) => getColMaxVal(cv, idx, dataAry, opt));
+}
+
+export function getColMaxVal(col, columnIndex, dataAry,
+                                {
+                                    maxAryWidth = Number.MAX_SAFE_INTEGER,
+                                    maxColWidth = Number.MAX_SAFE_INTEGER,
+                                    useWidth = true,
+                                }={}) {
+    const width = useWidth? col.prefWidth || col.width : 0;
+    if (width) {
+        return 'O'.repeat(width);           // O is a good reference for average width of a character
+    }
+
+    let maxVal = '';
+
+    // the 4 headers
+    [col.label || col.name, col.units + '()', getTypeLabel(col), col.nullString].forEach( (v) => {
+        if (v?.length > maxVal.length) maxVal = v;
+    });
+
+    // the data
+    dataAry.forEach((row) => {
+        const v = formatValue(col, row[columnIndex]);
+        if (v.length > maxVal.length) maxVal = v;
+    });
+
+    // limits
+    if (col.arraySize && maxVal.length > maxAryWidth) maxVal = maxVal.substr(0, maxAryWidth);
+    if (maxVal.length > maxColWidth) maxVal = maxVal.substr(0, maxColWidth);
+
+    return maxVal;
+}
+
+/**
+ * returns an array of the maximum width for each column.
+ * The width is the number of characters needed to display
+ * the header and the data in a table given columns and dataAry.
+ * @param {TableColumn[]} columns  array of column object
+ * @param {TableData} dataAry  array of array.
+ * @param {object} opt options
+ * @param {number} opt.maxAryWidth  maximum width of column with array values
+ * @param {number} opt.maxColWidth  maximum width of column without array values
+ * @param {boolean} opt.useWidth    use width and prefWidth props in calculation
  * @returns {number[]} an array of widths corresponding to the given columns array.
  * @memberof firefly.util.table
  * @func calcColumnWidths
  */
-export function calcColumnWidths(columns, dataAry, {maxAryWidth=Number.MAX_SAFE_INTEGER, maxColWidth=Number.MAX_SAFE_INTEGER}={}) {
-    return columns.map( (cv, idx) => {
-
-        let width = cv.prefWidth || cv.width;
-        if (width) {
-            return width;
-        }
-        const cname = cv.label || cv.name;
-        width = Math.max(cname.length, get(cv, 'units.length', 0),  getTypeLabel(cv).length, get(cv, 'nullString.length', 0));
-        dataAry.forEach((row) => {
-            const v = formatValue(columns[idx], row[idx]);
-            width = Math.max(width, v.length);
-        });
-
-        if (cv.arraySize) {
-            width = Math.min(width, maxAryWidth);
-        }
-        width = Math.min(width, maxColWidth);
-        return width;
-    });
+export function calcColumnWidths(columns, dataAry, opt) {
+    return getColMaxValues(columns, dataAry, opt).map((v) => v.length);
 }
 
 /**
@@ -1171,8 +1265,8 @@ export function uniqueTblUiId() {
 }
 /**
  *  This function provides a patch until we can reliably determine that the ra/dec columns use radians or degrees.
- * @param table the table model
- * @param {Array.<String>} columnNames
+ * @param {TableModel} table the table model
+ * @param {Array.<String>} [columnNames]
  * @memberof firefly.util.table
  * @func isTableUsingRadians
  *
@@ -1203,7 +1297,7 @@ export function isColDegree(table, colName) {
 }
 
 export function createErrorTbl(tbl_id, error) {
-    return set({tbl_id, error: error||'something went wrong'}, 'tableMeta.Loading-Status', 'COMPLETED');
+    return set({tbl_id, error}, 'tableMeta.Loading-Status', 'COMPLETED');
 }
 
 
@@ -1314,9 +1408,13 @@ export function hasRowAccess(tableModel, rowIdx) {
     }
     if (rcname) {
         const rdate = getCellValue(tableModel, rowIdx, rcname);
-        if ( rdate && new Date() > new Date(rdate)) {
-            return true;
+        if (!rdate) return false;
+        let rDateObj= new Date(rdate);
+        if (rDateObj.toString()==='Invalid Date') {
+            rDateObj= new Date(rdate.split(' ',2)?.join('T'));
+            if (rDateObj.toString()==='Invalid Date') return false;
         }
+        if (Date.now() > rDateObj) return true;
     }
     return false;
 }
@@ -1345,6 +1443,11 @@ export function tblDropDownId(tbl_id) {
     return `table_dropDown-${tbl_id}`;
 }
 
+/**
+ *
+ * @param {String} tableOrId
+ * @return {undefined|TableModel}
+ */
 function getTM(tableOrId) {
     if (isString(tableOrId)) return getTblById(tableOrId);  // was passed a table Id
     if (isObject(tableOrId)) return tableOrId;
@@ -1383,17 +1486,72 @@ export function getBooleanMetaEntry(tableOrId,metaKey,defVal= false) {
  * @returns {boolean}
  */
 export function hasAuxData(tbl_id) {
-    const {keywords, links, params, resources} = getTblById(tbl_id);
-    return !isEmpty(keywords) || !isEmpty(links) || !isEmpty(params) || !isEmpty(resources);
+    const {keywords, links, params, resources, groups} = getTblById(tbl_id) || {};
+    return !isEmpty(keywords) || !isEmpty(links) || !isEmpty(params) || !isEmpty(resources) || !isEmpty(groups);
 }
 
 /**
- * returns true only if a table is successfully fetched, but does not contains any data.
- * @param tbl_id
+ * @param tbl_id  ID of the table
+ * @param tableModel  or, the tableModel itself.
+ * @return TBL_STATE of the table.
  */
-export function hasNoData(tbl_id) {
-    const tableModel = getTblById(tbl_id);
-    return tableModel?.totalRows === 0;
+export function getTableState(tbl_id, tableModel={}) {
+    const {error, status, isFetching, totalRows, request={}} = getTblById(tbl_id) || tableModel;
+    const {filters, sqlFilter} = request;
+
+    if (error) return TBL_STATE.ERROR;
+    if (isFetching) return TBL_STATE.LOADING;
+    if (totalRows === 0) return TBL_STATE.NO_DATA;
+
+    // check status
+    if (status?.code && (status.code < 200 || status.code >= 400) ) return TBL_STATE.ERROR;
+    if (status?.code === 204) return TBL_STATE.NO_MATCH;     // (204 No Content) - No data found matching the given filter criteria
+
+    if (totalRows === 0 && (filters || sqlFilter)) return TBL_STATE.NO_MATCH;
+
+    return TBL_STATE.OK;
+}
+
+export function fixPageSize(pageSize) {
+    if ( !Number.isInteger(pageSize) )                  pageSize = parseInt(pageSize);
+    if ( !Number.isInteger(pageSize) || pageSize <= 0)  pageSize = MAX_ROW;
+    return pageSize;
+}
+
+/**
+ * @param {string} cnames
+ * @return {string[]} array of column names split from a comma separated string, ignoring commas inside double-quotes
+ */
+export function splitCols(cnames='') {
+    return cnames.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+}
+
+/**
+ * @param {string} values
+ * @return {string[]} array of values split from a comma separated string, ignoring commas inside single-quotes
+ */
+export function splitVals(values='') {
+    return values.split(/,(?=(?:[^']*'[^']*')*[^']*$)/);
+}
+
+export function parseError(error) {
+    const message = error?.message ?? error;
+    if (error?.cause) {
+        const [_, type, cause] = error?.cause.match(/(.+?):(.+)/) || [];
+        return {message, type, cause};
+    } else {
+        const [_, error, cause] = message?.match(/(.+?):(.+)/) || [];     // formatted error messages; 'error:cause'
+        return {message: error || message, cause};
+    }
+}
+
+export function isOverflow(tbl_id) {
+    const {resources, tableMeta} = getTblById(tbl_id) || {};
+
+    if (tableMeta?.QUERY_STATUS?.toUpperCase() === 'OVERFLOW') return true;
+
+    const results = resources?.find((r) => r.type === 'results');
+    return results?.infos?.QUERY_STATUS === 'OVERFLOW';
 }
 
 /*-------------------------------------private------------------------------------------------*/

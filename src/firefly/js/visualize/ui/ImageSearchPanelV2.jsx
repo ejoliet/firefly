@@ -2,78 +2,55 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {useContext, useEffect, useState} from 'react';
-import PropTypes from 'prop-types';
+import {Box, Sheet, Stack, Typography} from '@mui/joy';
 import {get, includes, isNil, isString} from 'lodash';
-import {FormPanel} from '../../ui/FormPanel.jsx';
-import {FieldGroup} from '../../ui/FieldGroup.jsx';
-import {SizeInputFields} from '../../ui/SizeInputField.jsx';
-import {TargetPanel} from '../../ui/TargetPanel.jsx';
-import {ServerParams} from '../../data/ServerParams.js';
-import {showInfoPopup} from '../../ui/PopupUtil.jsx';
-import {StatefulTabs, Tab} from '../../ui/panel/TabPanel.jsx';
-import {dispatchHideDropDown} from '../../core/LayoutCntlr.js';
-import {FileUpload} from '../../ui/FileUpload.jsx';
-import {ValidationField} from '../../ui/ValidationField.jsx';
-import {getFieldVal} from '../../fieldGroup/FieldGroupUtils.js';
-import {parseWorldPt} from '../../visualize/Point.js';
-import WebPlotRequest, {WPConst} from '../../visualize/WebPlotRequest.js';
-import {dispatchPlotImage, visRoot, dispatchPlotHiPS} from '../../visualize/ImagePlotCntlr.js';
-import {getImageMasterData} from '../../visualize/ui/AllImageSearchConfig.js';
-import {ImageSelect} from '../../ui/ImageSelect.jsx';
-import {RadioGroupInputField} from '../../ui/RadioGroupInputField.jsx';
-import {CheckboxGroupInputField} from '../../ui/CheckboxGroupInputField.jsx';
-import {PopupPanel} from '../../ui/PopupPanel.jsx';
-import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
-import {dispatchShowDialog, dispatchHideDialog} from '../../core/ComponentCntlr.js';
-import {NewPlotMode, findViewerWithItemId, getMultiViewRoot, getViewer, getAViewFromMultiView, IMAGE} from '../MultiViewCntlr.js';
-import {getPlotViewById} from '../PlotViewUtil.js';
-import {WorkspaceUpload} from '../../ui/WorkspaceViewer.jsx';
-import {getWorkspaceConfig} from '../WorkspaceCntlr.js';
+import PropTypes, {bool, object, shape, string} from 'prop-types';
+import React, {useContext, useEffect, useState} from 'react';
 import {getAppOptions} from '../../core/AppDataCntlr.js';
-import {useForImageSearch} from '../HiPSListUtil.js';
-import {HiPSImageSelect, makeHiPSWebPlotRequest, getHipsUrl} from '../../ui/HiPSImageSelect.jsx';
-
-import './ImageSearchPanelV2.css';
-import {RenderTreeIdCtx} from '../../ui/RenderTreeIdCtx.jsx';
-import {PlotAttribute} from '../PlotAttribute';
+import {dispatchHideDialog, dispatchShowDialog} from '../../core/ComponentCntlr.js';
+import {MetaConst} from '../../data/MetaConst';
+import {ServerParams} from '../../data/ServerParams.js';
+import {getFieldVal, setFieldValue} from '../../fieldGroup/FieldGroupUtils.js';
 import {makeFileRequest} from '../../tables/TableRequestUtil';
 import {dispatchTableSearch} from '../../tables/TablesCntlr';
-import {MetaConst} from '../../data/MetaConst';
+import {CheckboxGroupInputField} from '../../ui/CheckboxGroupInputField.jsx';
+import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
+import {FieldGroup, FieldGroupCtx} from '../../ui/FieldGroup.jsx';
+import {FileUpload} from '../../ui/FileUpload.jsx';
+import {FormPanel} from '../../ui/FormPanel.jsx';
+import {getHipsUrl, HiPSImageSelect, makeHiPSWebPlotRequest} from '../../ui/HiPSImageSelect.jsx';
+import {ImageSelect} from '../../ui/ImageSelect.jsx';
+import {StatefulTabs, Tab} from '../../ui/panel/TabPanel.jsx';
+import {PopupPanel} from '../../ui/PopupPanel.jsx';
+import {showInfoPopup} from '../../ui/PopupUtil.jsx';
+import {RadioGroupInputField} from '../../ui/RadioGroupInputField.jsx';
+import {RenderTreeIdCtx} from '../../ui/RenderTreeIdCtx.jsx';
+import {useFieldGroupValue, useStoreConnector} from '../../ui/SimpleComponent.jsx';
+import {SizeInputFields} from '../../ui/SizeInputField.jsx';
+import {DEF_TARGET_PANEL_KEY, TargetPanel} from '../../ui/TargetPanel.jsx';
+import {ValidationField} from '../../ui/ValidationField.jsx';
+import {WorkspaceUpload} from '../../ui/WorkspaceViewer.jsx';
 import {isDefined} from '../../util/WebUtil';
-import VisUtil from '../VisUtil';
+import WebPlotRequest, {WPConst} from '../../visualize/WebPlotRequest.js';
 import CoordinateSys from '../CoordSys';
-import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
-
-
-const FG_KEYS = {
-    main: 'ImageSearchPanel_imageType',
-    single: 'ImageSearchPanel_single',
-    red: 'ImageSearchPanel_red',
-    green: 'ImageSearchPanel_green',
-    blue: 'ImageSearchPanel_blue',
-    hips: 'ImageSearchPanel_hips'
-};
-
-const FD_KEYS = {
-    type: 'imageType',
-    source: 'imageSource'
-};
+import {useForImageSearch} from '../HiPSListUtil.js';
+import {dispatchPlotHiPS, dispatchPlotImage, visRoot} from '../ImagePlotCntlr.js';
+import {
+    DEFAULT_FITS_VIEWER_ID, findViewerWithItemId, getAViewFromMultiView, getMultiViewRoot, getViewer, IMAGE, NewPlotMode
+} from '../MultiViewCntlr.js';
+import {PlotAttribute} from '../PlotAttribute';
+import {
+    DEFAULT_COVERAGE_PLOT_ID, DEFAULT_COVERAGE_VIEWER_ID, getNextHiPSPlotId, getPlotViewById
+} from '../PlotViewUtil.js';
+import {parseWorldPt} from '../Point.js';
+import {convertCelestial} from '../VisUtil';
+import {getWorkspaceConfig} from '../WorkspaceCntlr.js';
+import {getImageMasterData} from './AllImageSearchConfig.js';
+import {FD_KEYS, FG_KEYS} from './UIConst';
+import {GridMask} from 'firefly/ui/panel/MaskPanel.jsx';
 
 var imageMasterData;        // latest imageMasterData retrieved from server
 const scrollDivId = 'ImageSearchScroll';
-
-// set 20 as the maximum plot
-function* getHiPSPlotId() {
-    let index = 0;
-
-    while (true) {
-        ++index;
-        yield 'aHiPSId' + index;
-    }
-}
-
-export const genHiPSPlotId = getHiPSPlotId();
 
 /**
  * @typedef {Object} ContextInfo
@@ -85,13 +62,14 @@ export const genHiPSPlotId = getHiPSPlotId();
 /**
  * returns the context information
  * @param [renderTreeId]
+ * @param [presetViewerId] if defined, then use as viewerId
  * @returns {ContextInfo}
  */
-function getContexInfo(renderTreeId) {
+function getContexInfo(renderTreeId, presetViewerId) {
     const mvroot = getMultiViewRoot();
-    let plotId = get(visRoot(), 'activePlotId');
-    let viewerId = plotId && findViewerWithItemId(mvroot, plotId, IMAGE);
-    let viewer = viewerId && getViewer(mvroot, viewerId);
+    let plotId = visRoot()?.activePlotId;
+    let viewerId= presetViewerId ? presetViewerId : (plotId && findViewerWithItemId(mvroot, plotId, IMAGE));
+    let viewer = getViewer(mvroot, viewerId);
 
     if (viewer && renderTreeId && viewer.renderTreeId && renderTreeId!==viewer.renderTreeId) {
         viewer = getAViewFromMultiView(mvroot, IMAGE, renderTreeId);
@@ -99,7 +77,7 @@ function getContexInfo(renderTreeId) {
     }
 
     if (!viewer || viewer.reservedContainer || canNotUpdatePlot(viewer)) {
-        // viewer does not exists or cannot be updated, find another one that can.
+        // viewer does not exist or cannot be updated, find another one that can.
         viewer = getAViewFromMultiView(mvroot, IMAGE, renderTreeId);
         viewerId =  viewer && viewer.viewerId;
     }
@@ -107,7 +85,11 @@ function getContexInfo(renderTreeId) {
         // don't replace if add is allowed
         plotId = undefined;
     }
-    const multiSelect = !plotId;  // when replace, set to single select mode
+
+    plotId= plotId!==DEFAULT_COVERAGE_PLOT_ID ? plotId : undefined;
+    viewerId= viewerId!==DEFAULT_COVERAGE_VIEWER_ID ? viewerId : undefined;
+
+    const multiSelect = !plotId;
     return {plotId, viewerId, multiSelect};
 }
 
@@ -115,50 +97,61 @@ function getContexInfo(renderTreeId) {
 /* search panel used in drop-down                                                          */
 /*-----------------------------------------------------------------------------------------*/
 
-function ImageSearchPanel({resizable=true, onSubmit, gridSupport = false, multiSelect, submitText, onCancel=dispatchHideDropDown, noScroll}) {
+function ImageSearchPanel({sx, resizable=true, onSubmit, gridSupport = false, multiSelect, submitText,
+                              onCancel, noScroll, initArgs}) {
     const archiveName =  get(getAppOptions(), 'ImageSearch.archiveName');
     const resize = {resize: 'both', overflow: 'hidden', paddingBottom: 5};
     const dim = {height: 600, width: 725, minHeight: 600, minWidth: 725};
     const style = resizable ? {...dim, ...resize} : {width: '100%'};
 
-    const [imageType]= useStoreConnector(() => getFieldVal(FG_KEYS.main, FD_KEYS.type));
+    const imageType = useStoreConnector(() => getFieldVal(FG_KEYS.main, FD_KEYS.type));
 
     return (
-        <div style={style}>
-            <FormPanel  inputStyle = {{display: 'flex', flexDirection: 'column', backgroundColor: 'transparent', padding: 'none', border: 'none'}}
-                        submitBarStyle = {{flexShrink: 0, padding: '0 4px 3px'}}
-                        groupKey = {Object.values(FG_KEYS)} includeUnmounted={true}
-                        groupsToUse={() => getGroupsToValidate(imageType)}
-                        params = {{hideOnInvalid: false}}
-                        submitText={submitText}
-                        onSubmit = {onSubmit}
+        <Stack sx={{...style, ...sx}}>
+            <FormPanel  groupKey={() => getGroupsToValidate(imageType)}
+                        onSuccess={onSubmit}
                         onError = {searchFailed}
-                        onCancel = {onCancel}
-                        help_id = {'basics.searching'}>
-                <ImageSearchPanelV2 {...{multiSelect, archiveName, noScroll}}/>
+                        onCancel= {onCancel}
+                        completeText={submitText}
+                        cancelText={onCancel? 'Cancel': ''}
+                        help_id = {'basics.searching'}
+                        slotProps={{
+                            input: {bgcolor:'transparent', p:0, border:0},
+                            searchBar: {flexShrink: 0, px:1, pb:1},
+                            completeBtn: {
+                                includeUnmounted:true,
+                            },
+                        }}>
+                <ImageSearchPanelV2 {...{multiSelect, archiveName, noScroll, initArgs}}/>
                 {gridSupport && <GridSupport/>}
             </FormPanel>
-        </div>
+        </Stack>
     );
 }
 
-export function ImageSearchDropDown({gridSupport, resizable=false}) {
+
+
+export function ImageSearchDropDown({gridSupport, resizable=false, initArgs}) {
     const {renderTreeId} = useContext(RenderTreeIdCtx);
-    const {plotId, viewerId, multiSelect} = getContexInfo(renderTreeId);
+    const {viewerId:presetViewerId}= initArgs?.searchParams ?? {viewerId:undefined};
+    const {plotId, viewerId, multiSelect} = getContexInfo(renderTreeId, presetViewerId);
     const onSubmit = (request) => onSearchSubmit({request, plotId, viewerId, gridSupport, renderTreeId});
-    return <ImageSearchPanel {...{resizable, gridSupport, onSubmit, multiSelect, onCancel:dispatchHideDropDown}}/>;
+    return (
+        <Stack flexGrow={1}>
+            <ImageSearchPanel {...{sx:{flexGrow:1}, resizable, gridSupport, onSubmit, multiSelect, initArgs}}/>
+        </Stack>
+    );
 }
 
 function GridSupport() {
     return (
-        <FieldGroup className='ImageSearch__section' groupKey={FG_KEYS.main} keepState={true}>
-            <div className='ImageSearch__section--title' style={{width: 138}}>Add to new grid cell</div>
-            <CheckboxGroupInputField
-                fieldKey='createNewCell'
-                options={[{label: '', value: 'newCell'}]}
-                labelWidth = {0}
-            />
-        </FieldGroup>
+        <Sheet {...{variant:'outlined', sx:{py:1,borderRadius: '5px'}}}>
+            <FieldGroup groupKey={FG_KEYS.main} keepState={true} sx={{m:1}} >
+                <CheckboxGroupInputField fieldKey='createNewCell'
+                    options={[{label: 'Add to new grid cell', value: 'newCell'}]}
+                />
+            </FieldGroup>
+        </Sheet>
     );
 }
 
@@ -195,16 +188,13 @@ function isImageType(imageType=getFieldVal(FG_KEYS.main, FD_KEYS.type)) {
 function getGroupsToValidate(imageType) {
     const {isThreeColorImgType, isHipsImgType, isSingleChannelImgType} = isImageType(imageType);
 
-    if (isThreeColorImgType) return [FG_KEYS.main,FG_KEYS.red,FG_KEYS.green,FG_KEYS.blue];
-    else if (isHipsImgType) return [FG_KEYS.main,FG_KEYS.hips];
-    else if (isSingleChannelImgType) return [FG_KEYS.main,FG_KEYS.single];
+    if (isThreeColorImgType) return [FG_KEYS.main,FG_KEYS.red,FG_KEYS.green,FG_KEYS.blue,FG_KEYS.targetSelect];
+    else if (isHipsImgType) return [FG_KEYS.main,FG_KEYS.hips,FG_KEYS.targetSelect];
+    else if (isSingleChannelImgType) return [FG_KEYS.main,FG_KEYS.single,FG_KEYS.targetSelect];
     else return Object.values(FG_KEYS);
 }
 
-/**
- *
- */
-function ImageSearchPanelV2 ({archiveName='Search', title='Image Search', multiSelect=true, noScroll}) {
+function ImageSearchPanelV2 ({archiveName='Search', title='Image Search', multiSelect=true, noScroll, initArgs}) {
 
     const [, setImageMasterData] = useState(() => imageMasterData);
     const [showError=false, setShowError] = useState();
@@ -219,13 +209,24 @@ function ImageSearchPanelV2 ({archiveName='Search', title='Image Search', multiS
             });
     }, []);
 
-    const [imageType]= useStoreConnector(() => getFieldVal(FG_KEYS.main, FD_KEYS.type));
+    const {wp,type}= initArgs?.searchParams ?? {};
+
+    useEffect(() => {
+        if (!wp) return;
+        setFieldValue(FG_KEYS.targetSelect,DEF_TARGET_PANEL_KEY,wp);
+    }, [wp]);
+    useEffect(() => {
+        if (!type) return;
+        setFieldValue(FG_KEYS.main,FD_KEYS.type,type);
+    }, [type]);
+
+    const imageType = useStoreConnector(() => getFieldVal(FG_KEYS.main, FD_KEYS.type));
     const {isThreeColorImgType, isHipsImgType, isSingleChannelImgType} = isImageType(imageType);
 
     multiSelect = !isThreeColorImgType && multiSelect;
 
     const pStyle = noScroll ? {} : {overflow: 'auto', height: 1};
-
+    
     if (showError) {
         return (
             <div style={{width:500}}>
@@ -237,26 +238,30 @@ function ImageSearchPanelV2 ({archiveName='Search', title='Image Search', multiS
     } else if (imageMasterData) {
         return (
             <div className='flex-full' style={{position: 'relative'}}>
-                <div className='ImageSearch__title'>{title}</div>
                 <div className='flex-full' style={pStyle} id={scrollDivId}>
                     <ImageType/>
                     {isThreeColorImgType &&
                     <ThreeColor {...{imageMasterData:imageMasterData.filter( (md) => (!md.dataType || md.dataType==='image')), multiSelect, archiveName, noScroll}}/>}
                     {isSingleChannelImgType && <SingleChannel {...{groupKey: FG_KEYS.single,
                         imageMasterData, multiSelect, archiveName, noScroll}}/>}
-                    {isHipsImgType && <HiPSImage {...{imageMasterData, groupKey: FG_KEYS.hips,  archiveName}}/>}
+                    {isHipsImgType && <HiPSImage {...{imageMasterData, groupKey: FG_KEYS.hips,  archiveName, initArgs}}/>}
                 </div>
             </div>
         );
     } else {
-        return <div className='ImageSearch__mask'> <div className='loading-mask'/> </div>;
+        return (<GridMask cols={1} rows={3}/>);
     }
 }
 
 ImageSearchPanelV2.propTypes = {
-    title:       PropTypes.string,
-    archiveName: PropTypes.string,
-    multiSelect: PropTypes.bool
+    title:       string,
+    archiveName: string,
+    multiSelect: bool,
+    noScroll: bool,
+    initArgs: shape({
+        searchParams: object,
+        urlApi: object,
+    }),
 };
 
 function SingleChannel({groupKey, imageMasterData, multiSelect, archiveName, noScroll}) {
@@ -272,10 +277,7 @@ function SingleChannel({groupKey, imageMasterData, multiSelect, archiveName, noS
 function ThreeColor({imageMasterData, multiSelect, archiveName, noScroll}) {
     return (
         <div className='flex-full' style={{marginTop: 5}}>
-            <StatefulTabs componentKey='ImageSearchPanelV2' resizable={false} useFlex={true} borderless={true}
-                  style={{flexGrow: 1, overflow: 'unset'}}
-                  contentStyle={{backgroundColor: 'rgb(202, 202, 202)', paddingBottom: 2, overflow: 'unset'}}
-                  headerStyle={{display:'inline-flex', marginLeft: 185}}>
+            <StatefulTabs componentKey='ImageSearchPanelV2'>
                 <Tab key='ImageSearchRed' name='red' label={<div style={{width:40, color:'red'}}>Red</div>}>
                     <SingleChannel {...{key: FG_KEYS.red, groupKey: FG_KEYS.red, imageMasterData, multiSelect, archiveName, noScroll}}/>
                 </Tab>
@@ -290,18 +292,20 @@ function ThreeColor({imageMasterData, multiSelect, archiveName, noScroll}) {
     );
 }
 
-function HiPSImage({groupKey, archiveName, imageMasterData}) {
+function HiPSImage({groupKey, archiveName, imageMasterData, initArgs}) {
     return (
         <div className='flex-full' style={{flexGrow: 1}}>
             <FieldGroup className='flex-full' groupKey={groupKey} reducerFunc={mainReducer} keepState={true}>
-                <ImageSource {...{groupKey, archiveName, imageMasterData}}/>
+                <ImageSource {...{groupKey, archiveName, imageMasterData, initArgs}}/>
             </FieldGroup>
         </div>
     );
 }
 HiPSImage.propTypes = {
     groupKey: PropTypes.string,
-    archiveName: PropTypes.string
+    archiveName: PropTypes.string,
+    initArgs: PropTypes.object,
+    imageMasterData: PropTypes.array,
 };
 
 function ImageType({}) {
@@ -312,27 +316,34 @@ function ImageType({}) {
         options.push({label: 'View HiPS Images', value: 'hipsImage'});
     }
     return (
-        <FieldGroup className='ImageSearch__section' groupKey={FG_KEYS.main} keepState={true}>
-            <div className='ImageSearch__section--title'>1. Choose Image Type</div>
-            <RadioGroupInputField
-                initialState= {{ value: 'singleChannel',
-                             tooltip: 'Please select the image type'}}
-                options={ options }
-                fieldKey={ FD_KEYS.type }
-            />
-        </FieldGroup>
+        <Sheet {...{variant:'outlined', sx:{mx:0,py:1,borderRadius: '5px'}}}>
+            <FieldGroup groupKey={FG_KEYS.main} keepState={true}>
+                <Stack {...{direction:'row', justifyContent:'flex-start', alignItems:'center', spacing:2}}>
+                    <Typography {...{px:1, width:200, color:'primary', level:'title-md'}}>1. Choose Image Type</Typography>
+                    <RadioGroupInputField
+                        initialState= {{ value: 'singleChannel',
+                            tooltip: 'Please select the image type'}}
+                        options={ options }
+                        orientation='horizontal'
+                        fieldKey={ FD_KEYS.type }
+                    />
+
+                </Stack>
+            </FieldGroup>
+        </Sheet>
+
     );
 }
 
 
-function ImageSource({groupKey, imageMasterData, multiSelect, archiveName='Archive', noScroll}) {
+function ImageSource({groupKey, imageMasterData, multiSelect, archiveName='Archive', noScroll, initArgs}) {
 
-    const [imageType]= useStoreConnector(() => getFieldVal(FG_KEYS.main, FD_KEYS.type));
+    const imageType = useStoreConnector(() => getFieldVal(FG_KEYS.main, FD_KEYS.type));
     const {isThreeColorImgType, isHipsImgType} = isImageType(imageType);
 
-    const defaultValue = isThreeColorImgType ? 'none' : 'archive';
-    const [imageSource] = useStoreConnector(() => getFieldVal(groupKey, FD_KEYS.source, defaultValue));
-
+    const [getDefaultImages, ] = useFieldGroupValue('defaultImages', FG_KEYS.rgb);
+    const defaultValue = isThreeColorImgType && !getDefaultImages() ? 'none' : 'archive'; // if 3 color, set 'archive' if defaultImages are defined
+    const imageSource  = useStoreConnector(() => getFieldVal(groupKey, FD_KEYS.source, defaultValue));
 
     const options = [   {label: archiveName, value: 'archive'},
                         {label: 'URL', value: 'url'}];
@@ -348,86 +359,116 @@ function ImageSource({groupKey, imageMasterData, multiSelect, archiveName='Archi
     isThreeColorImgType && (options.push({label: 'None', value: 'none'}));
 
     return (
-        <div className='flex-full'>
-            <div className='ImageSearch__section'>
-                <div className='ImageSearch__section--title'>2. Select Image Source</div>
-                <RadioGroupInputField
-                    initialState = {{ defaultValue, options, tooltip: 'Please select the image source'}}
-                    defaultValue ={defaultValue}
-                    options = {options}
-                    fieldKey = { FD_KEYS.source }/>
-            </div>
-            {imageSource === 'url'  && (isHipsImgType ? <SelectArchive {...{groupKey, imageMasterData, multiSelect, isHipsImgType, noScroll}}/> : <SelectUrl />)}
-            {imageSource === 'archive'  && <SelectArchive {...{groupKey, imageMasterData, multiSelect, isHipsImgType, noScroll}}/>}
+        <Stack flexGrow={1} >
+            <Sheet {...{variant:'outlined', sx:{position:'static', mx:0,py:1,mt:1/2,borderRadius: '5px'}}}>
+                <Stack {...{direction:'row', justifyContent:'flex-start', alignItems:'center', spacing:2}}>
+                    <Typography {...{px:1, width:200, color:'primary', level:'title-md'}}>2. Select Image Source</Typography>
+                    <RadioGroupInputField
+                        initialState = {{ defaultValue, options, tooltip: 'Please select the image source'}}
+                        defaultValue ={defaultValue}
+                        options = {options}
+                        orientation='horizontal'
+                        fieldKey = { FD_KEYS.source }/>
+                </Stack>
+            </Sheet>
+            {imageSource === 'url'  && (isHipsImgType ? <SelectArchive {...{groupKey, imageMasterData, multiSelect, isHipsImgType, noScroll, initArgs}}/> : <SelectUrl />)}
+            {imageSource === 'archive'  && <SelectArchive {...{groupKey, imageMasterData, multiSelect, isHipsImgType, noScroll,initArgs}}/>}
             {imageSource === 'upload' && <SelectUpload />}
             {imageSource === ServerParams.IS_WS && <SelectWorkspace />}
-        </div>
+        </Stack>
     );
 }
 
-function SelectArchive({groupKey,  imageMasterData, multiSelect, isHipsImgType, noScroll}) {
+function SelectArchive({groupKey,  imageMasterData, multiSelect, isHipsImgType, noScroll, initArgs}) {
     const title = '4. Select Data Set';
-    const targetStyle = {height: 40, width: 450};
-    const sizeStyle = {margin: '-5px 0 0 36px'};
     const isHips = isHipsImgType;
-    const sizeLabel = isHips ? 'Field of view (optional):' : 'Cutout size (leave blank for full size):';
+
+    return (
+        <Sheet className='flex-full' sx={{position:'static',mt:1/2}}>
+            <Sheet {...{position:'static', variant:'outlined', sx:{py:1, flexGrow:0,borderRadius: '5px'}}}>
+                <Stack direction={'row'} >
+                    <Typography {...{px:1, width:200, color:'primary', level:'title-md'}}>3. Select Target</Typography>
+                    <FieldGroup groupKey={FG_KEYS.targetSelect} keepState={true}>
+                        <SpacialContent {...{isHips,initArgs}}/>
+                    </FieldGroup>
+                </Stack>
+            </Sheet>
+            {isHips ?
+                <HiPSImageSelect variant='plain' groupKey={groupKey} /> :
+                <Sheet {...{variant:'outlined', sx:{position:'static', mt:1/2, p:1, borderRadius: '5px'}}}>
+                    <ImageSelect key={`ImageSelect_${groupKey}`} {...{groupKey, title, addChangeListener, imageMasterData, multiSelect,
+                        scrollDivId: noScroll ? undefined: scrollDivId }}
+                                 header={() => <Typography {...{color:'primary', level:'title-md'}} sx={{width:175, flexShrink:0}}>4. Select Data Set</Typography>}
+                    />
+                </Sheet>
+            }
+        </Sheet>
+    );
+}
+
+export function SpacialContent({isHips,initArgs={}}) {
+
+    const {setFld, groupKey} = useContext(FieldGroupCtx);
+    const {radius:initRadius}= initArgs.urlApi ?? initArgs.searchParams ?? {};
+
+    const sizeLabel = isHips ? 'Field of view (optional)' : 'Cutout size (leave blank for full size)';
     const sizeKey = isHips ? 'sizeFov' : 'conesize';
     const minSize = isHips ? 9/3600 : 1/3600;
     const maxSize = isHips ? 180 : 1;
-    // const sizeVal = isHips ? (180) + '' : (500/3600) + '';
-    const sizeVal = isHips ?  '' : (500/3600) + '';
     const initUnit = isHips ? 'deg' : 'arcsec';
+    const sizeVal = isHips ?  '' : (500/3600) + '';
+
+    useEffect(() => {
+        initRadius && setFld(sizeKey, {value:initRadius*(isHips?2:1), unit : 'deg' });
+    }, [initRadius]);
+
 
     return (
-        <div className='flex-full'>
-            <div className='ImageSearch__section'>
-                <div className='ImageSearch__section--title'>3. Select Target</div>
-                <div className='flex-full'>
-                    <TargetPanel labelWidth={isHips?150:100} feedbackStyle={targetStyle}
-                                 label={isHips?'Coordinates or Object Name (optional):' :'Coordinates or Object Name:' }
-                                 nullAllowed={true} />
-                    <SizeInputFields fieldKey={sizeKey} showFeedback={true}
-                                     feedbackStyle={sizeStyle}
-                                     initialState={{
-                                             unit: initUnit,
-                                             labelWidth : 0,
-                                             nullAllowed: true,
-                                             value: sizeVal,
-                                             min: minSize,
-                                             max: maxSize
-                                         }}
-                                     label={sizeLabel}
-                                     key={`sizeInput_${groupKey}`}
-                    />
-                </div>
-            </div>
-            {isHips ?
-                <HiPSImageSelect groupKey={groupKey} /> :
-                <div className='ImageSearch__section' style={{ display: 'flex', flexDirection: 'column', padding: 'unset', flexGrow: 1}}>
-                    <div className='ImageSearch__section--title'>4. Select Data Set</div>
-                    <ImageSelect style={{flexGrow: 1, width: '100%'}} key={`ImageSelect_${groupKey}`} {...{groupKey, title, addChangeListener, imageMasterData, multiSelect, scrollDivId: !noScroll && scrollDivId}} />
-                </div>
-            }
-        </div>
+        <Stack spacing={2} direction='column'>
+            <TargetPanel
+                         label={isHips ? 'Coords or Object Name (optional)' : undefined}
+                         placeholderHighlight={!isHips}
+                         nullAllowed={true}/>
+            <SizeInputFields fieldKey={sizeKey} showFeedback={true}
+                             feedbackStyle={{marginLeft: 185}}
+                             initialState={{
+                                 unit: initUnit,
+                                 nullAllowed: true,
+                                 value: initRadius? initRadius*2 : sizeVal,
+                                 min: minSize,
+                                 max: maxSize
+                             }}
+                             label={sizeLabel}
+                             key={`sizeInput_${groupKey}`}/>
+        </Stack>
     );
 }
 
+SpacialContent.propsTypes= {
+    isHips: bool,
+    initArgs: shape({
+        searchParams: object,
+        urlApi: object,
+    }),
+};
+
+
+
 function SelectUpload() {
     return (
-        <div className='ImageSearch__section' style={{alignItems: 'center'}}>
-            <div className='ImageSearch__section--title'>3. Select Image</div>
-            <FileUpload
-                fieldKey='fileUpload'
-                initialState= {{tooltip: 'Select a image to upload' }}
-            />
-        </div>
+        <Sheet variant='outlined' sx={{mt: 1/2, py:1, width:'100%', display:'flex', flexDirection:'column', flex:'1 1 auto',borderRadius: '5px'}}>
+            <Stack direction='row' spacing={2}>
+                <Typography {...{px:1, width:200, color:'primary', level:'title-md'}}>3. Select Image</Typography>
+                <FileUpload fieldKey='fileUpload' initialState= {{tooltip: 'Select a image to upload' }} />
+            </Stack>
+        </Sheet>
     );
 }
 
 function SelectWorkspace() {
     return (
         <div className='ImageSearch__section' style={{alignItems: 'center'}}>
-            <div className='ImageSearch__section--title'>3. Select Image</div>
+            <Typography {...{px:1, color:'primary', level:'title-md'}}>3. Select Image</Typography>
             <WorkspaceUpload
                 preloadWsFile={false}
                 fieldKey='wsFilepath'
@@ -439,14 +480,12 @@ function SelectWorkspace() {
 
 function SelectUrl() {
     return (
-        <div className='ImageSearch__section' style={{height: 35, alignItems: 'center'}}>
-            <div className='ImageSearch__section--title'>3. Enter URL</div>
-            <ValidationField
-                labelWidth={150}
-                style={{width: 475}}
-                fieldKey='txURL'
-            />
-        </div>
+        <Sheet variant='outlined' sx={{mt:1/2, py:1, width:'100%', display:'flex', flexDirection:'column', flex:'1 1 auto',borderRadius: '5px'}}>
+            <Stack direction='row' spacing={2}>
+                <Typography {...{px:1, color:'primary', level:'title-md'}}>3. Enter URL</Typography>
+                <ValidationField sx={{width: .8}} fieldKey='txURL' />
+            </Stack>
+        </Sheet>
     );
 }
 
@@ -465,9 +504,17 @@ function mainReducer(inFields, action) {
 }
 
 function onSearchSubmit({request, gridSupport, plotId, plotGroupId, viewerId, renderTreeId}) {
+    const commonTargetSelectReq = request?.[FG_KEYS.targetSelect];
+    if (commonTargetSelectReq) {
+        // copy common target selection request data to each individual request if image source is archive
+        [FG_KEYS.single, FG_KEYS.red, FG_KEYS.green, FG_KEYS.blue, FG_KEYS.hips].forEach((k) => {
+            if (request?.[k]?.imageSource === 'archive') request[k] = {...request[k], ...commonTargetSelectReq};
+        });
+    }
+
     const validInfo= validateInput(request);
     if (!validInfo.valid)  {
-        showInfoPopup(validInfo.message);
+        showInfoPopup(validInfo.message, 'Error');
         return false;
     }
     return doImageSearch({imageMasterData, request, gridSupport, plotId, plotGroupId, viewerId, renderTreeId});
@@ -597,7 +644,7 @@ function doImageSearch({ imageMasterData, request, plotId, plotGroupId, viewerId
     // hips
     if (isImageType()?.isHipsImgType) {
         if (!plotId) {
-            plotId = genHiPSPlotId.next().value;
+            plotId = getNextHiPSPlotId();
         }
         const wpRequest = makeHiPSWebPlotRequest(get(request, FG_KEYS.hips), plotId, plotGroupId);
         if (wpRequest) {
@@ -718,8 +765,8 @@ function resolveHRefValWithParams(wp,radius, maxRangeDeg, href='') {
     const rNum= Number(radius);
     const sizeArcMin= rNum ? radius*60 : '';
     const sizeArcSec= rNum ? radius*3600 : '';
-    const j2Wp= VisUtil.convert(wp, CoordinateSys.EQ_J2000);
-    const galWp= VisUtil.convert(wp, CoordinateSys.GALACTIC);
+    const j2Wp= convertCelestial(wp, CoordinateSys.EQ_J2000);
+    const galWp= convertCelestial(wp, CoordinateSys.GALACTIC);
 
     return resolveHRefVal(
         {
@@ -776,7 +823,7 @@ function makeTableRequest(wp, radius, data) {
         });
 }
 
-function addStdParams(wpreq, plotId = nextPlotId(), plotGroupId = 'multiImageGroup') {
+function addStdParams(wpreq, plotId = nextPlotId(), plotGroupId = DEFAULT_FITS_VIEWER_ID) {
     wpreq.setPlotId(plotId);
     wpreq.setPlotGroupId(plotGroupId);
     wpreq.setGroupLocked(true);

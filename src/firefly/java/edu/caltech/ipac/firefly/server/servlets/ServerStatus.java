@@ -3,18 +3,19 @@
  */
 package edu.caltech.ipac.firefly.server.servlets;
 
+import edu.caltech.ipac.firefly.core.background.JobManager;
 import edu.caltech.ipac.firefly.messaging.Messenger;
 import edu.caltech.ipac.firefly.server.Counters;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.cache.EhcacheProvider;
 import edu.caltech.ipac.firefly.server.db.DbAdapter;
+import edu.caltech.ipac.firefly.server.db.DbMonitor;
+import edu.caltech.ipac.firefly.server.db.DuckDbAdapter;
+import edu.caltech.ipac.firefly.server.db.HsqlDbAdapter;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
-import edu.caltech.ipac.firefly.server.packagedata.PackagingController;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.StringUtils;
-import edu.caltech.ipac.util.cache.Cache;
 import edu.caltech.ipac.util.cache.CachePeerProviderFactory;
-import edu.caltech.ipac.util.cache.StringKey;
 import net.sf.ehcache.CacheManager;
 import net.sf.ehcache.Ehcache;
 import net.sf.ehcache.distribution.CacheManagerPeerProvider;
@@ -25,7 +26,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.PrintWriter;
-import java.net.InetAddress;
 import java.rmi.RemoteException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -56,17 +56,30 @@ public class ServerStatus extends BaseHttpServlet {
     protected void processRequest(HttpServletRequest req, HttpServletResponse res) throws Exception {
 
         boolean showHeaders = Boolean.parseBoolean(req.getParameter("headers"));
+        boolean execGC = Boolean.parseBoolean(req.getParameter("execGC"));
+        boolean showJobDetails = Boolean.parseBoolean(req.getParameter("job.details"));
 
-        res.addHeader("content-type", "text/plain");
+        if (execGC)     System.gc();            // force garbage collection.
+
+        ServerContext.Info sInfo = ServerContext.getSeverInfo();
+        res.addHeader("content-type", "text/html");
         PrintWriter writer = res.getWriter();
+        writer.println("<pre style='font-size: -1'>");
         try {
+
+            // show optional parameters
+            writer.println("Available Actions");
+            writer.println("--------------------");
+            writer.println("<li><a href=./status>Default View</a>:   Default set of information");
+            writer.println("<li><a href=./status?headers=true>Full Headers</a>:   Display all request's headers");
+            writer.println("<li><a href=./status?job.details=true>Job Details</a>:    View detailed Async Job Information");
+            writer.println("<li><a href=./status?execGC=true>Trigger GC</a>:     Invoke JVM garbage collection");
+            skip(writer);
+
             showCountStatus(writer);
             skip(writer);
 
-            showWorkAreaStatus(writer);
-            skip(writer);
-
-            showPackagingStatus(writer);
+            showPackagingStatus(writer, showJobDetails);
             skip(writer);
 
             showMessagingStatus(writer);
@@ -75,23 +88,23 @@ public class ServerStatus extends BaseHttpServlet {
             showEventsStatus(writer);
             skip(writer);
 
-            EhcacheProvider prov = (EhcacheProvider) edu.caltech.ipac.util.cache.CacheManager.getCacheProvider();
-
-            displayCacheInfo(writer, prov.getEhcacheManager());
-            displayCacheInfo(writer, prov.getSharedManager());
+            showDatabaseStatus(writer);
             skip(writer);
 
-            showDatabaseStatus(writer);
+            showWorkAreaStatus(writer);
+            skip(writer);
+
+            EhcacheProvider prov = (EhcacheProvider) edu.caltech.ipac.util.cache.CacheManager.getCacheProvider();
+
+            displayCacheInfo(writer, prov.getEhcacheManager(), sInfo);
+            displayCacheInfo(writer, prov.getSharedManager(), sInfo);
 
             if (showHeaders) {
                 skip(writer);
                 showHeaders(writer, req);
             }
 
-            // show optional parameters
-            writer.println("\n\nAvailable Parameters");
-            writer.println(    "--------------------");
-            writer.println("headers=[true|false]        Display all request's headers");
+            writer.println("</pre>");
 
         } finally {
             writer.flush();
@@ -100,18 +113,13 @@ public class ServerStatus extends BaseHttpServlet {
 
     }
 
-    private static void displayCacheInfo(PrintWriter writer, CacheManager cm) {
+    private static void displayCacheInfo(PrintWriter writer, CacheManager cm, ServerContext.Info sInfo) {
         writer.println(cm.getName() + " EHCACHE INFORMATION:");
         writer.println("-------------------:");
         writer.println("Manager Status: " + cm.getStatus());
         writer.println("DiskStore Path: " + cm.getConfiguration().getDiskStoreConfiguration().getPath());
         writer.println();
-
-        try {
-            writer.println("Host IP Address: " + InetAddress.getLocalHost().getHostAddress());
-        } catch (Exception e) {
-            writer.println("Host IP Address: n/a" );
-        }
+        writer.println("Host IP Address: " + sInfo.ip());
 
         writer.println("Caches: ");
         Map<String, CacheManagerPeerProvider> peerProvs = cm.getCacheManagerPeerProviders();
@@ -128,44 +136,83 @@ public class ServerStatus extends BaseHttpServlet {
             writer.println("\tMax Heap       : " + c.getCacheConfiguration().getMaxBytesLocalHeap()/(1024 * 1024) + "MB");
             writer.println("\tMax Entries    : " + c.getCacheConfiguration().getMaxEntriesLocalHeap());
             writer.println("\tStatistics     : " + getStats(c));
-            for (CacheManagerPeerProvider peerProv : peerProvs.values()) {
-                List peers = peerProv.listRemoteCachePeers(c);
-                for(Object o : peers) {
-                    CachePeer cp = (CachePeer) o;
-                    try {
-                        writer.println("\tReplicating with: " + cp.getUrl());
-                    } catch (RemoteException e) {
-                        writer.println("\tFail to connect: " + cp.toString());
+            if (peerProvs.size()>0) {
+                for (CacheManagerPeerProvider peerProv : peerProvs.values()) {
+                    List<?> peers = peerProv.listRemoteCachePeers(c);
+                    for(Object o : peers) {
+                        CachePeer cp = (CachePeer) o;
+                        try {
+                            writer.println("\tReplicating with: " + cp.getUrl());
+                        } catch (RemoteException e) {
+                            writer.println("\tFail to connect: " + cp);
+                        }
                     }
                 }
+            }
+            else {
+                writer.println("\tNot replicating");
             }
             writer.println();
         }
     }
 
     private static void showDatabaseStatus(PrintWriter writer) {
+        DbAdapter.EmbeddedDbStats stats = DbMonitor.getRuntimeStats(true);
+        String driver;
+        if (DbAdapter.DEF_DB_TYPE.equals(DuckDbAdapter.NAME)) {
+            duckDbConfig(writer);
+            driver = DuckDbAdapter.DRIVER;
+        } else {
+            hsqldbConfig(writer, stats);
+            driver = HsqlDbAdapter.DRIVER;
+        }
 
-        DbAdapter.EmbeddedDbStats stats = DbAdapter.getAdapter().getRuntimeStats();
+        writer.printf(""" 
+            <div style="font-size:small">
+            To browse the data in these databases, follow these steps:            
+            1. Open the <a href=%sadmin/db/ target='_blank'>Database Console</a>.
+            2. Enter the Driver Class: %s
+            3. Enter the JDBC URL: Copy and paste a JDBC URL from the options below that you wish to browse.
+            4. Click "Connect"
+            </div>
+            """, ServerContext.getRequestOwner().getBaseUrl(), driver);
+        writer.println("Idled   Age     Rows        Columns  Tables  Total Rows       Memory  JDBC URL     (elapsed time are in min:sec; memory is in MB)");
+        writer.println("------  ------  ----------  -------  ------  ----------       ------  ---------");
+        DbMonitor.getDbInstances().values().stream()
+            .sorted((db1, db2) -> Long.compare(db2.getLastAccessed(), db1.getLastAccessed()))
+            .forEach((db) -> writer.printf("%7$tM:%7$tS   %8$tM:%8$tS   %,10d  %7d  %6d  %,10d  %11.1f  %s\n",
+                db.getDbStats().rowCnt(),
+                db.getDbStats().colCnt(),
+                db.getDbStats().tblCnt(),
+                db.getDbStats().totalRows(),
+                db.getDbStats().memory()/1024/1024.0,
+                db.getDbUrl(),
+                System.currentTimeMillis() - db.getLastAccessed(),
+                System.currentTimeMillis() - db.getCreated()
+        ));
+    }
+
+    private static void hsqldbConfig(PrintWriter writer, DbAdapter.EmbeddedDbStats stats) {
         writer.println("DATABASE INFORMATION");
         writer.println("--------------------");
-        writer.printf("CHECK_INTVL(secs): %,10d  MAX_IDLE(min):       %,10d\n", DbAdapter.CLEANUP_INTVL/1000, DbAdapter.MAX_IDLE_TIME/1000/60);
+        writer.printf("MAX_IDLE(min):     %,10d  MAX_IDLE_RSC(min):   %,10d\n", DbMonitor.MAX_IDLE_TIME/1000/60, DbMonitor.MAX_IDLE_TIME_RSC/1000/60);
+        writer.printf("MAX_MEM_ROWS(m):   %,10d  COMPACT_FACTOR:      %10.2f\n", stats.maxMemRows/1_000_000, stats.compactFactor);
         writer.printf("DB In Memory:      %,10d  Total DB count:      %,10d\n", stats.memDbs, stats.totalDbs);
-        writer.printf("MAX_MEM_ROWS:      %,10d  PEAK_MAX_MEM_ROWS:   %,10d\n", stats.maxMemRows, stats.peakMaxMemRows);
         writer.printf("Rows In Memory:    %,10d  Peak Rows In Memory: %,10d\n", stats.memRows, stats.peakMemRows);
-        writer.println(              "Cleanup Last Ran:  " + new SimpleDateFormat("HH:mm:ss").format(stats.lastCleanup));
-        writer.println("");
-        writer.println("Idled   Age     Tables  Rows        Columns  File Path         (elapsed time are in min:sec)");
-        writer.println("------  ------  ------  ----------  -------  ---------");
-        Collections.unmodifiableCollection(DbAdapter.getAdapter().getDbInstances().values()).stream()
-                    .sorted((db1, db2) -> Long.compare(db2.getLastAccessed(), db1.getLastAccessed()))
-                    .forEach((db) -> writer.printf("%5$tM:%5$tS   %6$tM:%6$tS   %6d  %,10d  %,7d  %s\n",
-                                                        db.getTblCount(),
-                                                        db.getRowCount(),
-                                                        db.getColCount(),
-                                                        db.getDbFile().getPath(),
-                                                        System.currentTimeMillis() - db.getLastAccessed(),
-                                                        System.currentTimeMillis() - db.getCreated()
-                    ));
+        writer.println("Cleanup Last Ran:  " + new SimpleDateFormat("HH:mm:ss").format(stats.lastCleanup));
+    }
+
+    private static void duckDbConfig(PrintWriter w) {
+        w.println("DUCKDB CONFIGURATION");
+        w.println("-".repeat(136));
+        w.printf("| %20s | %20s | %60s | %10s | %10s |\n".formatted("name", "value", "description", "input_type", "scope" ));
+        w.println("-".repeat(136));
+        var dg = DuckDbAdapter.getDuckDbSettings();
+        if (dg != null) {
+            dg.forEach(r -> {
+                w.printf("| %20s | %20s | %60s | %10s | %10s |\n".formatted(r.getData()));
+            });
+        }
     }
 
     private static String getStats(Ehcache c) {
@@ -235,16 +282,29 @@ public class ServerStatus extends BaseHttpServlet {
         w.println("Server Events Information");
         w.println("  - Total events fired:" + ServerEventManager.getTotalEventCnt());
         w.println("  - Total events delivered:" + ServerEventManager.getDeliveredEventCnt());
-        w.println("  - Total active queues:" + ServerEventManager.getActiveQueueCnt());
+        int qCnt= ServerEventManager.getActiveQueueCnt();
+        w.println("  - Total active queues:" + qCnt);
+        if(qCnt>0) {
+            w.println("  - "+ (qCnt>10? "10 Most recently used channels:" :  "Channel list, ordered by last use:"));
+            w.println(makeQueueList());
+        }
+    }
+
+    private static String makeQueueList() {
+        return ServerEventManager.getQueueDescriptionList(10).stream()
+                .map( d -> String.format("     - %s, %s\n",d.channel(), new Date(d.lastPutTime())))
+                .reduce("", (all, entry) -> all+entry);
     }
 
     private static void showMessagingStatus(PrintWriter w) {
+        w.println("Messenger: Redis host: " + Messenger.getRedisHostPortDesc());
         w.println("Messaging Pool: " + Messenger.getStats());
     }
 
-    private static void showPackagingStatus(PrintWriter w) {
-        w.println("Packaging Controller Information");
-        w.println(StringUtils.toString(PackagingController.getInstance().getStatus(), "\n"));
+    private static void showPackagingStatus(PrintWriter w, boolean details) {
+        w.println("Async Job Information");
+        w.println();
+        w.println(JobManager.getStatistics(details));
     }
 
     private static void showHeaders(PrintWriter w, HttpServletRequest req) {

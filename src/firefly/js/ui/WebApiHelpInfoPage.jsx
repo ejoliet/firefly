@@ -1,12 +1,9 @@
 
 
+import {Box, Link, Sheet, Stack, Typography} from '@mui/joy';
 import React, {Fragment} from 'react';
 import {isEmpty,isObject,isArray} from 'lodash';
 import {getReservedParamKeyDesc, makeExample, ReservedParams, WebApiHelpType} from '../api/WebApi';
-
-import './WebApiHelpInfoPage.css';
-
-
 
 
 export function WebApiHelpInfoPage({helpType,contextMessage='',cmd,params,webApiCommands, badParams, missingParams}) {
@@ -39,23 +36,23 @@ export function WebApiHelpInfoPage({helpType,contextMessage='',cmd,params,webApi
     const overviewUrl= makeExample('').url;
 
     return (
-        <div style={{padding: '20px 0 20px 20px', backgroundColor: 'white'}}>
-            <div style={{fontSize:'18pt', textAlign:'center'}}>{msg}</div>
-            {!showAllHelp && <div>To See Overview Help: <a href={overviewUrl}> {overviewUrl}</a> </div>}
+        <Sheet sx={{py:3, pr:3}}>
+            <Typography level='h2' style={{textAlign:'center'}}>{msg}</Typography>
+            {!showAllHelp && <Typography component='div' sx={{ml:1}}>Overview Help: <Link href={overviewUrl}> {overviewUrl}</Link> </Typography>}
             {!isEmpty(params) && <ParameterList params={{cmd, ...params}} url={window.location.href}
                                                 badParams={badParams} missingParams={missingParams}/>}
-            <div>{showContextMsg && contextMessage}</div>
+            <Typography sx={{ml:1}}>{showContextMsg && contextMessage}</Typography>
             {showAllHelp && webApiCommands.map( (c) => <CommandOverview webApiCommand={c} key={c.cmd}/>)}
             {cmdEntry && <CommandOverview webApiCommand={cmdEntry} key={cmdEntry.cmd}/>}
-        </div>
+        </Sheet>
     );
 }
 
 const pEntryLine= (k,v,key) => (
     <Fragment key={key}>
-        <div className='webApiParamName'>{k||''}</div>
-        <div className='webApiDash'>{k?'-':''}</div>
-        <div className='webApiDesc'>{v}</div>
+        <Typography level='body-xs' sx={{justifySelf: 'end', fontFamily: 'monospace'}}>{k||''}</Typography>
+        <Typography level='body-xs' >{k?'-':''}</Typography>
+        <Typography level='body-xs'>{v}</Typography>
     </Fragment>
 );
 
@@ -82,26 +79,34 @@ function OverViewEntries({parameters}) {
 }
 
 
+const webApiParamsGridSx = {
+    display: 'grid',
+    columnGap: '3px',
+    gridTemplateColumns: '12em 10px 65em',
+    gridTemplateRows: 'auto',
+    rowGap: '1px',
+};
+
 function CommandOverview({webApiCommand}) {
     const {overview, parameters, examples}= webApiCommand;
 
     return (
-        <div style={{marginTop: 20}}>
-            <div >
-                <span style={{fontSize:'14pt'}}>Command:</span>
-                <span style={{fontFamily:'monospace', fontWeight:'bold', paddingLeft:10}}>{webApiCommand.cmd}</span>
-                </div>
-            <div style={{margin: '10px 0 0 20px'}}>
-                {overview.map( (s) => <div key={s}>{s}</div>)}
-            </div>
+        <Stack sx={{mt: 2, ml:1}}>
+            <Stack direction='row' spacing={1/2} alignItems='center'>
+                <Typography level='h3'>Command:</Typography>
+                <Typography level='body-lg' color='warning' style={{fontFamily:'monospace', pl:1}}>{webApiCommand.cmd}</Typography>
+            </Stack>
+            <Stack sx={{ml: 3, mt:1}}>
+                {overview.map( (s) => <Typography key={s}>{s}</Typography>)}
+            </Stack>
             {examples && <ShowExamples examples={examples}/> }
-            <div style={{margin: '10px 0 0 20px'}}>
-                <div>Parameters:</div>
-                <div className='webApiParamsGrid'>
+            <Stack sx={{mt:1, ml:2}}>
+                <Typography level='h4'>Parameters</Typography>
+                <Box sx={{ml:7, ...webApiParamsGridSx}}>
                     <OverViewEntries parameters={parameters} />
-                </div>
-            </div>
-        </div>
+                </Box>
+            </Stack>
+        </Stack>
 
     );
 }
@@ -111,79 +116,86 @@ function CommandOverview({webApiCommand}) {
 function ShowExamples({examples}) {
     if (examples[0].sectionDesc) {
         return (
-            <div style={{margin: '10px 0 5px 20px'}}>Examples:
-                <div>
+            <Stack sx={{mt:1, mb:1/2, ml:3}}>
+                <Typography level='h4'>Examples</Typography>
                     {examples.map( ({sectionDesc,examples:examplesGroup}) => {
                         return (
-                            <div style={{margin: '10px 0 5px 10px'}} key={sectionDesc}>{sectionDesc}
+                            <Stack sx={{mt: 1, mb:1/2, ml:1}} key={sectionDesc}>
+                                <Typography>{sectionDesc}</Typography>
                                 <ShowExampleGroup examples={examplesGroup} />
-                            </div>
+                            </Stack>
                         );
                     })}
-                </div>
-            </div>
+            </Stack>
             );
 
     }
     else {
         return (
-            <div style={{margin: '10px 0 5px 20px'}}>Examples:
+            <Stack sx={{mt:1, mb:1/2, ml:3}}>Examples:
                 <ShowExampleGroup examples={examples}/>
-            </div>
+            </Stack>
         );
     }
 }
 
 function ShowExampleGroup({examples}) {
     return (
-        <div style={{margin: '10px 0 5px 20px'}}>
-            <div className='webApiExamplesGrid'>
-                {examples.map( (e) => {
-                    return (
-                        <Fragment key={e.url}>
-                            <div className='webApiExName'>{e.desc}</div>
-                            <div  className='webApiDash' >   </div>
-                            <a href={e.url} > {e.url}</a>
-                        </Fragment>
-
-                    );}
-                ) }
-            </div>
-        </div>
+        <Box sx={{
+            mt:1, mb:.5, ml: 1,
+            display: 'grid',
+            columnGap: '3px',
+            gridTemplateColumns: '10em 10px 80em',
+            gridTemplateRows: 'auto',
+            rowGap: '10px',
+        }}>
+            {examples.map( (e) => {
+                return (
+                    <Fragment key={e.url}>
+                        <Typography level='body-sm'
+                                    sx={{
+                                        justifySelf: 'start',
+                                        display: 'list-item',
+                                        listStyleType: 'circle',
+                                        marginLeft: '1em'}}>
+                            {e.desc}
+                        </Typography>
+                        <div/>
+                        <Link level='body-sm' href={e.url}> {e.url} </Link>
+                    </Fragment>
+                );}
+            ) }
+        </Box>
     );
 }
 
 
 const ParameterList = ({params, url, badParams=[], missingParams=[]})  => (
-        <div style={{marginTop: 10}}>
-            <span style={{fontStyle: 'italic', paddingRight: 10}}>URL:</span><span>{url}</span>
-            <div className='webApiParamsGrid'>
+        <Sheet color='danger' variant='soft' sx={{mt: 1, ml:1}}>
+            <Stack direction='row' spacing={1}>
+                <Typography style={{fontStyle: 'italic', paddingRight: 10}}>URL:</Typography>
+                <Typography>{url}</Typography>
+            </Stack>
+            <Box sx={webApiParamsGridSx}>
                 {Object.entries(params).map( ([k,v]) => {
                     const isBad= badParams.includes(k);
-                    const cName= isBad ? 'webApiParamName webApiBadParam' :'webApiParamName';
                     return (
                         v &&
                         <Fragment key={k}>
-                            <div className={cName}>{k}</div>
+                            <Typography color={isBad?'danger':'neutral'} sx={{justifySelf: 'end'}}  >{k}</Typography>
                             <div className='webApiDash'> = </div>
-                            <div className='webApiDesc'>{v.toString()}</div>
+                            <Typography className='webApiDesc' sx={{alignSelf:'center'}}>{v.toString()}</Typography>
                         </Fragment>
                     );
                 })
                 }
-            </div>
+            </Box>
             {!isEmpty(missingParams) &&
-                <div>
-                    <div style={{marginLeft: 20, fontSize: 'smaller'}}>Missing required parameters:</div>
-                        {missingParams.map( (p) => {
-                            const cName= 'webApiParamName webApiBadParam';
-                            return (
-                                <div style={{marginLeft:145}} className={cName}>{p}</div>
-                            );
-                        })
-                        }
-                </div>
+                <Box>
+                    <Typography >Missing or bad parameters</Typography>
+                        {missingParams.map( (p) => ( <Typography color='danger' sx={{ml:18}}>{p}</Typography> )) }
+                </Box>
             }
-        </div>
+        </Sheet>
     );
 

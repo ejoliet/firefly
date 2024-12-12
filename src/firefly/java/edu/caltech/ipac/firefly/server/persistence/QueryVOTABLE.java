@@ -6,9 +6,8 @@ package edu.caltech.ipac.firefly.server.persistence;
 import edu.caltech.ipac.firefly.core.EndUserException;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.data.table.MetaConst;
-import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
-import edu.caltech.ipac.firefly.server.query.IpacTablePartProcessor;
+import edu.caltech.ipac.firefly.server.query.EmbeddedDbProcessor;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.table.DataGroup;
 import edu.caltech.ipac.table.DataType;
@@ -32,7 +31,7 @@ import static edu.caltech.ipac.table.TableMeta.makeAttribKey;
  * @author tatianag
  *         $Id: $
  */
-public abstract class QueryVOTABLE extends IpacTablePartProcessor {
+public abstract class QueryVOTABLE extends EmbeddedDbProcessor {
 
     public static final String TITLE_KEY = "title";
     public static final String USE_KEY = "use";
@@ -42,7 +41,7 @@ public abstract class QueryVOTABLE extends IpacTablePartProcessor {
     @Override
     public DataGroup fetchDataGroup(TableServerRequest req) throws DataAccessException {
         try {
-            File votable = getSearchResult(getQueryString(req), getFilePrefix(req));
+            File votable = getSearchResult(req);
             DataGroup[] groups = VoTableReader.voToDataGroups(votable.getAbsolutePath());
             DataGroup dg;
             int tblIdx = req.getIntParam(TBL_INDEX, 0);
@@ -78,24 +77,18 @@ public abstract class QueryVOTABLE extends IpacTablePartProcessor {
             }
             return dg;
         } catch (IOException | EndUserException e) {
-            DataAccessException eio = new DataAccessException("query failed - network Error");
-            eio.initCause(e);
-            throw eio;
+            throw new DataAccessException("query failed - network Error", e);
         } catch (Exception e) {
-            DataAccessException eio = new DataAccessException("query failed - " + e.toString());
-            eio.initCause(e);
-            throw eio;
+            throw new DataAccessException("query failed", e);
         }
-    }
-
-    @Override
-    protected File loadDataFile(TableServerRequest request) throws IOException, DataAccessException {
-        return loadDataFileImpl(request);
     }
 
     protected abstract String getQueryString(TableServerRequest req) throws DataAccessException;
 
-    private File getSearchResult(String urlQuery, String filePrefix) throws IOException, DataAccessException, EndUserException {
+    private File getSearchResult(TableServerRequest req) throws IOException, DataAccessException, EndUserException {
+        String urlQuery = getQueryString(req);
+
+        jobExecIf(v -> v.getJobInfo().setDataOrigin(urlQuery));
 
         URL url;
         try {
@@ -106,25 +99,17 @@ public abstract class QueryVOTABLE extends IpacTablePartProcessor {
         }
         URLConnection conn = null;
 
-        //File outFile = createFile(req, ".xml");
-        File outFile = File.createTempFile(filePrefix, ".xml", ServerContext.getPermWorkDir());
+        File outFile = createTempFile(req, ".xml");
         try {
             URLDownload.getDataToFile(url, outFile);
 
         } catch (FailedRequestException e) {
             _log.error(e, e.toString());
-            throw makeException(e, "query failed - network error.");
+            throw new DataAccessException("query failed - network error", e);
 
         } catch (Exception e) {
-            throw makeException(e, "query failed");
+            throw new DataAccessException("query failed", e);
         }
         return outFile;
     }
-
-
-    private String parseMessageFromServer(String response) {
-        // no html, so just return
-        return response.replaceAll("<br ?/?>", "");
-    }
-
 }

@@ -6,7 +6,6 @@ package edu.caltech.ipac.table;
 import edu.caltech.ipac.util.CollectionUtil;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.StringUtils;
-import org.json.simple.JSONArray;
 import org.json.simple.JSONValue;
 
 import java.io.BufferedReader;
@@ -21,10 +20,10 @@ import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static edu.caltech.ipac.table.DataType.*;
 import static edu.caltech.ipac.table.JsonTableUtil.toLinkInfos;
-import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
-import static edu.caltech.ipac.util.StringUtils.isEmpty;
 import static edu.caltech.ipac.table.TableMeta.*;
+import static edu.caltech.ipac.util.StringUtils.*;
 
 /**
  * Date: Jun 25, 2009
@@ -80,7 +79,7 @@ public class IpacTableUtil {
             ensureKey(attribs, col.getKeyName(), col.getArraySize(), ARY_SIZE_TAG);
             ensureKey(attribs, col.getKeyName(), col.getCellRenderer(), CELL_RENDERER);
             if (col instanceof ParamInfo) {
-                ensureKey(attribs, col.getKeyName(), ((ParamInfo)col).getValue(), VALUE_TAG);
+                ensureKey(attribs, col.getKeyName(), ((ParamInfo)col).getStringValue(), VALUE_TAG);
             }
 
             List<LinkInfo> links = col.getLinkInfos();
@@ -92,7 +91,7 @@ public class IpacTableUtil {
         return attribs;
     }
 
-    private static void ensureKey(List<DataGroup.Attribute> attribs, String name, String value, String tag) {
+    public static void ensureKey(List<DataGroup.Attribute> attribs, String name, String value, String tag) {
         if (!isEmpty(value)) {
             String key = TableMeta.makeAttribKey(tag, name);
             attribs.add(new DataGroup.Attribute(key, value));
@@ -178,20 +177,37 @@ public class IpacTableUtil {
         if (attribs == null) return;
         // write attributes first
         for (DataGroup.Attribute kw : attribs) {
-            if (ignoreList == null || !CollectionUtil.exists(ignoreList, kw.getKey())) {
+            if (!CollectionUtil.exists(kw.getKey(), ignoreList)) {
                 if ( !(kw.isComment() || (ignoreSysMeta && isSysMeta(kw.getKey()))) ) {
-                    writer.println(kw.toString());
+                    if (!kw.getKey().equals(DESC) )  writer.println(kw);    // ignore DESC.  we will handle it at the end.
                 }
             }
         }
         // then write comments
         for (DataGroup.Attribute kw : attribs) {
-            if (ignoreList == null || !CollectionUtil.exists(ignoreList, kw.getKey())) {
+            if (!CollectionUtil.exists(kw.getKey(), ignoreList)) {
                 if (kw.isComment()) {
                     writer.println(kw.toString());
                 }
             }
         }
+        // now, write description if exists
+        String desc = attribs.stream()
+                .filter(a -> a.getKey() != null && a.getKey().equals(DESC))
+                .findFirst()
+                .map(a -> a.getValue())
+                .orElse(null);
+
+        if (!isEmpty(desc)) {
+            List<String> descAsList = breakIntoMultipleLines(desc, 80);
+            descAsList.forEach((s) -> writer.println("\\ %s".formatted(s)));
+        }
+    }
+
+    public static void writeDescriptionAsComment(PrintWriter writer, String desc) {
+        if (isEmpty(desc)) return;
+        List<String> descAsList = breakIntoMultipleLines(desc, 80);
+        descAsList.forEach((s) -> writer.println("\\ %s".formatted(s)));
     }
 
     public static boolean isSysMeta(String m) {
@@ -267,13 +283,16 @@ public class IpacTableUtil {
         if (line != null && line.startsWith("|")) {
             String[] names = parseHeadings(line.trim());
             int cursor = 1;
-            String cname;
+            String cname; String cval;
             for (int idx = 0; idx < names.length; idx++) {
-                cname = names[idx];
-                DataType dt = new DataType(cname.trim(), null);
+                cval = names[idx];
+                cname = cval.trim();
+                DataType dt = new DataType(cname, null);
                 cols.add(dt);
-                tableDef.setColOffsets(idx, cursor);
-                cursor += cname.length() + 1;
+                TableUtil.ParsedColInfo pci = tableDef.getParsedInfo(cname);
+                pci.startIdx = cursor;
+                pci.endIdx = cursor + cval.length();
+                cursor = pci.endIdx + 1;
             }
         }
         tableDef.setCols(cols);
@@ -296,11 +315,38 @@ public class IpacTableUtil {
         if (line != null && line.startsWith("|")) {
             String[] types = parseHeadings(line.trim());
             for (int i = 0; i < types.length; i++) {
-                String typeDesc = types[i].trim();
+                String typeDesc = ipacToFireflyType(types[i].trim().toLowerCase());
                 cols.get(i).setTypeDesc(typeDesc);
                 cols.get(i).setDataType(DataType.descToType(typeDesc));
             }
         }
+    }
+
+    /**
+     * Convert IPAC Table specific type string into one Firefly can understand.
+     * @param typeDesc  IPAC Table data type string
+     * @return Firefly data type string representation
+     */
+    private static String ipacToFireflyType(String typeDesc) {
+
+        switch (typeDesc) {
+            case "bool":
+            case "b":
+                return BOOLEAN;
+            case "d":
+            case "r":
+            case "real":
+                return DOUBLE;
+            case "f":
+                return FLOAT;
+            case "i":
+                return INTEGER;
+            case "l":
+                return LONG;
+            case "c":
+                return CHAR;
+        }
+        return typeDesc;
     }
 
     public static  void setDataUnit(List<DataType> cols, String line) {
@@ -322,13 +368,13 @@ public class IpacTableUtil {
         }
     }
 
-    public static void applyGuessLogic(DataType type, String val, TableUtil.CheckInfo chkInfo) {
+    public static void applyGuessLogic(DataType type, String val, TableUtil.ParsedColInfo pci) {
 
-        if (!chkInfo.formatChecked) {
-            chkInfo.formatChecked = guessFormatInfo(type, val);
+        if (!pci.formatChecked && val != null) {
+            pci.formatChecked = guessFormatInfo(type, val);
         }
 
-        if (!chkInfo.htmlChecked) {
+        if (!pci.htmlChecked) {
             // disable sorting if value is HTML, or unit is 'html'
             // this block should only be executed once, when formatInfo is not set.
             if (type.getDataType() == String.class ) {
@@ -338,7 +384,7 @@ public class IpacTableUtil {
                     type.setFilterable(false);
                 }
             }
-            chkInfo.htmlChecked = true;
+            pci.htmlChecked = true;
         }
     }
 
@@ -392,57 +438,67 @@ public class IpacTableUtil {
     }
 
     /**
+     * DataObject and DataGroup member's functions rely heavily on HashMap.  Although HashMap.get is very performant,
+     * but when calling it tens and hundreds of millions times will add up.
+     * This function is used by DataGroupQuery only and will be removed when we remove DataGroupQuery.
      *
      * @param source
      * @param line
+     * @param tableDef
      * @return
      */
     public static DataObject parseRow(DataGroup source, String line, IpacTableDef tableDef) {
+
+        TableUtil.ParsedColInfo[] parsedColInfos = Arrays.stream(source.getDataDefinitions())
+                                                    .map(dt -> tableDef.getParsedInfo(dt.getKeyName()))
+                                                    .toArray(TableUtil.ParsedColInfo[]::new);
+
+        Object[] data = parseRow(line, source.getDataDefinitions(), parsedColInfos);
+        if (data != null) {
+            DataObject row = new DataObject(source);
+            row.setData(data);
+            return row;
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Return the parsed values of the given line for the given columns.
+     * @param line      the line to data to parse.
+     * @param cols      the columns to extract data from.  may be a subset of the total columns in the line.
+     * @param parsedColInfos  the corresponding parsed info of the cols.
+     * @return an array of converted values corresponding to the given cols.
+     */
+    public static Object[] parseRow(String line, DataType[] cols, TableUtil.ParsedColInfo[] parsedColInfos) {
+
         if (line==null) return null;
-        DataType[] headers = source.getDataDefinitions();
-        int offset=0, endOfLine=0, endoffset=0;
+        int endOfLine = line.length();
         try {
             if (line.startsWith(" ") && line.trim().length() > 0) {
-                DataObject row = new DataObject(source);
-                endOfLine = line.length();
 
-                DataType dt;
-                for (int idx = 0; idx < headers.length; idx++) {
-                    dt = headers[idx];
-                    offset = tableDef.getColOffset(idx);
-                    if (offset > endOfLine) {
-                        // it's okay.  we'll take what's given and treat the rest as null.
-                        break;
-                    }
-                    endoffset = idx < headers.length-1 ? tableDef.getColOffset(idx+1) : endOfLine;
+                Object[] arow = new Object[cols.length];
+                for (int i =0; i <cols.length; i++) {
+                    TableUtil.ParsedColInfo pci = parsedColInfos[i];
+                    DataType dt = cols[i];
+                    if (pci.startIdx > endOfLine) return null; // it's okay.  we'll take what's given and treat the rest as null.
 
                     // if ending spaces are missing... just ignore it.
-                    if (endoffset > endOfLine) {
-                        endoffset = endOfLine;
-                    }
+                    int endoffset = Math.min(pci.endIdx, endOfLine);
+                    String val = line.substring(pci.startIdx, endoffset).trim();
 
-                    String val = line.substring(offset, endoffset).trim();
-                    if (!dt.isKnownType()) {
+                    if (dt.getDataType() == null) {
                         IpacTableUtil.guessDataType(dt, val);
                     }
-
-                    TableUtil.CheckInfo checkInfo = tableDef.getColCheckInfos().getCheckInfo(dt.getKeyName());
-                    if (!String.valueOf(tableDef.getAttribute("fixlen")).trim().equals("T")) {
-                        checkInfo.formatChecked = true;     // if fixlen != T, don't guess format
-                    }
-                    applyGuessLogic(dt, val, checkInfo);
-
-                    row.setDataElement(dt, dt.convertStringToData(val));
-
-                    offset = endoffset;
+                    applyGuessLogic(dt, val, pci);
+                    arow[i] = dt.convertStringToData(val);
                 }
-                return row;
+                return arow;
             } else if (line.trim().length() > 0 && !line.startsWith("\\") && !line.startsWith("|")) {
                 throw new RuntimeException("Data row must start with a space.");
             }
         } catch (StringIndexOutOfBoundsException e) {
-            throw new StringIndexOutOfBoundsException("offset="+offset+",endoffset="+endoffset+
-                    ",line.length()="+line.length()+",line="+line);
+            throw new StringIndexOutOfBoundsException("line.length()="+line.length()+",line="+line);
         }
         return null;
     }
@@ -469,9 +525,33 @@ public class IpacTableUtil {
             FileUtil.silentClose(reader);
         }
     }
+    public static IpacTableDef getMetaInfo(File inf, Map<String, String> metaInfo) throws IOException {
+        IpacTableDef tableDef = getMetaInfo(inf);
+        if (metaInfo != null) {
+            metaInfo.entrySet().forEach((e -> tableDef.setAttribute(e.getKey(), e.getValue())));
+        }
+        return tableDef;
+    }
 
     public static IpacTableDef getMetaInfo(BufferedReader reader) throws IOException {
         return doGetMetaInfo(reader, null);
+    }
+
+    public static boolean isKnownType(Class type) {
+        return (type == String.class  ||
+                type == Double.class  ||
+                type == Float.class   ||
+                type == Integer.class ||
+                type == Long.class
+        );
+    }
+
+    public static Class mapToIpac(Class type) {
+        if (type == Short.class)    return Integer.class;
+        if (type == Boolean.class)  return String.class;
+        if (type == Byte.class)     return Integer.class;
+
+        return type;
     }
 
     private static IpacTableDef doGetMetaInfo(BufferedReader reader, File src) throws IOException {
@@ -547,7 +627,6 @@ public class IpacTableUtil {
         if (src != null) {
             tableDef.setSource(src.getAbsolutePath());
         }
-
         return tableDef;
     }
 

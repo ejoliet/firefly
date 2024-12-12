@@ -3,12 +3,18 @@
  */
 package edu.caltech.ipac.astro.ibe;
 
+import edu.caltech.ipac.firefly.visualize.VisUtil;
 import edu.caltech.ipac.util.StringUtils;
+import edu.caltech.ipac.visualize.plot.CoordinateSys;
+import edu.caltech.ipac.visualize.plot.WorldPt;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.Map;
+
+import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
+import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
  * Date: 4/18/14
@@ -46,7 +52,36 @@ public class BaseIbeDataSource implements IbeDataSource {
     }
 
     public IbeQueryParam makeQueryParam(Map<String, String> queryInfo) {
-        return null;
+
+        // handles only the common position search params
+        IbeQueryParam queryParam = new IbeQueryParam();
+
+        String userTargetWorldPt = queryInfo.get("UserTargetWorldPt");
+        String upload = queryInfo.get("filename");
+        if (userTargetWorldPt != null || !isEmpty(upload) ) {
+            // search by position
+            if (userTargetWorldPt != null) {
+                WorldPt pt = WorldPt.parse(userTargetWorldPt);
+                if (pt != null) {
+                    pt = VisUtil.convert(pt, CoordinateSys.EQ_J2000);
+                    queryParam.setPos(pt.getLon() + "," + pt.getLat());
+                }
+            } else {
+                queryParam.setPos(queryInfo.get("filename"));
+            }
+        }
+        
+        if (!StringUtils.isEmpty(queryInfo.get("intersect"))) {
+            queryParam.setIntersect(IbeQueryParam.Intersect.valueOf(queryInfo.get("intersect")));
+        }
+        String mcen = queryInfo.get("mcenter");
+        if (mcen != null && (mcen.equalsIgnoreCase(MCEN) || Boolean.parseBoolean(mcen))) {
+            queryParam.setMcen(true);
+        } else {
+            queryParam.setSize(queryInfo.get("size"));
+        }
+
+        return queryParam;
     }
 
     public void setIbeHost(String ibeHost) {
@@ -112,7 +147,10 @@ public class BaseIbeDataSource implements IbeDataSource {
 
     @Override
     public String getQueryUrl(IbeQueryParam param) {
-        return getSearchUrl() + "?" + convertToUrl(param);
+        String url = getSearchUrl();
+        String qStr = convertToUrl(param);
+        qStr = isEmpty(qStr) ? "" : (url.contains("?") ? "&" : "?") + convertToUrl(param);
+        return url + qStr;
     }
 
     @Override
@@ -151,41 +189,34 @@ public class BaseIbeDataSource implements IbeDataSource {
     }
 
     private Map<String, String> asMap(IbeQueryParam param) {
+
         HashMap<String, String> params = new HashMap<>();
-        String s = convertToUrl(param);
-        String[] pp = s.split("&");
-        for (String keyval : pp) {
-            if (!StringUtils.isEmpty(keyval)) {
-                String[] parts = keyval.split("=", 2);
-                if (!StringUtils.isEmpty(parts[0])) {
-                    String v = parts.length > 1 && !StringUtils.isEmpty(parts[1]) ? parts[1].trim() : "";
-                    params.put(parts[0], v);
-                }
+
+        if (param == null) return params;
+
+        if (!StringUtils.isEmpty(param.getRefBy())) {
+            params.put(REF_BY, param.getRefBy());
+        } else if (!StringUtils.isEmpty(param.getPos())) {
+            params.put(POS, param.getPos());
+            applyIfNotEmpty(param.getIntersect(), (v) -> params.put(INTERSECT, v.toString()));
+            if (param.isMcen()) {
+                params.put(MCEN, null);
+            } else {
+                applyIfNotEmpty(param.getSize(), (v) -> params.put(SIZE, v));
             }
         }
+
+        applyIfNotEmpty(param.getColumns(), (v) -> params.put(COLUMNS, v));
+        applyIfNotEmpty(param.getWhere(), (v) -> params.put(WHERE, v));
+
         return params;
     }
 
-
     private String convertToUrl(IbeQueryParam param) {
-        String s = "";
-        if (param == null) return "";
-
-        if (!StringUtils.isEmpty(param.getRefBy())) {
-            s =addUrlParam(s, REF_BY, param.getRefBy());
-        } else if (!StringUtils.isEmpty(param.getPos())) {
-            s = addUrlParam(s, POS, param.getPos());
-            s = addUrlParam(s, INTERSECT, param.getIntersect());
-            if (param.isMcen()) {
-                s = addUrlParam(s, null, MCEN);
-            } else {
-                s = addUrlParam(s, SIZE, param.getSize());
-            }
-        }
-
-        s = addUrlParam(s, COLUMNS, param.getColumns());
-        s = addUrlParam(s, WHERE, param.getWhere(), true);
-        return s;
+        Map<String, String> params = asMap(param);
+        if (params.size() == 0) return "";
+        return params.keySet().stream().reduce("",
+                (ac, e) -> addUrlParam(ac, e, params.get(e), true));
     }
 
     public static String addUrlParam(String url, String key, Object value) {
@@ -194,16 +225,15 @@ public class BaseIbeDataSource implements IbeDataSource {
 
     public static String addUrlParam(String url, String key, Object value, boolean doEncode) {
         try {
-            if (!StringUtils.isEmpty(value)) {
-                if (!StringUtils.isEmpty(url)) {
-                    url = url + "&";
-                }
-                value = doEncode ? URLEncoder.encode(value.toString(), "UTF-8") : value;
-                key = StringUtils.isEmpty(key) ? "" : key + "=";
-                url = url + key + value;
+            if (!StringUtils.isEmpty(url)) {
+                url = url + "&";
             }
-        } catch (UnsupportedEncodingException e) {
-        }
+            if (!StringUtils.isEmpty(value)) {
+                value = doEncode ? URLEncoder.encode(value.toString(), "UTF-8") : value;
+            }
+            value = StringUtils.isEmpty(value) ? "" : "=" + value;
+            url = url + key + value;
+        } catch (UnsupportedEncodingException ignored) {}
         return url;
     }
 

@@ -24,7 +24,7 @@ import {convertAngle} from '../../../visualize/VisUtil.js';
 export function makeWebPlotRequestViaZtfIbe(tableModel, hlrow, size, cutoutSize, params = {
     dataSource: 'field'
 }) {
-    const ra = Number(getCellValue(tableModel, hlrow, 'in_rara'));
+    const ra = Number(getCellValue(tableModel, hlrow, 'in_ra'));
     const dec = Number(getCellValue(tableModel, hlrow, 'in_dec'));
     const ra_obj = Number(getCellValue(tableModel, hlrow, 'ra_obj'));
     const dec_obj = Number(getCellValue(tableModel, hlrow, 'dec_obj'));
@@ -55,6 +55,10 @@ export function makeWebPlotRequestViaZtfIbe(tableModel, hlrow, size, cutoutSize,
             title += ztftable + '-' + field + '-' + filtercode;
             sr.setParam('ProductLevel', 'ref');
             sr.setParam('table', 'ref');
+        } else if (ztftable === 'deep') {
+            title += ztftable + '-' + field + '-' + filtercode;
+            sr.setParam('ProductLevel', 'deep');
+            sr.setParam('table', 'deep');
         } else if (ztftable === 'sci') {
             title += ztftable + '-' + filefracday + '-' + filtercode;
             sr.setParam('ProductLevel', 'sci');

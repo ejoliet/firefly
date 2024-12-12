@@ -4,28 +4,35 @@
  */
 
 import 'isomorphic-fetch';
+import {Stack, Typography} from '@mui/joy';
 import React from 'react';
-import ReactDOM from 'react-dom';
+import {createRoot} from 'react-dom/client';
 import {set, defer, once} from 'lodash';
 import 'styles/global.css';
 
 import {APP_LOAD, dispatchAppOptions, dispatchUpdateAppData} from './core/AppDataCntlr.js';
 import {FireflyViewer} from './templates/fireflyviewer/FireflyViewer.js';
 import {FireflySlate} from './templates/fireflyslate/FireflySlate.jsx';
+import {LandingPage} from './templates/fireflyviewer/LandingPage.jsx';
 import {LcViewer} from './templates/lightcurve/LcViewer.jsx';
 import {HydraViewer} from './templates/hydra/HydraViewer.jsx';
+import {routeEntry, ROUTER} from './templates/router/RouteHelper.jsx';
 import {initApi} from './api/ApiBuild.js';
 import {dispatchUpdateLayoutInfo} from './core/LayoutCntlr.js';
+import {FireflyRoot} from './ui/FireflyRoot.jsx';
+import {SIAv2SearchPanel} from './ui/tap/SIASearchRootPanel';
+import {getSIAv2Services} from './ui/tap/SiaUtil';
+import {TapSearchPanel} from './ui/tap/TapSearchRootPanel';
 import {dispatchChangeReadoutPrefs} from './visualize/MouseReadoutCntlr.js';
 import {showInfoPopup} from './ui/PopupUtil';
 import {bootstrapRedux, flux} from './core/ReduxFlux.js';
 import {getOrCreateWsConn} from './core/messaging/WebSocketClient.js';
 import {ActionEventHandler} from './core/messaging/MessageHandlers.js';
-import {notifyServerAppInit} from './rpc/CoreServices.js';
+import {getJsonProperty, notifyServerAppInit} from './rpc/CoreServices.js';
 import {getPropsWith, mergeObjectOnly, getProp, toBoolean, documentReady,uuid} from './util/WebUtil.js';
 import {dispatchChangeTableAutoScroll, dispatchWcsMatch, visRoot} from './visualize/ImagePlotCntlr.js';
 import {Logger} from './util/Logger.js';
-import {evaluateWebApi, isUsingWebApi, WebApiStat} from './api/WebApi.js';
+import {evaluateWebApi, initWebApi, isUsingWebApi, WebApiStat} from './api/WebApi.js';
 import {WebApiHelpInfoPage} from './ui/WebApiHelpInfoPage.jsx';
 import {dispatchOnAppReady} from './core/AppDataCntlr.js';
 import {getBootstrapRegistry} from './core/BootstrapRegistry.js';
@@ -34,6 +41,10 @@ import {recordHistory} from './core/History.js';
 import {setDefaultImageColorTable} from './visualize/WebPlotRequest.js';
 import {initWorkerContext} from './threadWorker/WorkerAccess.js';
 import {getTAPServices} from './ui/tap/TapKnownServices.js';
+import {loadAllJobs} from './core/background/BackgroundUtil.js';
+import {
+    makeDefImageSearchActions, makeDefTableSearchActions, makeDefTapSearchActions, makeExternalSearchActions
+} from './ui/DefaultSearchActions.js';
 
 let initDone = false;
 const logger = Logger('Firefly-init');
@@ -53,7 +64,8 @@ export const Templates = {
     FireflyViewer,
     FireflySlate,
     LightCurveViewer : LcViewer,
-    HydraViewer
+    HydraViewer,
+    [ROUTER]: ROUTER      // root component is passed in via getRouter
 };
 
 /**
@@ -69,7 +81,7 @@ export const Templates = {
  * @prop {boolean} [showUserInfo=false] - show user information.  This is used when authentication is available
  * @prop {boolean} [showViewsSwitch] - show/hide the swith views buttons
  * @prop {Array.<function>} [rightButtons]    - function(s) returning a button to be displayed on the top-right of the result page.
- * 
+ *
  *
  * @prop {Object} menu         custom menu bar
  * @prop {string} menu.label   button's label
@@ -77,6 +89,8 @@ export const Templates = {
  * @prop {string} menu.type    use 'COMMAND' for actions that's not drop-down related.
  */
 
+const IRSA_CAT= 'IRSA searches';
+const ARCHIVE= 'Archive Searches';
 
 /**
  * @global
@@ -89,11 +103,11 @@ export const Templates = {
  * @prop {Object} MenuItemKeys -  an object the references MenuItemKeys.js that can turn on or off buttons on the image tool bar
  * @prop {Array.<string> } imageTabs - specifies the order of the time in the image dialog e.g. - [ 'fileUpload', 'url', '2mass', 'wise', 'sdss', 'msx', 'dss', 'iras' ]
  * @prop {string|function} irsaCatalogFilter - a function or a predefined key that specifies how the catalogs are filter in the UI
- * @prop {string} catalogSpacialOp -  two values undefined or 'polygonWhenPlotExist'. when catalogSpacialOp === 'polygonWhenPlotExist' then
+ * @prop {string} catalogSpatialOp -  two values undefined or 'polygonWhenPlotExist'. when catalogSpatialOp === 'polygonWhenPlotExist' then
  *                                  the catalog panel will show the polygon option as default when possible
  * @prop {Array.<string> } imageMasterSources -  default - ['ALL'], source to build image master data from
  * @prop {Array.<string> } imageMasterSourcesOrder - for the image dialog sort order of the projects, anything not listed is put on bottom
- *
+ * @prop {PROP_SHEET} table.propertySheet - specifies how to show propertySheet
  */
 
 /** @type {AppProps} */
@@ -102,17 +116,29 @@ const defAppProps = {
     template: undefined,        // don't set a default value for this.  it's also used as a switch for API vs UI mode
     appTitle: '',
     showUserInfo: false,
-    showViewsSwitch: false,
+    showViewsSwitch: true,
     rightButtons: undefined,
+    landingPage: <LandingPage/>,
+    fileDropEventAction: 'FileUploadDropDownCmd',
 
     menu: [
-        {label:'Images', action:'ImageSelectDropDownCmd'},
-        {label:'TAP/Table Searches', action: 'MultiTableSearchCmd'},
-        // {label:'Tap Searches', action: 'TAPSearch'},
-        // {label:'Classic Searches', action: 'MultiTableSearchCmd'},
-        {label:'Charts', action:'ChartSelectDropDownCmd'},
-        {label:'Upload', action: 'FileUploadDropDownCmd'},
+        {label:'Images', action:'ImageSelectDropDownCmd', primary: true, category:IRSA_CAT},
+        {label:'TAP', action: 'TAPSearch', primary: true, category: ARCHIVE},
+        {label: 'SIAv2 Searches', action: 'SIAv2Search', primary:true, category: ARCHIVE},
+        {label:'IRSA Catalogs', action: 'IrsaCatalog', primary: true, category:IRSA_CAT},
+        {label:'VO SCS Search', action: 'ClassicVOCatalogPanelCmd', primary: false, category: ARCHIVE},
+        {label:'NED', action: 'ClassicNedSearchCmd', primary: false, category:'NED Search'},
+        {label:'Upload', action: 'FileUploadDropDownCmd', primary: true},
+        {label:'HiPS Search', action: 'HiPSSearchPanel', primary: false, category:ARCHIVE},
+        {label:'IRSA SIAv2', action: 'IRSA_USING_SIAv2', primary: false, category:IRSA_CAT},
     ],
+
+    dropdownPanels: [
+        <SIAv2SearchPanel lockService={true} lockedServiceName='IRSA' groupKey='IRSA_USING_SIAv2'
+                        layout= {{width: '100%'}}
+                          lockTitle='IRSA SIAv2 Search'
+                        name='IRSA_USING_SIAv2'/>,
+        ]
 };
 
 /** @type {FireflyOptions} */
@@ -123,10 +149,14 @@ const defFireflyOptions = {
         {id: 'vocat'},
         {id: 'nedcat'}
     ],
+    theme: {
+        customized: undefined,          // a function that returns a customized theme
+        colorMode: undefined,           // can be 'dark' or 'light'.  When not specified(default), it will use device's settings.
+    },
     MenuItemKeys: {},
     imageTabs: undefined,
     irsaCatalogFilter: undefined,
-    catalogSpacialOp: undefined,
+    catalogSpatialOp: undefined,
     imageMasterSources: ['ALL'],
     imageDisplayType:'standard',
     showCatalogSearchTarget: true,
@@ -135,24 +165,39 @@ const defFireflyOptions = {
     wcsMatchType: false,
     imageScrollsToHighlightedTableRow: true,
     imageScrollsToActiveTableOnLoadOrSelect: true,
-    'help.base.url': undefined,                     // this overrides property set during build time.
+    'help.base.url': undefined,                     // onlinehelp base URL
 
     charts: {
-        defaultDeletable: undefined, // by default if there are more than one chart in container, all charts are deletable
-        maxRowsForScatter: 5000, // maximum table rows for scatter chart support, heatmap is created for larger tables
-        minScatterGLRows: 1000, // minimum number of points to use WebGL 'scattergl' instead of SVG 'scatter'
-        singleTraceUI: false, // by default we support multi-trace in UI
-        upperLimitUI: false, // by default user can not set upper limit column in scatter options
-        ui: {HistogramOptions: {fixedAlgorithm: undefined}} // by default we allow both "uniform binning" and "bayesian blocks"
+        defaultDeletable: undefined,    // by default if there are more than one chart in container, all charts are deletable
+        maxRowsForScatter: 5000,        // maximum table rows for scatter chart support, heatmap is created for larger tables
+        minScatterGLRows: 1000,         // minimum number of points to use WebGL 'scattergl' instead of SVG 'scatter'
+        singleTraceUI: false,           // by default we support multi-trace in UI
+        upperLimitUI: false,            // by default user can not set upper limit column in scatter options
+        allowPinnedCharts: false,        // true to use Chart container with 'pin' feature
+        ui: {HistogramOptions: {fixedAlgorithm: undefined}}     // by default we allow both "uniform binning" and "bayesian blocks"
     },
     hips : {
         useForImageSearch: true,
         hipsSources: 'all',
         defHipsSources: {source: 'irsa', label: 'Featured'},
-        mergedListPriority: 'irsa'
+        mergedListPriority: 'irsa',
+        mocMaxDepth : 5,
+        mocDefaultStyle : 'DESTINATION_OUTLINE',
+    },
+    table : {
+        pageSize: 100,
+        showPropertySheetButton: false,  // by default, hide it because most applications have a dedicated property sheet component
+        propertySheet: {
+            selectableRows: true   // will only take effect if property sheet is displayed as table
+        }
     },
     image : {
         defaultColorTable: 1,
+        canCreateExtractionTable: false,
+    },
+    tapObsCore: {
+        enableObsCoreDownload: true,
+        // debug: true,
     },
     coverage : {
         // TODO: need to define all options with defaults here.  used in FFEntryPoint.js
@@ -165,9 +210,19 @@ const defFireflyOptions = {
 
         },
     },
+    searchActions : [
+        ...makeExternalSearchActions(),
+        ...makeDefTableSearchActions(),
+        ...makeDefTapSearchActions(),
+        ...makeDefImageSearchActions(),
+    ],
     tap : {
         services: getTAPServices( ['IRSA', 'NED', 'NASA Exoplanet Archive', 'KOA', 'HEASARC', 'MAST Images',
-                                   'CADC', 'VizieR (CDS)', 'Simbad (CDS)', 'Gaia', 'GAVO', 'HSA'] ),
+                                   'CADC', 'VizieR (CDS)', 'Simbad (CDS)', 'Gaia', 'GAVO', 'HSA', 'NOIR Lab'] ),
+        defaultMaxrec: 50000
+    },
+    SIAv2 : {
+        services: getSIAv2Services( ['IRSA', 'CADC', ]),
         defaultMaxrec: 50000
     }
 };
@@ -177,15 +232,16 @@ const defFireflyOptions = {
 
 
 
-    /**
-     * add options to store and setup any options that need specific initialization
-     * @param {Object} options
-     */
-    function installOptions(options) {
-        // setup options
-        dispatchAppOptions(options);
-        options.disableDefaultDropDown && dispatchUpdateLayoutInfo({disableDefaultDropDown:true});
-        options.readoutDefaultPref && dispatchChangeReadoutPrefs(options.readoutDefaultPref);
+/**
+ * add options to store and setup any options that need specific initialization
+ * @param {Object} appSpecificOptions
+ */
+function installOptions(appSpecificOptions) {
+    const options=  mergeObjectOnly(defFireflyOptions, appSpecificOptions); // app specific will override default
+    // setup options
+    dispatchAppOptions(options);
+    options.disableDefaultDropDown && dispatchUpdateLayoutInfo({disableDefaultDropDown:true});
+    options.readoutDefaultPref && dispatchChangeReadoutPrefs(options.readoutDefaultPref);
     options.wcsMatchType && dispatchWcsMatch({matchType:options.wcsMatchType, lockMatch:true});
     setDefaultImageColorTable(options.image?.defaultColorTable ?? 1);
 
@@ -195,29 +251,37 @@ const defFireflyOptions = {
 
 }
 
+
 /**
  *
  * @param {AppProps} props
- * @param {FireflyOptions} options
+ * @param {FireflyOptions} appSpecificOptions
  * @param {Array.<WebApiCommand>} webApiCommands
  */
-function fireflyInit(props, options={}, webApiCommands) {
+function fireflyInit(props, appSpecificOptions={}, webApiCommands) {
 
     if (initDone) return;
 
-    props = mergeObjectOnly(defAppProps, props);
-    const viewer = Templates[props.template];
+    const reactComponents= Object.entries(props).filter( ([,v]) => v?.props);
+    const appProps = {...mergeObjectOnly(defAppProps, props), ...Object.fromEntries(reactComponents)}; // mergeObjectOnly does not handle react components correctly
 
-    installOptions(mergeObjectOnly(defFireflyOptions, options));
+    const viewer = Templates[appProps.template];
 
-    // initialize UI or API depending on entry mode.
     if (viewer) {
-        props.renderTreeId= undefined; // in non API usages, renderTreeId is not used, this line is just for clarity
-        documentReady().then(() => renderRoot(viewer, props,webApiCommands));
+        // in non API usages, renderTreeId is not used, this line is just for clarity
+        appProps.renderTreeId = undefined;
     }
     else {
-        initApi();
+        // in API mode, show propertySheet popup button unless it's set.
+        set(appSpecificOptions, 'table.showPropertySheetButton', appSpecificOptions?.table?.showPropertySheetButton ?? true);
     }
+
+    installOptions(appSpecificOptions);
+
+    // initialize UI or API depending on entry mode.
+    documentReady().then(() => {
+        viewer ? renderRoot(undefined, viewer, appProps,webApiCommands) : initApi(props);
+    });
     initDone = true;
 }
 
@@ -227,7 +291,29 @@ function fireflyInit(props, options={}, webApiCommands) {
  * @param {AppProps} props
  * @return {Object} return object has two functions {unrender:Function, render:Function}
  */
-export function startAsAppFromApi(divId, props={template: 'FireflySlate'}) {
+export function startAsAppFromApi(divId, overrideProps={template: 'FireflySlate'}) {
+
+
+    const Message = ({}) => (
+        <Stack alignItems='center'>
+            <Typography sx={{fontSize: 'xl4'}} color='neutral'> Welcome to Firefly Viewer for Python</Typography>
+        </Stack>
+    );
+
+    const landingPage= (<LandingPage slotProps={{
+        topSection: {component: Message},
+        bottomSection : {
+            actionItems: [
+                { text: 'Use API to send data', subtext: 'load data using Python API' },
+                { text: 'Search for data', subtext: 'using the tabs above or side menu' },
+                { text: 'Upload a file', subtext: 'drag & drop here' }
+            ]
+        }
+    }}/>);
+
+    const props = {
+        landingPage,
+        ...mergeObjectOnly({...window.firefly.originalAppProps}, overrideProps), div:divId, appFromApi:true};
     const viewer = Templates[props.template];
     if (!divId || !viewer) {
         !divId  && logger.error('required: divId');
@@ -238,19 +324,36 @@ export function startAsAppFromApi(divId, props={template: 'FireflySlate'}) {
     props.disableDefaultDropDown && dispatchUpdateLayoutInfo({disableDefaultDropDown:true});
     props.readoutDefaultPref && dispatchChangeReadoutPrefs(props.readoutDefaultPref);
     props.wcsMatchType && dispatchWcsMatch({matchType:props.wcsMatchType, lockMatch:true});
+    props.apiHandlesExpanded= true;
+
+    dispatchAppOptions({ charts: { allowPinnedCharts: true}});
+
+    if (!props.menu) {
+        const other= 'Other Searches';
+        const general= 'General Searches';
+        props.menu= [
+            { label: 'Upload', action: 'FileUploadDropDownCmd', primary:true },
+            { label: 'TAP Searches', action: 'TAPSearch', primary:true, category: general },
+            { label: 'SIAv2 Searches', action: 'SIAv2Search', primary:true, category: general },
+            { label: 'IRSA Images', action: 'ImageSelectDropDownSlateCmd', category: other },
+            { label: 'IRSA Catalogs', action: 'IrsaCatalogDropDown', category: other },
+        ];
+    }
 
 
+    const e= document.getElementById(divId);
 
-    props = {...mergeObjectOnly({...defAppProps}, props), div:divId};
-    
-    const controlObj= {
-        unrender: () => {
-                const e= document.getElementById(divId);
-                if (!e) return;
-                ReactDOM.unmountComponentAtNode(e);
-        },
-        render: () => renderRoot(viewer, props)
+    const makeControlObj= () => {
+        let root = e && createRoot(e);
+        return {
+            render : () => root && renderRoot(root, viewer, props),
+            unrender: () => {
+                root?.unmount();
+                root = e && createRoot(e);
+            },
+        };
     };
+    const controlObj= makeControlObj();
     controlObj.render();
     return controlObj;
 }
@@ -259,8 +362,37 @@ export function startAsAppFromApi(divId, props={template: 'FireflySlate'}) {
  * returns version information in a key/value object.
  * @returns {VersionInfo}
  */
-export function getVersion() {
-  return getPropsWith('version.');
+export const getVersion= once(() => getPropsWith('version.') );
+const ffTag= () => getVersion().BuildFireflyTag ?? '';
+
+const releaseRE= /release-\d+(\.\d+)+/;
+const preRE=  /pre-(\d)+-\d+(\.\d+)+/;
+const cycleRE= /cycle-\d+\.\d+/;
+const justVersion= /\d+(\.\d+)+/;
+
+export function getFireflyLibraryVersionStr() {
+    const {BuildFireflyBranch:branch='unknown-branch', BuildCommit:commit, BuildCommitFirefly:ffCommit} = getVersion();
+
+    if (isVersionFormalRelease()) return getFormalReleaseVersionStr();
+    else if (isVersionPreRelease()) return getPrereleaseVersionStr();
+    else if (getDevCycle()) return getDevVersionStr(branch, ffCommit??commit);
+    else return `0.0-${branch}-development`;
+}
+
+const getPrereleaseVersionStr= () =>
+    ffTag().match(justVersion)?.[0]+'-PRE-'+ ffTag().match(preRE)?.[0].split('-')[1];
+
+const getDevVersionStr= (branch,commit) =>
+    `${getDevCycle()}-DEV${branch!=='dev'?':'+branch:''}_${commit?.substring(0,4)}`;
+
+const getFormalReleaseVersionStr= () => ffTag().match(justVersion)?.[0];
+
+
+export const isVersionFormalRelease = ()  => Boolean(ffTag().match(releaseRE));
+export const isVersionPreRelease = ()  => Boolean(ffTag().match(preRE));
+export function getDevCycle() {
+    const {DevCycleTag:tag} = getVersion();
+    return tag?.match(cycleRE) ? tag?.match(justVersion)[0] : '';
 }
 
 
@@ -274,16 +406,16 @@ export const firefly = {
 /**
  * bootstrap Firefly api or application.
  * @param {AppProps} props - application properties
- * @param {FireflyOptions} options - startup options
+ * @param {FireflyOptions} clientAppSpecificOptions - firefly options specific to this client
  * @param {Array.<WebApiCommand>} webApiCommands
  * @returns {Promise.<boolean>}
  */
-function bootstrap(props, options, webApiCommands) {
+function bootstrap(props, clientAppSpecificOptions, webApiCommands) {
 
     if (window?.firefly?.initialized) return Promise.resolve(); // if initialized, don't run it again.
 
     set(window, 'firefly.initialized', true);
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
 
         const processDecor= (process) => (rawAction) => {
             getOrCreateWsConn().catch(() => showLostConnection());
@@ -295,23 +427,39 @@ function bootstrap(props, options, webApiCommands) {
         flux.process( {type : APP_LOAD} );  // setup initial store/state
 
         ensureUsrKey();
-        // establish websocket connection first before doing anything else.
-        getOrCreateWsConn().then((client) => {
-            fireflyInit(props, options, webApiCommands);
 
-            client.addListener(ActionEventHandler);
-            window.firefly.wsClient = client;
-            notifyServerAppInit({spaName:`${props.appTitle||''}--${props.template?props.template:'api'}`});
-            resolve?.();
-        });
+        let srvAppSpecificOptions={};
+        try {
+            srvAppSpecificOptions= await getJsonProperty('FIREFLY_OPTIONS');
+        }
+        catch (err) {
+            logger.error('could not retrieve valid server options');
+        }
+        const appSpecificOptions = mergeObjectOnly(clientAppSpecificOptions, srvAppSpecificOptions);
+
+        const client= await getOrCreateWsConn(); // establish websocket connection first before doing anything else.
+
+        fireflyInit(props, appSpecificOptions, webApiCommands);
+
+        client.addListener(ActionEventHandler);
+        window.firefly.wsClient = client;
+        notifyServerAppInit({spaName:`${props.appTitle||''}--${props.template?props.template:'api'}`});
+        loadAllJobs();
+        resolve?.();
+
+
     }).then(() => {
-        // when all is done.. mark app as 'ready'
-        defer(() => dispatchUpdateAppData({isReady: true}));
+        // when all is done, mark app as 'ready'
+        defer(() => {
+            setTimeout(() => {
+                dispatchUpdateAppData({isReady: true})
+            },3);
+        });
         initWorkerContext();
     });
 }
 
-function renderRoot(viewer, props, webApiCommands) {
+function renderRoot(root, viewer, props, webApiCommands) {
     const e= document.getElementById(props.div);
     if (!e) {
         showInfoPopup('HTML page is not setup correctly, Firefly cannot start.');
@@ -319,8 +467,21 @@ function renderRoot(viewer, props, webApiCommands) {
         return;
     }
 
-    const doAppRender= () => ReactDOM.render(React.createElement(viewer, props), e);
-    isUsingWebApi(webApiCommands) ? handleWebApi(webApiCommands, e, doAppRender) : doAppRender();
+    const rootToUse = root ?? createRoot(e);
+    initWebApi(webApiCommands);
+    const webApi= isUsingWebApi(webApiCommands);
+    const doAppRender= () => {
+        if (props.template === ROUTER) {
+            routeEntry(rootToUse, props);
+        } else {
+            rootToUse.render(
+                <FireflyRoot ctxProperties={props}>
+                    { React.createElement(viewer, {...props, normalInit: !webApi})}
+                </FireflyRoot>
+            );
+        }
+    };
+    webApi ? handleWebApi(webApiCommands, e, doAppRender) : doAppRender();
 }
 
 
@@ -329,12 +490,17 @@ function handleWebApi(webApiCommands, e, doAppRender) {
         params, badParams, missingParams}= evaluateWebApi(webApiCommands);
     switch (status) {
         case WebApiStat.EXECUTE_API_CMD:
-            window.history.pushState('home', 'Home', new URL(window.location).pathname); // ?? is this necessary?
+            let apiCompleted= false;
+            // window.history.pushState('home', 'Home', new URL(window.location).pathname); // ?? is this necessary?
             doAppRender();
-            dispatchOnAppReady(() =>  execute?.(cmd,params));
+            dispatchOnAppReady(() =>  {
+                if (apiCompleted) return;
+                execute?.(cmd,params);
+                apiCompleted= true;
+            });
             break;
         case WebApiStat.SHOW_HELP:
-            ReactDOM.render(
+            createRoot(e).render(
                 React.createElement(
                     WebApiHelpInfoPage,
                     {helpType, contextMessage, cmd, params, webApiCommands, badParams, missingParams}), e);

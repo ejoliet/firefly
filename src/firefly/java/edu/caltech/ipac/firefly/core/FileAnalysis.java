@@ -6,8 +6,12 @@ package edu.caltech.ipac.firefly.core;
 
 import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.messaging.JsonHelper;
+import edu.caltech.ipac.firefly.server.db.DbAdapter;
+import edu.caltech.ipac.firefly.server.db.DuckDbReadable;
 import edu.caltech.ipac.firefly.server.dpanalyze.DataProductAnalyzer;
 import edu.caltech.ipac.firefly.server.dpanalyze.DataProductAnalyzerFactory;
+import edu.caltech.ipac.table.DataGroup;
+import edu.caltech.ipac.table.IpacTableDef;
 import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.table.TableUtil;
 import edu.caltech.ipac.table.TableUtil.Format;
@@ -16,16 +20,20 @@ import edu.caltech.ipac.table.io.IpacTableReader;
 import edu.caltech.ipac.table.io.VoTableReader;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.FitsHDUUtil;
+import edu.caltech.ipac.util.download.FailedRequestException;
+import edu.caltech.ipac.util.download.ResponseMessage;
 import nom.tam.fits.FitsException;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import static edu.caltech.ipac.table.TableUtil.getDetails;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
@@ -49,6 +57,11 @@ public class FileAnalysis {
         File infile= fileInfo.getFile();
         int responseCode= fileInfo.getResponseCode();
         String contentType= fileInfo.getContentType();
+        String ct= contentType!=null ? contentType.toLowerCase() : null;
+
+        if (ct!=null && (ct.contains("png") || ct.contains("jpg") || ct.contains("jpeg") || ct.contains("bmp") || ct.contains("gif"))) {
+            return analyzePNG(infile, mtype);
+        }
 
         Format format = TableUtil.guessFormat(infile);
         FileAnalysisReport report= null;
@@ -78,10 +91,14 @@ public class FileAnalysis {
                 break;
             case CSV:
             case TSV:
-                report =  DsvTableIO.analyze(infile, format.type, mtype);
+            case PARQUET:
+                report = analyzeDuckReadable(infile, format, mtype);
                 break;
             case PDF:
                 report =  analyzePDF(infile, mtype);
+                break;
+            case UWS:
+                report =  analyzeUWS(infile, mtype, params);
                 break;
             case TAR:
                 report =  analyzeTAR(infile, mtype);
@@ -107,6 +124,24 @@ public class FileAnalysis {
 
 
         return productReport;
+    }
+
+    private static FileAnalysisReport analyzeDuckReadable(File infile, Format format, FileAnalysisReport.ReportType type) {
+        try {
+            DataGroup header = DuckDbReadable.getInfo(format, infile.getAbsolutePath());
+            FileAnalysisReport report = new FileAnalysisReport(type, format.name(), infile.length(), infile.getPath());
+            FileAnalysisReport.Part part = new FileAnalysisReport.Part(FileAnalysisReport.Type.Table, String.format("%s (%d cols x %s rows)", format.name(), header.getDataDefinitions().length, header.size()));
+            part.setTotalTableRows(header.size());
+            report.addPart(part);
+            if (type.equals(FileAnalysisReport.ReportType.Details)) {
+                IpacTableDef meta = new IpacTableDef();
+                meta.setCols(Arrays.asList(header.getDataDefinitions()));
+                part.setDetails(getDetails(0, meta));
+            }
+            return report;
+        } catch (Exception e) {
+            return makeReportFromException(e);
+        }
     }
 
 
@@ -140,6 +175,8 @@ public class FileAnalysis {
                 putPartVal(h, p.getUiRender().name(), i, "uiRender");
 
                 putPartVal(h, p.getDesc(), i, "desc");
+                putPartVal(h, p.getUrl(), i, "url");
+                putPartVal(h, p.getSearchProcessorId(), i, "searchProcessorId");
                 putPartVal(h, p.getConvertedFileName(),i,"convertedFileName");
                 putPartVal(h, p.getConvertedFileFormat(),i,"convertedFileFormat");
                 putPartVal(h, p.getTableColumnNames(),i,"tableColumnNames");
@@ -195,6 +232,14 @@ public class FileAnalysis {
         return report;
     }
 
+    public static FileAnalysisReport analyzeUWS(File infile, FileAnalysisReport.ReportType type, Map<String, String> params) {
+        FileAnalysisReport report = new FileAnalysisReport(type, TableUtil.Format.UWS.name(), infile.length(), infile.getPath());
+        FileAnalysisReport.Part part= new FileAnalysisReport.Part(FileAnalysisReport.Type.UWS, "UWS Job File");
+        part.setUrl(params.get("URL")); //make URL accessible on client side
+        report.addPart(part);
+        return report;
+    }
+
     public static FileAnalysisReport analyzeTAR(File infile, FileAnalysisReport.ReportType type) {
         FileAnalysisReport report = new FileAnalysisReport(type, TableUtil.Format.TAR.name(), infile.length(), infile.getPath());
         report.addPart(new FileAnalysisReport.Part(FileAnalysisReport.Type.TAR, "TAR File"));
@@ -207,12 +252,21 @@ public class FileAnalysis {
         return report;
     }
 
+    public static FileAnalysisReport analyzePNG(File infile, FileAnalysisReport.ReportType type) {
+        FileAnalysisReport report = new FileAnalysisReport(type, Format.PNG.name(), infile.length(), infile.getPath());
+        report.addPart(new FileAnalysisReport.Part(FileAnalysisReport.Type.PNG, "PNG File"));
+        return report;
+    }
+
     private static FileAnalysisReport analyzeError(File infile, int responseCode, String contentType) {
         FileAnalysisReport report = new FileAnalysisReport(
                 FileAnalysisReport.ReportType.Details, Format.UNKNOWN.name(),
                 infile.length(), infile.getPath());
         FileAnalysisReport.Part part= new FileAnalysisReport.Part(FileAnalysisReport.Type.ErrorResponse, "Error");
-        part.setDesc("Error in File Retrieve: " + responseCode);
+
+        String desc= "Error in File Retrieve: " + ResponseMessage.getHttpResponseMessage(responseCode) +
+                " (response code: "+ responseCode + ")";
+        part.setDesc(desc);
         if (infile.length()<500 && contentType!=null && contentType.toLowerCase().contains("text/plain")) {
             try {
                 String content = FileUtil.readFile(infile);
@@ -248,7 +302,14 @@ public class FileAnalysis {
         FileAnalysisReport report = new FileAnalysisReport( FileAnalysisReport.ReportType.Details,
                 Format.UNKNOWN.name(), 0, "");
         FileAnalysisReport.Part part= new FileAnalysisReport.Part(FileAnalysisReport.Type.ErrorResponse, "Error");
-        part.setDesc("Error in File Retrieve: " + e.getMessage());
+        String desc;
+        if (e instanceof FailedRequestException fre) {
+            desc= "Error in File Retrieve: " + e.getMessage() + " (response code: "+ fre.getResponseCode() + ")";
+        }
+        else {
+            desc= "Error in File Retrieve: " + e.getMessage();
+        }
+        part.setDesc(desc);
         report.addPart(part);
         return report;
 

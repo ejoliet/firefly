@@ -2,35 +2,35 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {PureComponent} from 'react';
+import {Box, Card, Stack, Typography} from '@mui/joy';
+import React, {PureComponent, useContext} from 'react';
 import PropTypes from 'prop-types';
 import {get} from 'lodash';
+import {getAppOptions} from '../core/AppDataCntlr.js';
 
 import {ValidationField} from '../ui/ValidationField.jsx';
-import {VALUE_CHANGE, dispatchValueChange} from '../fieldGroup/FieldGroupCntlr.js';
+import {dispatchValueChange} from '../fieldGroup/FieldGroupCntlr.js';
 import {TargetPanel} from '../ui/TargetPanel.jsx';
+import {VisualPolygonPanel} from '../visualize/ui/TargetHiPSPanel.jsx';
 
 import {isHiPS} from '../visualize/WebPlot.js';
 import {PlotAttribute} from '../visualize/PlotAttribute.js';
 import Validate from '../util/Validate.js';
 import Enum from 'enum';
 import FieldGroupUtils from '../fieldGroup/FieldGroupUtils.js';
-import {clone} from '../util/WebUtil.js';
 import {RadioGroupInputField} from './RadioGroupInputField.jsx';
 import {ListBoxInputField} from './ListBoxInputField.jsx';
 import {SizeInputFields} from './SizeInputField.jsx';
-import {InputAreaFieldConnected} from './InputAreaField.jsx';
 import {UploadOptionsDialog} from './UploadOptionsDialog.jsx';
 import {getWorkspaceConfig} from '../visualize/WorkspaceCntlr.js';
-import {FieldGroup} from './FieldGroup.jsx';
+import {FieldGroup, FieldGroupCtx} from './FieldGroup.jsx';
+import {useFieldGroupWatch} from './SimpleComponent';
 
 import CsysConverter from '../visualize/CsysConverter.js';
 import {primePlot, getActivePlotView, getFoV} from '../visualize/PlotViewUtil.js';
-import { makeImagePt, makeWorldPt, makeScreenPt, makeDevicePt} from '../visualize/Point.js';
+import {makeImagePt, makeWorldPt, makeScreenPt, makeDevicePt, parseWorldPt} from '../visualize/Point.js';
 import {visRoot} from '../visualize/ImagePlotCntlr.js';
 import {getValueInScreenPixel} from '../visualize/draw/ShapeDataObj.js';
-
-import './CatalogSearchMethodType.css';
 import {hasWCSProjection} from '../visualize/PlotViewUtil';
 
 /*
@@ -78,7 +78,7 @@ export class CatalogSearchMethodType extends PureComponent {
 
     render() {
         const {fields}= this.state;
-        const {groupKey, polygonDefWhenPlot, withPos=true, searchOption}= this.props;
+        const {groupKey, polygonDefWhenPlot, withPos=true, searchOption, sx}= this.props;
 
         const plot = primePlot(visRoot());
         const polyIsDef= polygonDefWhenPlot && plot;
@@ -86,14 +86,14 @@ export class CatalogSearchMethodType extends PureComponent {
                                    : SpatialMethod['All Sky'].value;
 
         return (
-            <FieldGroup groupKey={groupKey} reducerFunc={searchMethodTypeReducer} keepState={true}
-                style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
-                {renderTargetPanel(groupKey, searchType)}
-                <div
-                    style={{display:'flex', flexDirection:'column', flexWrap:'no-wrap', alignItems:'center' }}>
-                    {spatialSelection(withPos, polyIsDef, searchOption)}
-                    {sizeArea(groupKey, searchType, get(fields, 'imageCornerCalc.value', 'image'))}
-                </div>
+            <FieldGroup groupKey={groupKey} keepState={true} sx={{height:1, ...sx}}>
+                <Card sx={{height:1}}>
+                    <Stack spacing={2}>
+                        {spatialSelection(withPos, polyIsDef, searchOption)}
+                        {renderTargetPanel(groupKey, searchType)}
+                        <SizeArea {...{groupKey, searchType, imageCornerCalc: fields?.imageCornerCalc?.value ?? 'image'}}/>
+                    </Stack>
+                </Card>
             </FieldGroup>
         );
 
@@ -132,7 +132,6 @@ const spatialSelection = (withPos, polyIsDef, searchOption) => {
             initialState={{
                               tooltip: 'Enter a search method',
                               label : 'Search Method:',
-                              labelWidth: 80,
                               value: polyIsDef ? SpatialMethod.Polygon.value : SpatialMethod.Cone.value
                          }}
             options={ spatialOptions(searchOption) }
@@ -141,14 +140,10 @@ const spatialSelection = (withPos, polyIsDef, searchOption) => {
         />
     );
     const spatialWithoutPos = (
-        <div style={{display: 'flex',  padding: '13px 0px 9px', marginRight: 15, width: 180}}>
-            <div style={{paddingRight: 4, width: 80}}>
-                Search Method:
-            </div>
-            <div style={{paddingLeft: 4}}>
-                All Sky
-            </div>
-        </div>
+        <Stack {...{py: 1, mr: 2, width: 180, spacing:2, alignItems:'center'}}>
+            <Typography >Search Method</Typography>
+            <Typography level='body-lg'>All Sky</Typography>
+        </Stack>
     );
 
     return withPos ?  spatialWithPos : spatialWithoutPos;
@@ -243,18 +238,13 @@ export function calcCornerString(pv, method) {
  * labelwidth = 100 is fixed.
  * @param {Object} p
  * @param {string} p.label by default is 'Radius'
- * @param {string} p.tooltip by default is the radius size tooltip
- * @param {number} p.min by default 1 arcsec
- * @param {number} p.max by default is 1 degree (3600 arcsec)
  * @returns {Object} SizeInputFields component
  */
-function radiusInField({label = 'Radius:'}) {
+function radiusInField({label = 'Radius'}= {}) {
     return (
         <SizeInputFields fieldKey='conesize' showFeedback={true}
-                         wrapperStyle={{padding:5, margin: '5px 0 5px 0'}}
                          initialState={{
                                                unit: 'arcsec',
-                                               labelWidth : 100,
                                                nullAllowed: false,
                                                value:  (10/3600)+'',
                                                min: 1 / 3600,
@@ -268,55 +258,64 @@ radiusInField.propTypes = {
    label: PropTypes.string
 };
 
-function sizeArea(groupKey, searchType, imageCornerCalc) {
+function SizeArea({groupKey, searchType, imageCornerCalc}) {
+    const {setVal,getVal} = useContext(FieldGroupCtx);
+
+    const onChangeToPolygonMethod = () => {
+        const pv = getActivePlotView(visRoot());
+        const plot = primePlot(pv);
+        if (!plot) return;
+        const cornerCalcV = getVal('imageCornerCalc');
+        if ((!cornerCalcV || cornerCalcV === 'image' || cornerCalcV === 'viewport' || cornerCalcV === 'area-selection')) {
+            const sel = plot.attributes[PlotAttribute.SELECTION] ?? plot.attributes[PlotAttribute.POLYGON_ARY];
+            if (!sel && cornerCalcV === 'area-selection') setVal('imageCornerCalc', 'image');
+            if (!cornerCalcV) {
+                if (sel) setVal('imageCornerCalc', 'area-selection');
+            }
+            setTimeout( () => setVal('polygoncoords', calcCornerString(pv, cornerCalcV)), 4);
+        }
+    };
+
+    useFieldGroupWatch(['imageCornerCalc'], () => onChangeToPolygonMethod());
 
     if (searchType === SpatialMethod.Cone.value) {
-        return (
-            <div style={{border: '1px solid #a3aeb9'}}>
-                {radiusInField({})}
-            </div>
-        );
+        return radiusInField() ;
     } else if (searchType === SpatialMethod.Elliptical.value) {
         return (
-            <div
-                style={{padding:5, display:'flex', flexDirection:'column', flexWrap:'no-wrap', alignItems:'center', border:'solid #a3aeb9 1px' }}>
+            <Stack spacing={1}>
                 {radiusInField({label: 'Semi-major Axis:', tooltip: 'Enter the semi-major axis of the search'})}
                 <ValidationField fieldKey='posangle'
                                  forceReinit={true}
+                                 sx={{width: 0.5}}
                                  initialState={{
                                           fieldKey: 'posangle',
                                           value: '0',
                                           validator: Validate.floatRange.bind(null, 0, 360, 0,'Position Angle'),
                                           tooltip: 'Enter the Position angle (in deg) of the search, e.g - 52 degrees',
-                                          label : 'Position Angle:',
-                                          labelWidth : 100
+                                          label : 'Position Angle',
                                       }}/>
                 <ValidationField fieldKey='axialratio'
                                  forceReinit={true}
+                                 sx={{width: 0.5}}
                                  initialState={{
                                           fieldKey: 'axialratio',
                                           value: '.26',
                                           validator: Validate.floatRange.bind(null, 0, 1, 0,'Axial Ratio'),
                                           tooltip: 'Enter the Axial ratio of the search e.g - 0.26',
-                                          label : 'Axial Ratio:',
-                                          labelWidth : 100
+                                          label : 'Axial Ratio',
                                       }}/>
-            </div>
+            </Stack>
         );
     } else if (searchType === SpatialMethod.Box.value) {
 
         return (
-            <div style={{border: '1px solid #a3aeb9'}}>
-                {radiusInField({ label: 'Side:' })}
-            </div>
-
+            radiusInField({ label: 'Side:' })
         );
     } else if (searchType === SpatialMethod.get('Multi-object').value) {
         const isWs = getWorkspaceConfig();
         return (
 
-            <div
-                style={{padding:5, display:'flex', flexDirection:'column', flexWrap:'no-wrap', alignItems:'center', border:'solid #a3aeb9 1px' }}>
+            <Stack spacing={1}>
                 <UploadOptionsDialog
                     fromGroupKey={groupKey}
                     preloadWsFile={true}
@@ -328,23 +327,22 @@ function sizeArea(groupKey, searchType, imageCornerCalc) {
                         workspace: 'Select a file from workspace to upload'}}
                 />
                 {radiusInField({})}
-            </div>
+            </Stack>
         );
     } else if (searchType === SpatialMethod.Polygon.value) {
-        return renderPolygonDataArea(imageCornerCalc);
+        return <PolygonDataArea {...{imageCornerCalc}}/>;
     } else {
         return (
-
-            <div style={{border: '1px solid #a3aeb9', padding:'30px 30px', whiteSpace: 'pre-line'}}>
+            <Typography level='body-lg' sx={{p:4}}>
                 Search the catalog with no spatial constraints
-            </div>
+            </Typography>
         );
     }
 }
 
-export function renderPolygonDataArea(imageCornerCalc, labelWidth, labelStyle, wrapperStyle) {
-    wrapperStyle = {padding: 5, display: 'flex', ...wrapperStyle};
-
+export function PolygonDataArea({imageCornerCalc,
+                                          hipsUrl= getAppOptions().coverage?.hipsSourceURL  ??  'ivo://CDS/P/2MASS/color',
+                                          centerWP, fovDeg=240, showCornerTypeField=true, slotProps }) {
     let cornerTypeOps=
         [
             {label: 'Image', value: 'image'},
@@ -362,62 +360,67 @@ export function renderPolygonDataArea(imageCornerCalc, labelWidth, labelStyle, w
             ];
     }
     if (imageCornerCalc!=='clear' && plot) {
-        const sel= plot.attributes[PlotAttribute.SELECTION];
+        const sel= plot.attributes[PlotAttribute.SELECTION] ?? plot.attributes[PlotAttribute.POLYGON_ARY];
         if (sel) {
             cornerTypeOps.splice(cornerTypeOps.length-1, 0, {label: 'Selection', value: 'area-selection'});
         }
     }
+    const wp= parseWorldPt(centerWP);
     return (
-        <div
-            style={{padding:5, border:'solid #a3aeb9 1px' }}>
-            <div style={{paddingTop: 10, paddingLeft: 5}}>
-                {pv && <RadioGroupInputField
-                    inline={false}
-                    labelWidth={60}
-                    alignment='horizontal'
-                    initialState= {{
-                        tooltip: 'Choose corners of polygon',
-                        label : 'Search area: ',
-                        value: 'image'
-                    }}
+        <Stack {...{spacing:1}}>
+            {showCornerTypeField && pv && <RadioGroupInputField
+                    orientation='horizontal'
+                    tooltip='Choose corners of polygon'
+                    label='Search area'
+                    initialState= {{value: 'image' }}
                     options={cornerTypeOps}
                     fieldKey='imageCornerCalc'
+                    {...slotProps?.cornerType}
                 />
-                }
-            </div>
-            <InputAreaFieldConnected fieldKey='polygoncoords'
-                                     wrapperStyle={wrapperStyle}
-                                     style={{overflow:'auto',height:'65px', maxHeight:'200px', width:'220px', maxWidth:'300px'}}
-                                     initialState={{
-                                               tooltip:'Enter polygon coordinates search',
-                                               labelWidth:70
-                                            }}
-                                     label='Coordinates:'
-                                     labelStyle={labelStyle}
-                                     labelWidth={labelWidth}
-                                     tooltip='Enter polygon coordinates search'
-            />
-            <ul>
+            }
+            <VisualPolygonPanel {...{
+                fieldKey:'polygoncoords',
+                hipsDisplayKey:fovDeg,
+                hipsUrl,
+                hipsFOVInDeg:fovDeg,
+                centerPt:wp,
+                label:'Coordinates:',
+                tooltip:'Enter polygon coordinates search',
+                ...slotProps?.polygonPanel
+            }} />
+            <Typography level='body-sm' component='ul' sx={{pl:1, li: {listStyleType: 'none'}}} {...slotProps?.polygonHelp}>
                 <li>- Each vertex is defined by a J2000 RA and Dec position pair</li>
                 <li>- A max of 15 and min of 3 vertices is allowed</li>
                 <li>- Vertices must be separated by a comma (,)</li>
                 <li>- Example: 20.7 21.5, 20.5 20.5, 21.5 20.5, 21.5 21.5</li>
-            </ul>
-        </div>
+            </Typography>
+        </Stack>
     );
 }
+
+PolygonDataArea.propTypes = {
+    imageCornerCalc: PropTypes.string,
+    hipsUrl: PropTypes.string,
+    centerWP: PropTypes.string,
+    fovDeg: PropTypes.number,
+    showCornerTypeField: PropTypes.bool,
+    slotProps: PropTypes.shape({
+        cornerType: PropTypes.object,
+        polygonPanel: PropTypes.object,
+        polygonHelp: PropTypes.object,
+    })
+};
 
 function renderTargetPanel(groupKey, searchType) {
     const visible = (searchType === SpatialMethod.Cone.value ||
                      searchType === SpatialMethod.Box.value ||
                      searchType === SpatialMethod.Elliptical.value);
+    if (!visible) return ;
     return (
-        <div className='intarget'>
-            {visible && <TargetPanel labelWidth={100} groupKey={groupKey}/>}
-        </div>
+        <Box height={80}>
+            <TargetPanel groupKey={groupKey}/>
+        </Box>
     );
-
-
 }
 
 CatalogSearchMethodType.propTypes = {
@@ -441,26 +444,3 @@ export const SpatialMethod = new Enum({
     {ignoreCase: true}
 );
 
-function searchMethodTypeReducer(inFields, action) {
-    if (!inFields)  return {};
-    const {fieldKey}= action.payload;
-    const rFields= clone(inFields);
-    if (action.type===VALUE_CHANGE && fieldKey==='polygoncoords') {
-        rFields.imageCornerCalc= {...inFields.imageCornerCalc, value:'user'};
-    }
-    else {
-        const cornerCalcV= inFields.imageCornerCalc?.value ?? 'image';
-        const pv= getActivePlotView(visRoot());
-        const plot = primePlot(pv);
-        if (plot && (cornerCalcV==='image' || cornerCalcV==='viewport' || cornerCalcV==='area-selection')) {
-            const sel = plot.attributes[PlotAttribute.SELECTION];
-            if (!sel && cornerCalcV === 'area-selection') {
-                rFields.imageCornerCalc = {...inFields.imageCornerCalc, value: 'image'};
-            }
-            const cornerCalcV2= rFields.imageCornerCalc?.value ?? 'image';
-            const v = calcCornerString(pv, cornerCalcV2);
-            rFields.polygoncoords = {...inFields.polygoncoords, value: v};
-        }
-    }
-    return rFields;
-}

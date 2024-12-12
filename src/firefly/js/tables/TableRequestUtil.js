@@ -4,15 +4,24 @@
 
 import {get, set, unset, cloneDeep, omit, omitBy, isNil, pickBy, uniqueId} from 'lodash';
 
-import {uniqueTblId} from './TableUtil.js';
-import {Keys} from '../core/background/BackgroundStatus.js';
+import {getTblById, uniqueTblId} from './TableUtil.js';
 import {SelectInfo} from './SelectInfo.js';
 import {ServerParams} from '../data/ServerParams.js';
 import {WS_HOME} from '../visualize/WorkspaceCntlr.js';
+import {getJobInfo} from '../core/background/BackgroundUtil.js';
+import {fetchTable} from 'firefly/rpc/SearchServicesJson';
+import {Logger} from '../util/Logger.js';
+
+
+const logger = Logger('Tables').tag('TableRequestUtil');
 
 export const MAX_ROW = Math.pow(2,31) - 1;
-export const DataTagMeta = ['META_INFO', Keys.DATA_TAG]; // a tag describing the content of this table.  ie. 'catalog', 'imagemeta'
 /* TABLE_REQUEST should match QueryUtil on the server-side */
+
+export const META = {
+    // should match TableMeta.java
+    doclink: {url: 'doclink.url', desc: 'doclink.desc', label: 'doclink.label'}
+};
 
 
 /**
@@ -27,12 +36,11 @@ export const DataTagMeta = ['META_INFO', Keys.DATA_TAG]; // a tag describing the
  * @memberof firefly.util.table
  */
 export function makeTblRequest(id, title, params={}, options={}) {
-    var req = {startIdx: 0, pageSize: 100};
     title = title ?? id;
     const tbl_id = options.tbl_id || uniqueTblId();
     var META_INFO = pickBy(Object.assign(options.META_INFO || {}, {title, tbl_id}));
     options = omit(options, 'tbl_id');
-    return omitBy(Object.assign(req, options, params, {META_INFO, tbl_id, id}), isNil);
+    return omitBy(Object.assign({startIdx: 0}, options, params, {META_INFO, tbl_id, id}), isNil);
 }
 
 /**
@@ -49,12 +57,11 @@ export function makeTblRequest(id, title, params={}, options={}) {
  */
 export function makeFileRequest(title, source, alt_source, options={}) {
     const id = 'IpacTableFromSource';
-    var req = {startIdx: 0, pageSize: 100};
     title = title ?? source;
     const tbl_id = options.tbl_id || uniqueTblId();
     options = omit(options, 'tbl_id');
     var META_INFO = pickBy(Object.assign(options.META_INFO || {}, {title, tbl_id}));
-    return omitBy(Object.assign(req, options, {source, alt_source, META_INFO, tbl_id, id}), isNil);
+    return omitBy(Object.assign({startIdx: 0}, options, {source, alt_source, META_INFO, tbl_id, id}), isNil);
 }
 
 /**
@@ -122,7 +129,6 @@ export function makeIrsaWorkspaceRequest(source, title, options={}) {
  * @memberof firefly.util.table
  */
 export function makeIrsaCatalogRequest(title, project, catalog, params={}, options={}) {
-    var req = {startIdx: 0, pageSize: 100};
     title = title ?? catalog;
     const tbl_id = options.tbl_id || uniqueTblId();
     const id = 'GatorQuery';
@@ -133,64 +139,100 @@ export function makeIrsaCatalogRequest(title, project, catalog, params={}, optio
     options = omit(options, 'tbl_id');
     params = omit(params, 'position');
 
-    return omitBy(Object.assign(req, options, params, {id, tbl_id, META_INFO, UserTargetWorldPt, catalogProject, catalog}), isNil);
+    return omitBy(Object.assign({startIdx: 0}, options, params, {id, tbl_id, META_INFO, UserTargetWorldPt, catalogProject, catalog}), isNil);
 }
 
 /**
- * creates the request to query LSST catalogs.  // TODO: more detail to be updated based on the LSST catalog DD content
- * @param {string} title    title to be displayed with this table result
- * @param {string} project
- * @param {string} catalog  the catalog name to search
- * @param {ConeParams|BoxParams|ElipParams} params   one of 'Cone','Eliptical','Box','Polygon','Table','AllSky'.
- * @param {TableRequest} [options]
- * @returns {TableRequest}
- * @func makeLsstCatalogRequest
- * @memberof firefly.util.table
- */
-export function makeLsstCatalogRequest(title, project, catalog, params={}, options={}) {
-    const req = {startIdx: 0, pageSize: 100};
-
-    title = title ?? catalog;
-    const tbl_id = options.tbl_id || uniqueTblId();
-    const id = get(params, 'SearchMethod')==='Table'?'LSSTMultiObjectSearch':'LSSTCatalogSearch';
-    const UserTargetWorldPt = params.UserTargetWorldPt || params.position;  // may need to convert to worldpt.
-    const table_name = catalog;
-    const meta_table = catalog;
-    const META_INFO = pickBy(Object.assign(options.META_INFO || {}, {title, tbl_id}));
-
-
-    options = omit(options, 'tbl_id');
-    params = omit(params, 'position');
-
-    return omitBy(Object.assign(req, options, params,
-                                {id, tbl_id, META_INFO, UserTargetWorldPt, table_name, meta_table, project}), isNil);
-}
-
-/**
- * creates the request to query VO catalogmakeLsstCatalogRequest
+ * creates the request to query VO using ConeSearchByURL or another vo provider Search processor
  * @param {string} title    title to be displayed with this table result
  * @param {ConeParams|BoxParams|ElipParams} params   one of 'Cone','Eliptical','Box','Polygon','Table','AllSky'.
  * @param {TableRequest} [options]
  * @returns {TableRequest}
  * @func makeVOCatalogRequest
  * @memberof firefly.util.table
+ * @see edu.caltech.ipac.firefly.server.persistence.QueryByConeSearchURL.java
  */
 export function makeVOCatalogRequest(title, params={}, options={}) {
-    var req = {startIdx: 0, pageSize: 100};
     const tbl_id = options.tbl_id || uniqueTblId();
-    const providerid = voProviders[params.providerName];
-
-    const id = providerid || 'ConeSearchByURL';
+    const id = voProviders[params.providerName] || 'ConeSearchByURL';
     const UserTargetWorldPt = params.UserTargetWorldPt || params.position;  // may need to convert to worldpt.
-    var META_INFO = Object.assign(options.META_INFO || {}, {title, tbl_id});
+    const META_INFO = {...options.META_INFO, title, tbl_id};
 
     options = omit(options, 'tbl_id');
     params = omit(params, 'position');
 
-    return omitBy(Object.assign(req, options, params, {id, tbl_id, META_INFO, UserTargetWorldPt}), isNil);
+    return omitBy({startIdx: 0, ...options, ...params, id, tbl_id, META_INFO, UserTargetWorldPt}, isNil);
 }
 
 const voProviders = {'NED':'NedSearch'};
+
+/**
+ * Parameters for cone search
+ * @typedef {object} ResourceInfo
+ * @global
+ * @public
+ * @prop {TableRequest} request     required. the table request to create this resource from
+ * @prop {string}       [scope]       access type of this resource.  one of 'global', 'user', 'protected'.  defaults to 'global'.
+ * @prop {string}       [secret]      the secret token required to access 'protected' scope
+ */
+
+/**
+ * Create the given Resource
+ * @param {ResourceInfo} resource   resource information
+ * @public
+ * @func  createResource
+ * @memberof firefly.util.table
+ */
+export function createResource(resource) {
+    handleResourceRequest({resource, action: 'create'});
+}
+
+/**
+ * Delete the given Resource
+ * @param {ResourceInfo} resource   resource information
+ * @public
+ * @func  deleteResource
+ * @memberof firefly.util.table
+ */
+export function deleteResource(resource) {
+    handleResourceRequest({resource, action: 'delete'});
+}
+
+/**
+ * @param {ResourceInfo} resource   resource information
+ * @param {string} [title]          title to display with this table.
+ * @param {TableRequest} [options]  table request options.  see TableRequest for details.
+ * @returns {TableRequest} the request to query data from the given resource
+ * @public
+ * @func  makeResourceRequest
+ * @memberof firefly.util.table
+ */
+export function makeResourceRequest(resource={}, title, options={}) {
+    return handleResourceRequest({resource, title, options, action: 'query'});
+}
+
+/**
+ * private function to handle Resource related actions
+ * @param {object} p                function parameters
+ * @param {ResourceInfo} p.resource resource information
+ * @param {string} [p.title]        title to display with this table.
+ * @param {TableRequest} [p.options] table request options.  see TableRequest for details.
+ * @param {string} p.action one of 'query', 'create', 'delete'.  defautls to 'query'.
+ *                          when action is 'create' or 'delete', it will submit the request.
+ *                          no further action is needed.
+ */
+function handleResourceRequest({resource={}, title, options={}, action='query'}) {
+    const {request, scope, secret} = resource;
+    const searchRequest = JSON.stringify(request);
+
+    if (action === 'query') {
+        return makeTblRequest('ResourceProcessor', title, {searchRequest, action, scope, secret}, options);
+    } else {
+        const req = makeTblRequest('ResourceProcessor', null, {searchRequest, action, scope, secret});
+        return fetchTable(req)   // initiate and load the resource
+            .catch((err) => logger.error(`Failed to ${action} Resource from request: ${err}`, `request=${request}`));
+    }
+}
 
 /**
  * create a deep clone of the given request.  tbl_id is removed from the cloned request.
@@ -202,11 +244,11 @@ const voProviders = {'NED':'NedSearch'};
  * @func cloneRequest
  * @memberof firefly.util.table
  */
-export function cloneRequest(request, params = {}, createTblId) {
+export function cloneRequest(request={}, params = {}, createTblId) {
     const req = cloneDeep(omit(request, 'tbl_id'));
     if (createTblId) {
-        const tbl_id = uniqueId(request.tbl_id);
-        req.META_INFO.tbl_id = tbl_id;
+        const tbl_id = uniqueId(request.tbl_id || 'tbl_id-');
+        set(req, 'META_INFO.tbl_id', tbl_id);
         req.tbl_id = tbl_id;
     } else {
         unset(req, 'META_INFO.tbl_id');
@@ -295,3 +337,23 @@ export function setSelectInfo(request, selectInfo) {
 export function setNoCache(request) {
     set(request, '__searchID', Date.now());
 }
+
+
+/**
+ * @param jobId
+ * @returns {Request} returns search request from the given jobId
+ */
+export function getRequestFromJob(jobId) {
+    const request = getJobInfo(jobId)?.parameters?.[ServerParams.REQUEST];
+    return request ? JSON.parse(request) : {};
+}
+
+/**
+ * @param {string} tbl_id
+ * @returns {string} returns Job ID from the given tbl_id
+ */
+export function getJobIdFromTblId(tbl_id) {
+    const request = getTblById(tbl_id)?.request;
+    return request?.META_INFO?.[ServerParams.JOB_ID];
+}
+

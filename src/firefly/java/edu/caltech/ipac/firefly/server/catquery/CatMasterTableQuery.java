@@ -3,12 +3,12 @@
  */
 package edu.caltech.ipac.firefly.server.catquery;
 
-import edu.caltech.ipac.firefly.server.db.EmbeddedDbUtil;
+import edu.caltech.ipac.firefly.server.db.DbAdapter;
 import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
 import edu.caltech.ipac.firefly.server.network.HttpServices;
+import edu.caltech.ipac.firefly.server.network.IpacTableHandler;
 import edu.caltech.ipac.firefly.server.query.EmbeddedDbProcessor;
 import edu.caltech.ipac.table.DataGroupPart;
-import edu.caltech.ipac.table.io.IpacTableReader;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
 import edu.caltech.ipac.firefly.server.query.SearchProcessorImpl;
@@ -19,14 +19,8 @@ import edu.caltech.ipac.table.DataObject;
 import edu.caltech.ipac.table.DataType;
 import edu.caltech.ipac.util.StringUtils;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-
-import static edu.caltech.ipac.firefly.server.db.DbAdapter.MAIN_DB_TBL;
-
 
 /**
  * Date: Jun 5, 2009
@@ -38,29 +32,20 @@ import static edu.caltech.ipac.firefly.server.db.DbAdapter.MAIN_DB_TBL;
 public class CatMasterTableQuery extends EmbeddedDbProcessor {
 
     private static final String MASTER_LOC = QueryUtil.makeUrlBase(BaseGator.DEF_HOST) + "/cgi-bin/Gator/nph-scan?mode=ascii";
-    private static final String IRSA_HOST = AppProperties.getProperty("irsa.base.url", "https://irsa.ipac.caltech.edu");
-    private static final String IRSA_BASE_URL = QueryUtil.makeUrlBase(IRSA_HOST);
 
+    static String getIrsaBaseUrl() {
+        String baseUrl = AppProperties.getProperty("irsa.base.url", "https://irsa.ipac.caltech.edu");
+        return baseUrl.contains("irsasearchops") ? "https://irsa.ipac.caltech.edu" : baseUrl;
+    }
 
     public DataGroup fetchDataGroup(TableServerRequest req) throws DataAccessException {
 
-        AtomicReference<DataGroup> dgRef = new AtomicReference<>();
-        AtomicReference<DataAccessException> exRef = new AtomicReference<>();
-        HttpServices.getData(new HttpServiceInput(MASTER_LOC), method -> {
-            if (HttpServices.isOk(method)) {
-                try {
-                    dgRef.set(IpacTableReader.read(method.getResponseBodyAsStream()));
-                } catch (IOException e) {
-                    exRef.set(new DataAccessException("Unable to parse Master Table", e));
-                }
-            } else {
-                exRef.set(new DataAccessException("Exception while fetching Master Table: " + StringUtils.toString(req.getSearchParams())));
-            }
-        });
-
-        if (exRef.get() != null) throw exRef.get();
-
-        DataGroup dg = dgRef.get();
+        IpacTableHandler handler = new IpacTableHandler();
+        HttpServices.Status status = HttpServices.getData(new HttpServiceInput(MASTER_LOC), handler);
+        if (status.isError()) {
+            throw new DataAccessException("Unable to parse Master Table", status.getException());
+        }
+        DataGroup dg = handler.results;
 
         appendHostToUrls(dg, "moreinfo", "description");
         makeIntoUrl(dg, "infourl", "info");
@@ -68,7 +53,7 @@ public class CatMasterTableQuery extends EmbeddedDbProcessor {
         return dg;
     }
 
-    protected DataGroupPart getResultSet(TableServerRequest treq, File dbFile) throws DataAccessException {
+    protected DataGroupPart getResultSet(TableServerRequest treq, DbAdapter dbAdapter) throws DataAccessException {
 
         String cols = Arrays.stream("projectshort,subtitle,description,server,catname,cols,nrows,coneradius,infourl,ddlink,pos"
                             .split(",")).map(s -> "\"" + s + "\"").collect(Collectors.joining(","));    // enclosed in quotes
@@ -76,7 +61,7 @@ public class CatMasterTableQuery extends EmbeddedDbProcessor {
 
         TableServerRequest tsr = (TableServerRequest) treq.cloneRequest();
         tsr.setInclColumns(cols.split(","));
-        return EmbeddedDbUtil.execRequestQuery(tsr, dbFile, MAIN_DB_TBL);
+        return dbAdapter.execRequestQuery(tsr, dbAdapter.getDataTable());
     }
 
     private static String getValue(DataObject row, String colName) {
@@ -117,7 +102,7 @@ public class CatMasterTableQuery extends EmbeddedDbProcessor {
             // create <a> with linkDesc
             if (!href.toLowerCase().startsWith("http")) {
                 href = href.startsWith("/") ? href : "/" + href;
-                href = IRSA_BASE_URL + href;
+                href = getIrsaBaseUrl() + href;
             }
             String url = "<a href='" + href + "' target='" + linkDesc + "'>" + linkDesc + "</a>";
             row.setDataElement(col, url);
@@ -159,7 +144,7 @@ public class CatMasterTableQuery extends EmbeddedDbProcessor {
                         String replaceStr= s.substring(start,end);
                         if (!replaceStr.toLowerCase().startsWith("http")) {
                             url = replaceStr.startsWith("/") ? replaceStr : "/" + replaceStr;
-                            url = IRSA_BASE_URL + url;
+                            url = getIrsaBaseUrl() + url;
                             retval= inStr.replace(replaceStr,url);
                         }
 

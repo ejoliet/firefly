@@ -3,155 +3,106 @@
  */
 
 
-import React, {PureComponent} from 'react';
-import PropTypes from 'prop-types';
-import {pickBy} from 'lodash';
+import React, {useEffect} from 'react';
+import PropTypes, {element, node, object, shape, string} from 'prop-types';
+import {Typography} from '@mui/joy';
+import {cloneDeep} from 'lodash/lang.js';
 
-import {flux} from '../../core/ReduxFlux.js';
-import {dispatchSetMenu, dispatchOnAppReady, getMenu,
-    isAppReady, dispatchNotifyRemoteAppReady, getSearchInfo} from '../../core/AppDataCntlr.js';
-import {getLayouInfo, SHOW_DROPDOWN, LO_VIEW} from '../../core/LayoutCntlr.js';
+import {
+    dispatchSetMenu,
+    dispatchOnAppReady,
+    dispatchNotifyRemoteAppReady,
+    getSearchInfo,
+} from '../../core/AppDataCntlr.js';
+import {getLayouInfo, LO_VIEW} from '../../core/LayoutCntlr.js';
 import {hydraManager} from './HydraManager';
-import {Menu} from '../../ui/Menu.jsx';
-import {Banner} from '../../ui/Banner.jsx';
-import {DropDownContainer} from '../../ui/DropDownContainer.jsx';
-import {getActionFromUrl} from '../../core/History.js';
 import {dispatchAddSaga} from '../../core/MasterSaga.js';
 
 import {ImageExpandedMode} from '../../visualize/iv/ImageExpandedMode.jsx';
 import {TablesContainer} from '../../tables/ui/TablesContainer.jsx';
 import {ChartsContainer} from '../../charts/ui/ChartsContainer.jsx';
-import {warningDivId} from '../../ui/LostConnection';
 import {startTTFeatureWatchers} from '../common/ttFeatureWatchers.js';
 import {dispatchSetLayoutMode, LO_MODE} from '../../core/LayoutCntlr';
-import {} from '../../core/AppDataCntlr';
 import {getExpandedChartProps} from '../../charts/ChartsCntlr.js';
 import {DEFAULT_PLOT2D_VIEWER_ID} from '../../visualize/MultiViewCntlr.js';
+import App from 'firefly/ui/App.jsx';
+import {Slot, useStoreConnector} from 'firefly/ui/SimpleComponent.jsx';
+import {makeMenuItems, SearchPanel} from 'firefly/ui/SearchPanel.jsx';
+import {LandingPage} from 'firefly/templates/fireflyviewer/LandingPage.jsx';
+import {Stacker} from 'firefly/ui/Stacker.jsx';
+import {setIf as setIfUndefined} from 'firefly/util/WebUtil.js';
+import {handleInitialAppNavigation} from 'firefly/templates/common/FireflyLayout';
 
 
-export {META_VIEWER_ID as IMAGE_DATA_VIEWER_ID } from '../../visualize/MultiViewCntlr';
-
-/**
+/*
  * This is a viewer.
  */
-export class HydraViewer extends PureComponent {
+export function HydraViewer({menu, appTitle= 'Time Series Viewer', slotProps, ...props}) {
 
-    constructor(props) {
-        super(props);
-        this.state = this.getNextState();
 
+    useEffect(() => {
         dispatchAddSaga(hydraManager);
         startTTFeatureWatchers();
-    }
-
-    getNextState() {
-        const menu = getMenu();
-        const layoutInfo = getLayouInfo();
-        const searchInfo = getSearchInfo();
-        const isReady = isAppReady();
-
-        return Object.assign({}, this.props,
-            {menu, isReady, searchInfo, layoutInfo});
-    }
-
-    componentDidMount() {
-        dispatchOnAppReady((state) => {
-            onReady({state, menu: this.props.menu});
-            dispatchNotifyRemoteAppReady();
+        dispatchOnAppReady(() => {
+            onReady(menu, appTitle);
         });
-        this.removeListener = flux.addListener(() => this.storeUpdate());
-    }
+    }, []);
 
-    componentWillUnmount() {
-        this.isUnmounted = true;
-        this.removeListener && this.removeListener();
-    }
+    const mSlotProps = applyLayoutFix({slotProps, props});
 
-    storeUpdate() {
-        if (!this.isUnmounted) {
-            this.setState(this.getNextState());
-        }
-    }
+    // defaultView is used when the requested view does not match any of the predefined views in dropdown.
+    // with Hydra's SearchPanel, component(view) are defined by a search's renderer, i.g. renderStandardView
+    // this is a convenience way to direct all undefined requests to SearchPanel.
+    setIfUndefined(mSlotProps,'dropdown.defaultView', <SearchPanel/>);
 
-    render() {
-        const {appTitle, appIcon, altAppIcon, footer, dropdownPanels=[], style, bannerLeftStyle, bannerMiddleStyle} = this.props;
-        const {menu, layoutInfo={}} = this.state;
-        const {dropDown} = layoutInfo;
-        const {visible, view, initArgs} = dropDown || {};
-
-        return (
-            <div id='App' className='rootStyle' style={style}>
-                <header>
-                    <BannerSection {...{menu, appTitle, appIcon, altAppIcon, bannerLeftStyle, bannerMiddleStyle}}/>
-                    <div id={warningDivId} data-decor='full' className='warning-div center'/>
-                    <DropDownContainer
-                        key='dropdown'
-                        footer={footer}
-                        visible={!!visible}
-                        selected={view}
-                        initArgs={initArgs}
-                        {...{dropdownPanels} } />
-                </header>
-                <main style={{position: 'relative', padding: 0}}>
-                    <div style={{display: 'flex', position: 'relative', flexGrow: 1}}>
-                        <ResultSection layoutInfo={layoutInfo}/>
-                    </div>
-                </main>
-            </div>
-        );
-    }
+    return (
+        <App slotProps={mSlotProps} {...props}>
+            <ResultSection slotProps={mSlotProps}/>
+        </App>
+    );
 }
 
 /**
  * menu is an array of menu items {label, action, icon, desc, type}.
  * dropdownPanels is an array of additional react elements which are mapped to a menu item's action.
- * @type {{title: *, menu: *, appTitle: *, appIcon: *, altAppIcon: *, dropdownPanels: *, views: *}}
+ * @type {{title: *, menu: *, appTitle: *, appIcon: *, dropdownPanels: *, views: *}}
  */
 HydraViewer.propTypes = {
     title: PropTypes.string,
     menu: PropTypes.arrayOf(PropTypes.object),
     appTitle: PropTypes.string,
-    appIcon: PropTypes.string,
-    altAppIcon: PropTypes.string,
+    appIcon: PropTypes.element,
     footer: PropTypes.element,
     dropdownPanels: PropTypes.arrayOf(PropTypes.element),
     style: PropTypes.object,
     hasCoverage: PropTypes.bool,
-    hasDataProduct: PropTypes.bool
+    hasDataProduct: PropTypes.bool,
+    slotProps: shape({
+        drawer: object,         // use 'component' to define the drawer's ElementType.  the rest will be passed as drawer's props
+        banner: object,
+        dropdown: object,
+        landing: object
+    })
 };
 
-HydraViewer.defaultProps = {
-    appTitle: 'Time Series Viewer'
-};
+function onReady(menu, appTitle) {
+    dispatchSetMenu({menuItems: makeMenuItems(menu)});
 
-function onReady({menu}) {
-    if (menu) {
-        dispatchSetMenu({menuItems: menu});
-    }
     const {hasImages, hasTables, hasXyPlots} = getLayouInfo();
     if (!(hasImages || hasTables || hasXyPlots)) {
-        const goto = getActionFromUrl() || {type: SHOW_DROPDOWN};
-        if (goto) flux.process(goto);
+        handleInitialAppNavigation({menu, appTitle, defaultToShowDropdown: true});
     }
     dispatchNotifyRemoteAppReady();
 }
 
+function ResultSection({slotProps}) {
 
-function BannerSection(props) {
-    const {menu, ...rest} = pickBy(props);
-    return (
-        <Banner key='banner'
-                menu={<Menu menu={menu} /> }
-            {...rest}
-        />
-    );
-}
+    const layoutInfo = useStoreConnector(getLayouInfo);
+    const {showImages, showXyPlots, showTables} = layoutInfo;
 
-BannerSection.propTypes = {
-    props: PropTypes.object
-};
+    if (!(showImages || showXyPlots || showTables)) return <Slot component={HydraLanding} slotProps={slotProps?.landing}/>;
 
-function ResultSection({layoutInfo}) {
+
     const {currentSearch, images} = layoutInfo;
     const {expanded=LO_VIEW.none} = layoutInfo.mode || {};
 
@@ -199,4 +150,41 @@ function showExpandedView ({expanded}) {
 
 function closeExpanded() {
     dispatchSetLayoutMode(LO_MODE.expanded, LO_VIEW.none);
+}
+
+export function HydraLanding({icon, title, desc, slotProps={}, ...props} ) {
+
+    const Greetings = () => (
+        <Stacker startDecorator={icon} direction='column' alignItems='start'>
+            <Typography level='h4'>{title || 'Welcome message here'}</Typography>
+            <Typography level='body-md'>{desc || 'Additional description of this application'}</Typography>
+        </Stacker>
+    );
+
+    const mSlotProps = cloneDeep(slotProps || {});
+    setIfUndefined(mSlotProps,'bgMonitorHint.sx.right', 50);
+    setIfUndefined(mSlotProps,'topSection.component', Greetings);      // use custom topSection
+    setIfUndefined(mSlotProps,'contentSection.sx', {maxWidth: '80em', mx: 'auto'});   // limit page's width
+
+    return <LandingPage slotProps={mSlotProps} {...props}/>;
+}
+
+HydraLanding.propTypes = {
+    icon: element,
+    title: string,
+    desc: node,
+    ...LandingPage.propTypes,
+};
+
+
+export function applyLayoutFix({slotProps, props}) {
+    const mSlotProps = cloneDeep(slotProps || {});
+
+    // adjust banner for appIcon
+    setIfUndefined(mSlotProps,'banner.slotProps.icon.style.marginTop', -40); //won't take precedence if defined in sx
+    setIfUndefined(mSlotProps,'banner.slotProps.icon.sx', {color: 'primary.softActiveColor'}); //same as active tab's font color
+    setIfUndefined(mSlotProps,'banner.slotProps.tabs.pl', '120px');
+
+    setIfUndefined(mSlotProps,'landing.title', props?.appTitle);
+    return mSlotProps;
 }

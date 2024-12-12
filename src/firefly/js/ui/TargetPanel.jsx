@@ -2,9 +2,10 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {memo, useEffect} from 'react';
-import PropTypes from 'prop-types';
-import {get} from 'lodash';
+import {Box, Divider, Stack} from '@mui/joy';
+import React, {memo, useContext, useEffect} from 'react';
+import PropTypes, {arrayOf, object, bool, string, shape} from 'prop-types';
+import {ConnectionCtx} from './ConnectionCtx.js';
 import {parseTarget} from './TargetPanelWorker.js';
 import {formatPosForTextField, formatTargetForHelp} from './PositionFieldDef.js';
 import {TargetFeedback} from './TargetFeedback.jsx';
@@ -18,49 +19,60 @@ import {isValidPoint, parseWorldPt} from '../visualize/Point.js';
 
 const TARGET= 'targetSource';
 const RESOLVER= 'resolverSource';
-const LABEL_DEFAULT='Coordinates or Object Name:';
+const LABEL_DEFAULT='Coordinates or Object Name';
 
 const nedThenSimbad= 'nedthensimbad';
 const simbadThenNed= 'simbadthenned';
 
 const TargetPanelView = (props) =>{
-    const {showHelp, feedback, valid, message, onChange, value,
-        labelWidth, children, resolver, feedbackStyle, showResolveSourceOp= true, showExample= true,
-        examples, label= LABEL_DEFAULT, onUnmountCB}= props;
+    const {showHelp, feedback, valid, message, onChange, value, button, slotProps,
+        children, resolver, showResolveSourceOp= true, showExample= true,
+        label= LABEL_DEFAULT,
+        targetPanelExampleRow1, targetPanelExampleRow2,
+        connectedMarker=false, placeholderHighlight=true,
+        examples, onUnmountCB, sx}= props;
 
     useEffect(() => () => onUnmountCB(props),[]);
+    const connectContext= useContext(ConnectionCtx);
+
+    const endDecorator= makeEndDecorator(showResolveSourceOp,onChange,resolver,button);
 
     const positionField = (
-        <InputFieldView valid={valid} visible= {true} message={message}
-            onChange={(ev) => onChange(ev.target.value, TARGET)}
-            label={label} value={value} tooltip='Enter a target'
-            labelWidth={labelWidth} labelStyle={{paddingRight:'45px'}}
+        <InputFieldView {...{valid, visible:true, message,
+            placeholder:label,
+            onChange: (ev) => onChange(ev.target.value, TARGET),
+            endDecorator,
+            sx : makeSx(showResolveSourceOp, Boolean(button),sx),
+            value,
+            tooltip:'Enter a target',
+            slotProps: {
+                input: {
+                    sx: {
+                        '--Input-placeholderColor': placeholderHighlight ?
+                            'var(--joy-palette-warning-plainColor)' : 'inherit'
+                    }
+                }
+            },
+            connectedMarker:connectedMarker||connectContext.controlConnected,
+            }}
         />);
     const positionInput = children ? (<div style={{display: 'flex'}}>{positionField} {children}</div>) : positionField;
 
+
+
     return (
-        <div>
-            <div style= {{display: 'flex'}}>
-                {positionInput}
-                {showResolveSourceOp &&
-                <ListBoxInputFieldView
-                    options={[
-                        {label: 'Try NED then Simbad', value: nedThenSimbad},
-                        {label: 'Try Simbad then NED', value: simbadThenNed}
-                    ]}
-                    onChange={(ev) => onChange(ev.target.value, RESOLVER)}
-                    value={resolver} multiple={false}
-                    tooltip='Select which name resolver' label='' labelWidth={3} wrapperStyle={{}}
-                />}
-            </div>
-            {(showExample || !showHelp) && <TargetFeedback {...{showHelp, feedback, style:feedbackStyle, examples}}/> }
-        </div>
+        <Stack direction='column'>
+            {positionInput}
+            {(showExample || !showHelp) && <TargetFeedback {...{showHelp, feedback,
+                targetPanelExampleRow1, targetPanelExampleRow2, examples, ...slotProps?.feedback}}/> }
+        </Stack>
     );
 };
 
 
 TargetPanelView.propTypes = {
     label : PropTypes.string,
+    sx: PropTypes.object,
     valid   : PropTypes.bool.isRequired,
     showHelp   : PropTypes.bool.isRequired,
     feedback: PropTypes.string.isRequired,
@@ -69,14 +81,55 @@ TargetPanelView.propTypes = {
     message: PropTypes.string.isRequired,
     onChange: PropTypes.func.isRequired,
     value : PropTypes.string.isRequired,
-    labelWidth : PropTypes.number,
     onUnmountCB : PropTypes.func,
-    feedbackStyle: PropTypes.object,
     nullAllowed: PropTypes.bool,
     showResolveSourceOp: PropTypes.bool,
-    showExample: PropTypes.bool
+    targetPanelExampleRow1: PropTypes.arrayOf(PropTypes.string),
+    targetPanelExampleRow2: PropTypes.arrayOf(PropTypes.string),
+    connectedMarker: bool,
+    showExample: PropTypes.bool,
+    slotProps: shape({
+        feedback: object,
+    })
 };
 
+function makeEndDecorator(showResolveSourceOp, onChange, resolver, button) {
+    const resolverOp=
+        showResolveSourceOp?
+            (<ListBoxInputFieldView
+                options={[
+                    {label: 'Try NED then Simbad', value: nedThenSimbad},
+                    {label: 'Try Simbad then NED', value: simbadThenNed}
+                ]}
+                slotProps={{
+                    input: {
+                        variant:'plain',
+                        sx:{minHeight:'unset'}
+                        // sx:{'&:hover': { bgcolor: 'transparent' } }
+                    }
+                }}
+                onChange={(ev,newValue) => onChange(newValue, RESOLVER)}
+                value={resolver} multiple={false}
+                tooltip='Select which name resolver' label=''  />) : undefined;
+
+    if  (resolverOp || button) {
+        return (
+            <Stack direction='row' alignItems='center'>
+                {Boolean(resolverOp) && <Divider orientation='vertical'/>}
+                {resolverOp}
+                {Boolean(button) && <Divider orientation='vertical' />}
+                {Boolean(button) && <Box sx={{ml:1/2}}>{button}</Box>}
+            </Stack>);
+    }
+    return undefined;
+}
+
+function makeSx(useResolver, useButton, sx) {
+    const minWidth='32rem';
+    return (useResolver && !useButton) ?
+        { minWidth, '& .MuiInput-root':{ 'paddingInlineEnd': 0}, ...sx} :
+        {minWidth,...sx};
+}
 
 function didUnmount(fieldKey,groupKey, props) {
     const wp= parseWorldPt(FieldGroupUtils.getFldValue(FieldGroupUtils.getGroupFields(groupKey),fieldKey));
@@ -129,8 +182,7 @@ function handleOnChange(value, source, params, fireValueChange) {
 }
 
 /**
- * make a payload and update the active target
- * Note- this function has as side effect to fires an action to update the active target
+ * Make a payload and update the active target, Note: this function has as side effect to fires an action to update the active target
  * @param displayValue
  * @param parseResults
  * @param resolvePromise
@@ -156,67 +208,69 @@ function makePayloadAndUpdateActive(displayValue, parseResults, resolvePromise, 
 }
 
 
-function replaceValue(v,defaultToActiveTarget) {
+function replaceValue(v,defaultToActiveTarget, computedState) {
     if (!defaultToActiveTarget) return v;
-    const t= getActiveTarget();
-    let retVal= v;
-    if (t && t.worldPt) {
-       if (get(t,'worldPt')) retVal= t.worldPt.toString();
-    }
-    return retVal;
+    if ((computedState.displayValue || computedState.message) && !computedState.valid) return '';
+    return getActiveTarget()?.worldPt?.toString() ?? v;
 }
 
 
+export const DEF_TARGET_PANEL_KEY= 'UserTargetWorldPt';
 
 
-export const TargetPanel = memo( ({fieldKey= 'UserTargetWorldPt',initialState= {},
+export const TargetPanel = memo( ({fieldKey= DEF_TARGET_PANEL_KEY,initialState= {},
                                        defaultToActiveTarget= true, ...restOfProps}) => {
     const {viewProps, fireValueChange, groupKey}=  useFieldGroupConnector({
                                 fieldKey, initialState,
-                                confirmValueOnInit: (v) => replaceValue(v,defaultToActiveTarget)});
+                                confirmValueOnInit: (v, props,initialState,computedState) => replaceValue(v,defaultToActiveTarget,computedState)});
     const newProps= computeProps(viewProps, restOfProps, fieldKey, groupKey);
     return ( <TargetPanelView {...newProps}
                               onChange={(value,source) => handleOnChange(value,source,newProps, fireValueChange)}/>);
 });
 
-
-
 TargetPanel.propTypes = {
-    fieldKey: PropTypes.string,
-    groupKey: PropTypes.string,
-    examples: PropTypes.object,
-    labelWidth : PropTypes.number,
-    nullAllowed: PropTypes.bool,
-    initialState: PropTypes.object,
-    showResolveSourceOp: PropTypes.bool,
-    showExample: PropTypes.bool,
-    defaultToActiveTarget: PropTypes.bool,
+    sx: object,
+    fieldKey: string,
+    groupKey: string,
+    examples: object,
+    nullAllowed: bool,
+    initialState: object,
+    showResolveSourceOp: bool,
+    targetPanelExampleRow1: arrayOf(PropTypes.string),
+    targetPanelExampleRow2: arrayOf(PropTypes.string),
+    showExample: bool,
+    connectedMarker: bool,
+    placeholderHighlight: bool,
+    defaultToActiveTarget: bool,
 };
 
 
 function computeProps(viewProps, componentProps, fieldKey, groupKey) {
 
-    let feedback= viewProps.feedback|| '';
-    let value= viewProps.displayValue;
-    let showHelp= get(viewProps,'showHelp', true);
-    const resolver= viewProps.resolver || nedThenSimbad;
-    const wpStr= viewProps.value;
-    const wp= parseWorldPt(wpStr);
+    let feedback;
+    let value;
+    let showHelp;
+    const wp= parseWorldPt(viewProps.value);
 
-    if (isValidPoint(wp) && !value) {
+    if (isValidPoint(wp) && !viewProps.displayValue) {
         feedback= formatTargetForHelp(wp);
         value= wp.objName || formatPosForTextField(wp);
         showHelp= false;
+    }
+    else {
+        value= viewProps.displayValue;
+        feedback= viewProps.feedback|| '';
+        showHelp= viewProps?.showHelp ?? true;
     }
 
     return {
         ...viewProps,
         visible: true,
-        label: 'Coordinates or Object Name:',
+        label: 'Coordinates or Object Name',
         tooltip: 'Enter a target',
         value,
         feedback,
-        resolver,
+        resolver: viewProps.resolver ?? nedThenSimbad,
         showHelp,
         onUnmountCB: (props) => didUnmount(fieldKey,groupKey,props),
         ...componentProps};

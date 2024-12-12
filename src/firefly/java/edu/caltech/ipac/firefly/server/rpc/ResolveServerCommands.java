@@ -21,8 +21,6 @@ import org.json.simple.JSONObject;
 
 import java.io.File;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 import static edu.caltech.ipac.firefly.server.servlets.AnyFileUpload.ANALYZER_ID;
 
@@ -75,15 +73,31 @@ public class ResolveServerCommands {
 
             try {
                 HorizonsEphPairs.HorizonsResults[] horizons_results = TargetNetwork.getEphInfo(sp.getRequired(ServerParams.OBJ_NAME));
+                String naifIdFormat = sp.getOptional(ServerParams.NAIFID_FORMAT, "");
 
-                Map<String, Integer> values = new HashMap<>();
+                JSONArray dataAry= new JSONArray();
                 for (HorizonsEphPairs.HorizonsResults element : horizons_results) {
-                    values.put(element.getName(), Integer.parseInt(element.getNaifID()));
+                    String naifID = element.getNaifID();
+
+                    if (naifIdFormat.equals("7digit") && naifID.length() > 7) {
+                        for (String alias : element.getAliases()) {
+                            try {
+                                Integer.parseInt(alias);
+                                if (naifID.equals(alias.charAt(0) + "0" + alias.substring(1))) {
+                                    naifID = alias;
+                                    break;
+                                }
+                            } catch (NumberFormatException ignore) { }
+                        }
+                    }
+
+                    JSONObject dataObj = new JSONObject();
+                    dataObj.put("name", element.getName());
+                    dataObj.put("naifID", Integer.parseInt(naifID));
+                    dataAry.add(dataObj);
                 }
 
-                JSONObject naifids = new JSONObject(values);
-
-                result.put("data", naifids);
+                result.put("data", dataAry);
                 result.put("success", true);
                 wrapperAry.add(result);
 

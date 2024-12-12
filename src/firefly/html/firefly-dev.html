@@ -35,7 +35,7 @@
                 targetPanelExampleRow1: [`'m82'`, `'ngc 12'`, `'12.22 34.222`, `'46.222-0.222 gal'`],
                 targetPanelExampleRow2: [`'19h22m22s 11d22m22s equ j2000'`],
                 MenuItemKeys: {maskOverlay:true},
-                catalogSpacialOp: 'polygonWhenPlotExist',
+                catalogSpatialOp: 'polygonWhenPlotExist',
                 workspace : {showOptions: true},
                 imageMasterSourcesOrder: ['WISE', '2MASS', 'Spitzer'],
                 // wcsMatchType: 'Standard',  // 'Standard', 'Target', 'Pixel', 'PixelCenter'
@@ -58,6 +58,8 @@
                     defaultColorTable : 5
                 },
                 tapObsCore: {
+                    productTitleTemplate: '${obs_collection}-${instrument_name}: ${obs_id}',
+                    enableObsCoreDownload: true,
                     filterDefinitions: [
                         {
                             name: 'LSSTCam',
@@ -243,9 +245,9 @@
     <script  type="text/javascript" src="firefly_loader.js"></script>
 </head>
 
-<body style="margin: 0px;">
+<body style="margin: 0">
 <!-- attached location for firefly app -->
-<div id='app'/>
+<div id='app' style="width:100vw;height: 100vh"/>
 
 
 

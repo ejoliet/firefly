@@ -7,9 +7,9 @@ import ImagePlotCntlr, {visRoot} from '../visualize/ImagePlotCntlr.js';
 import {makeDrawingDef} from '../visualize/draw/DrawingDef.js';
 import DrawLayer, {ColorChangeType}  from '../visualize/draw/DrawLayer.js';
 import CsysConverter from '../visualize/CsysConverter.js';
+import {getTopmostVisiblePoint} from '../visualize/WebPlotAnalysis';
 import {makeWorldPt, makeScreenPt, makeDevicePt} from '../visualize/Point.js';
 import {primePlot, getPlotViewById} from '../visualize/PlotViewUtil.js';
-import {getTopmostVisiblePoint} from '../visualize/VisUtil.js';
 import {makeFactoryDef} from '../visualize/draw/DrawLayerFactory.js';
 import {makeDirectionArrowDrawObj} from '../visualize/draw/DirectionArrowDrawObj.js';
 import {getPixScaleDeg} from '../visualize/WebPlot.js';
@@ -49,7 +49,7 @@ function creator() {
         hasPerPlotData:true,
         isPointData:false,
         canUserChangeColor: ColorChangeType.DYNAMIC,
-        destroyWhenAllDetached: true
+        destroyWhenAllDetached: false
     };
 
     const id = `${ID}-${idCnt}`;
@@ -57,7 +57,7 @@ function creator() {
         callback:relocateCompass,
         params: {id},
         actions:[ImagePlotCntlr.RECENTER, ImagePlotCntlr.PROCESS_SCROLL, ImagePlotCntlr.ZOOM_IMAGE,
-                 ImagePlotCntlr.ZOOM_IMAGE_START, ImagePlotCntlr.ROTATE, ImagePlotCntlr.FLIP]
+                 ImagePlotCntlr.ZOOM_HIPS, ImagePlotCntlr.ROTATE, ImagePlotCntlr.FLIP]
     });
     return DrawLayer.makeDrawLayer( id, TYPE_ID, selHelpText,
                                     options, drawingDef, actionTypes);
@@ -83,7 +83,7 @@ function makeCompass(plotId){
     // const dist = 60;
     const px = 30;
 
-    let sptStart= cc.getScreenCoords(getTopmostVisiblePoint(plot,pv.viewDim, 55, 75));
+    let sptStart= cc.getScreenCoords(getTopmostVisiblePoint(plot,pv.viewDim, 55, 120));
     if (!sptStart) return null;
 
 

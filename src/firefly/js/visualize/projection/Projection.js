@@ -2,24 +2,21 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {get} from 'lodash';
-import {clone} from '../../util/WebUtil.js';
-import {makeImagePt, makeProjectionPt, makeWorldPt} from '../Point.js';
-import {computeDistance} from '../VisUtil.js';
-import {CoordinateSys} from '../CoordSys.js';
-import {AitoffProjection} from './AitoffProjection.js';
-import {NCPProjection} from './NCPProjection.js';
-import {ARCProjection} from './ARCProjection.js';
-import {GnomonicProjection} from './GnomonicProjection.js';
-import {SansonFlamsteedProjection } from './SansonFlamsteedProjection.js';
-import {LinearProjection} from './LinearProjection.js';
-import {CartesianProjection} from './CartesianProjection.js';
-import {OrthographicProjection} from './OrthographicProjection.js';
-import {CylindricalProjection} from './CylindricalProjection.js';
-import {PlateProjection} from './PlateProjection.js';
-import {TpvProjection} from './TpvProjection.js';
 import {Projection as AladinProjection} from '../../externalSource/aladinProj/AladinProjections.js';
-
+import {CoordinateSys} from '../CoordSys.js';
+import {makeImagePt, makeProjectionPt, makeWorldPt} from '../Point.js';
+import {computeDistance, convertAngle, isAngleUnit} from '../VisUtil.js';
+import {AitoffProjection} from './AitoffProjection.js';
+import {ARCProjection} from './ARCProjection.js';
+import {CartesianProjection} from './CartesianProjection.js';
+import {CylindricalProjection} from './CylindricalProjection.js';
+import {GnomonicProjection} from './GnomonicProjection.js';
+import {LinearProjection} from './LinearProjection.js';
+import {NCPProjection} from './NCPProjection.js';
+import {OrthographicProjection} from './OrthographicProjection.js';
+import {PlateProjection} from './PlateProjection.js';
+import {SansonFlamsteedProjection} from './SansonFlamsteedProjection.js';
+import {TpvProjection} from './TpvProjection.js';
 
 
 const unspecifiedProject= () => null;
@@ -41,7 +38,10 @@ export const UNRECOGNIZED = 1999; // TESTED
 
 
 
-export const ALADIN_SIN     = 5;
+export const HIPS_SIN     = 5;
+export const HIPS_AITOFF  = 6;
+export const HIPS_DATA_WIDTH = 10000000000;
+export const HIPS_DATA_HEIGHT = 10000000000;
 
 
 
@@ -139,21 +139,29 @@ const projTypes= {
 		wrapping : false
 	},
 
-    [ALADIN_SIN] : {
-        name: 'ALADIN_SIN',
-        fwdProject : fwdAladinSinProject,
-        revProject : revAladinSinProject,
-        implemented : true,
+    [HIPS_SIN] : {
+        name: 'HIPS_SIN',
+		fwdProject : (x, y, header) => fwdHiPSProjection(AladinProjection.PROJ_SIN,x,y,header),
+		revProject : (ra, dec, header) => revHiPSProjection(AladinProjection.PROJ_SIN, ra,dec,header),
+		implemented : true,
         wrapping : false,
     },
+
+	[HIPS_AITOFF] : {
+		name: 'HIPS_AITOFF',
+		fwdProject : (x, y, header) => fwdHiPSProjection(AladinProjection.PROJ_AITOFF,x,y,header),
+		revProject : (ra, dec, header) => revHiPSProjection(AladinProjection.PROJ_AITOFF, ra,dec,header),
+		implemented : true,
+		wrapping : true,
+	},
 
 
 };
 
 
-const translateProjectionName= (maptype) => get(projTypes, [maptype,'name'],'UNRECOGNIZED');
-const isImplemented= (header) => get(projTypes, [header.maptype, 'implemented'],false);
-const isWrappingProjection= (header) => get(projTypes, [header.maptype, 'wrapping'],false);
+const translateProjectionName= (maptype) => projTypes[maptype]?.name ?? 'UNRECOGNIZED';
+const isImplemented= (header) => projTypes[header.maptype]?.implemented ?? false;
+const isWrappingProjection= (header) => projTypes[header.maptype]?.wrapping ?? false;
 
 
 
@@ -201,16 +209,15 @@ export class Projection {
 	 *
      *
 	 * @prop {object} header
-	 * @prop {number} scale1
-	 * @prop {number} scale2
+	 * @prop {number} pixelScaleDeg
 	 * @prop {number} pixelScaleArcSec
 	 * @prop {CoordinateSys} coordSys
 	 * @public
 	 */
     constructor(header, coordSys)  {
-        this.header= clone(header);
-        this.coordSys= coordSys;
-        const {crpix1,crpix2, cdelt1}= header;
+        this.header = {...header};
+        this.coordSys = coordSys;
+        const {crpix1, crpix2, cdelt1, cunit1} = header;
         if (!cdelt1 && crpix1 && crpix2) {
             const projCenter = this.getWorldCoords(crpix1 - 1, crpix2 - 1);
             const oneToRight = this.getWorldCoords(crpix1, crpix2 - 1);
@@ -221,8 +228,15 @@ export class Projection {
             }
 
         }
-        this.pixelScaleDeg = Math.abs(this.header.cdelt1);
-        this.pixelScaleArcSec = this.pixelScaleDeg * 3600.0;
+		if (coordSys.isCelestial()) {
+			// celestial coordinate systems must have degree as a unit
+			this.pixelScaleDeg = Math.abs(this.header.cdelt1);
+		} else if (isAngleUnit(cunit1)) {
+			this.pixelScaleDeg = convertAngle(cunit1, 'deg', Math.abs(this.header.cdelt1));
+		} else {
+			this.pixelScaleDeg = NaN;
+		}
+		this.pixelScaleArcSec = this.pixelScaleDeg * 3600.0;
     }
 
 	/**
@@ -248,7 +262,7 @@ export class Projection {
 	 * @return {ImagePt}
 	 * @public
 	 */
-    getImageCoords(ra, dec) { return getImageCoordsInternal(ra, dec, this.header, false); }
+    getImageCoords(ra, dec) { return getImageCoordsInternal(ra, dec, this.header); }
 
 	/**
 	 * @summary convert from a image point to a world point
@@ -257,7 +271,7 @@ export class Projection {
 	 * @return {WorldPt}
 	 * @public
 	 */
-	getWorldCoords( x, y) { return getWorldCoordsInternal(x, y, this.header, this.coordSys, false); }
+	getWorldCoords( x, y) { return getWorldCoordsInternal(x, y, this.header, this.coordSys); }
 
 	/**
 	 * @return {boolean} true, if this projection is implemented
@@ -293,12 +307,11 @@ export function makeProjectionNew(header, csys) {
 }
 
 
-function fwdAladinSinProject(x, y, header) {
+function fwdHiPSProjection(aProj, x, y, header) {
 
     const widthHalf = header.crpix1;
     const heightHalf = header.crpix2;
     const yshift = 20;
-
     const height = header.crpix2 * 2;
     const yFlip = height - y;
 
@@ -308,34 +321,47 @@ function fwdAladinSinProject(x, y, header) {
     else if (pX === 1) pX = .99;
     const pY = (yFlip - heightHalf) / (heightHalf + yshift);
 
-
-    const p = new AladinProjection(header.crval1, header.crval2);
-    p.setProjection(AladinProjection.PROJ_SIN);
-    try {
-        const pt = p.unproject(pX, pY);
-        if (!pt) return null;
-        const retPt = makeProjectionPt(pt.ra, pt.dec);
-        return retPt;
+	try {
+        const pt = new AladinProjection(aProj, header.crval1, header.crval2).unproject(pX, pY);
+        return pt ? makeProjectionPt(pt.ra, pt.dec) : undefined;
     } catch (e) {
-        return null;
+        return undefined;
     }
 }
 
-function revAladinSinProject(ra, dec,  header) {
-        const widthHalf= header.crpix1;
-        const heightHalf= header.crpix2;
-        const width= header.crpix1*2;
-        const height= header.crpix2*2;
-        const yshift= 20;
+function revHiPSProjection(aProj, ra, dec,  header) {
+	const widthHalf= header.crpix1;
+	const heightHalf= header.crpix2;
+	const height= header.crpix2*2;
+	const yshift= 20;
 
-        const p= new AladinProjection(header.crval1, header.crval2);
-        p.setProjection(AladinProjection.PROJ_SIN);
-        const pt= p.project(ra,dec);
-        if (!pt) return null;
-        const x= pt.X;
-        const y= pt.Y;
+	const pt= new AladinProjection(aProj, header.crval1, header.crval2).project(ra,dec);
+	if (!pt) return undefined;
+	const {x, y}= pt;
 
-        const imX= x*widthHalf +widthHalf;
-        const imY= y*(heightHalf+yshift) + heightHalf;
-        return makeImagePt(  imX, height - imY);
+	const imX= x*widthHalf +widthHalf;
+	const imY= y*(heightHalf+yshift) + heightHalf;
+	return makeImagePt(  imX, height - imY);
+}
+
+
+/**
+ *
+ * @param {CoordinateSys} coordinateSys
+ * @param lon
+ * @param lat
+ * @param {boolean} fullSky
+ * @return {Projection}
+ */
+export function makeHiPSProjection(coordinateSys, lon = 0, lat = 0, fullSky = false) {
+	const header = {
+		cdelt1: 180 / HIPS_DATA_WIDTH,
+		cdelt2: 180 / HIPS_DATA_HEIGHT,
+		maptype: fullSky ? HIPS_AITOFF : HIPS_SIN,
+		crpix1: HIPS_DATA_WIDTH * .5,
+		crpix2: HIPS_DATA_HEIGHT * .5,
+		crval1: lon,
+		crval2: lat
+	};
+	return makeProjection({header, coorindateSys: coordinateSys.toString()});
 }

@@ -4,14 +4,16 @@
 
 import {take, fork} from 'redux-saga/effects';
 import {filter} from 'lodash';
+import {getAppOptions} from '../../core/AppDataCntlr.js';
 
 import {LO_VIEW, SHOW_DROPDOWN, SET_LAYOUT_MODE, getLayouInfo, dispatchUpdateLayoutInfo, dropDownManager} from '../../core/LayoutCntlr.js';
-import {smartMerge} from '../../tables/TableUtil.js';
+import {getTblById, smartMerge} from '../../tables/TableUtil.js';
 import {TBL_RESULTS_ADDED, TABLE_LOADED, TABLE_REMOVE, TBL_RESULTS_ACTIVE, TBL_RESULTS_REMOVE} from '../../tables/TablesCntlr.js';
 import {CHART_ADD, CHART_REMOVE} from '../../charts/ChartsCntlr.js';
 
 import ImagePlotCntlr from '../../visualize/ImagePlotCntlr.js';
 import {REPLACE_VIEWER_ITEMS} from '../../visualize/MultiViewCntlr.js';
+import {MetaConst} from 'firefly/data/MetaConst';
 
 /**
  * this manager manages what main components get display on the screen.
@@ -22,7 +24,7 @@ import {REPLACE_VIEWER_ITEMS} from '../../visualize/MultiViewCntlr.js';
  * @param {string} [p.title] title to display
  * @param {string} [p.views] defaults to tri-view if not given.
  */
-export function* layoutManager({title, views='tables | images | xyPlots'}) {
+export function* layoutManager({title, views='tables | images | xyplots', apiHandlesExpanded}) {
     views = LO_VIEW.get(views) || LO_VIEW.none;
 
     yield fork(dropDownManager);        // start the dropdown manager
@@ -50,13 +52,13 @@ export function* layoutManager({title, views='tables | images | xyPlots'}) {
          * @prop {string}   layoutInfo.images.showCoverage  show images coverage tab
          * @prop {string}   layoutInfo.images.showFits  show images fits data tab
          * @prop {string}   layoutInfo.images.showMeta  show images image metea tab
-         * @prop {string}   layoutInfo.images.coverageLockedOn
          */
         var layoutInfo = getLayouInfo();
         var newLayoutInfo = layoutInfo;
 
-        newLayoutInfo = onAnyAction(newLayoutInfo, action, views);
+        newLayoutInfo = onAnyAction(newLayoutInfo, action, views, apiHandlesExpanded);
         // newLayoutInfo = dropDownHandler(newLayoutInfo, action);     // replaced with manager up above
+        if (!newLayoutInfo.coverageSide) newLayoutInfo.coverageSide= getAppOptions()?.triViewCoverageSide;
 
         if (newLayoutInfo !== layoutInfo) {
             dispatchUpdateLayoutInfo(newLayoutInfo);
@@ -64,7 +66,7 @@ export function* layoutManager({title, views='tables | images | xyPlots'}) {
     }
 }
 
-function onAnyAction(layoutInfo, action, views) {
+function onAnyAction(layoutInfo, action, views, apiHandlesExpanded) {
     var {mode, hasXyPlots, hasTables, showImages, showXyPlots, showTables, autoExpand} = layoutInfo;
     var {expanded=LO_VIEW.none, standard=views} = mode || {};
 
@@ -77,10 +79,16 @@ function onAnyAction(layoutInfo, action, views) {
     const closeable = count > 1;
 
     switch (action.type) {
-        case TABLE_REMOVE:
         case TBL_RESULTS_ADDED:
-        case TBL_RESULTS_REMOVE:
         case TABLE_LOADED:
+        case TBL_RESULTS_ACTIVE:
+            const tbl = getTblById(action.payload.tbl_id);
+            if (tbl?.request?.META_INFO?.[MetaConst.UPLOAD_TABLE]) {
+                return layoutInfo;
+            }
+            //intentional fallthrough
+        case TABLE_REMOVE:
+        case TBL_RESULTS_REMOVE:
         case REPLACE_VIEWER_ITEMS:
         case ImagePlotCntlr.PLOT_IMAGE_START :
         case ImagePlotCntlr.DELETE_PLOT_VIEW:
@@ -94,7 +102,7 @@ function onAnyAction(layoutInfo, action, views) {
                     autoExpand = false;
                     expanded = LO_VIEW.none;
                 }
-            } else if (expanded === LO_VIEW.none && count === 1) {
+            } else if (expanded === LO_VIEW.none && count === 1 && !apiHandlesExpanded) {
                 // set mode into expanded view when there is only 1 component visible.
                 autoExpand = true;
                 expanded =  showImages ? LO_VIEW.images :
@@ -104,6 +112,9 @@ function onAnyAction(layoutInfo, action, views) {
             mode = {expanded, standard, closeable};
             break;
         }
+    }
+    if (count===0 && expanded !==LO_VIEW.none) {
+        expanded= LO_VIEW.none;
     }
     return smartMerge(layoutInfo, {showTables, showImages, showXyPlots, autoExpand, mode: {expanded, standard, closeable}});
 }

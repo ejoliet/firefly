@@ -62,7 +62,7 @@ export class UploadOptionsDialog extends PureComponent {
 
     render() {
         const {where, isLoading} = this.state;
-        const {labelWidth, dialogWidth, preloadWsFile=true, style={}} = this.props;
+        const {dialogWidth, preloadWsFile=true, style={}} = this.props;
 
 
         const showUploadLocation = () => {
@@ -72,12 +72,12 @@ export class UploadOptionsDialog extends PureComponent {
             return (
                 <div style={{margin: '5px 10px 2px 10px'}}>
                     <RadioGroupInputField
-                        alignment={'horizontal'}
+                        orientation='horizontal'
                         fieldKey={this.fileLocation}
                         options={options}
                         initialState={
                            {tooltip: get(this.props, ['tooltips', ULOptionsKey.location.key], 'Select where the file is from'),
-                            labelWidth}
+                            }
                         }
                     />
                 </div>
@@ -88,8 +88,9 @@ export class UploadOptionsDialog extends PureComponent {
             return (where === 'isLocal') ?
                 (
                     <FileUpload
-                        wrapperStyle={{margin: (this.workspace ? '2px 10px 8px 10px' : '15px 10px 21px 10px')}}
+                        sx={{margin: (this.workspace ? '2px 10px 8px 10px' : '15px 10px 21px 10px')}}
                         fieldKey={this.fileUpload}
+                        fileNameStyle={{marginLeft: 14}}
                         initialState={
                              {tooltip: get(this.props, ['tooltips', ULOptionsKey.local.key], 'Select a file to upload')}}
                     />
@@ -119,7 +120,6 @@ export class UploadOptionsDialog extends PureComponent {
 
 UploadOptionsDialog.propTypes = {
     fromGroupKey: PropTypes.string.isRequired,
-    labelWidth: PropTypes.number,
     dialogWidth: PropTypes.number,
     fieldKeys: PropTypes.object,
     tooltips: PropTypes.object,

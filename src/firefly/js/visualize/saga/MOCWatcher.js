@@ -2,12 +2,12 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
+import {once} from 'lodash';
 import {dispatchAttachLayerToPlot} from '../DrawLayerCntlr.js';
 import {visRoot} from '../ImagePlotCntlr.js';
 import {getTblById} from '../../tables/TableUtil.js';
 import {addNewMocLayer, getAppHiPSForMoc, isTableMOC} from '../HiPSMocUtil.js';
-import {getActivePlotView, getPlotViewAry, primePlot} from '../PlotViewUtil.js';
-import {genHiPSPlotId} from '../ui/ImageSearchPanelV2';
+import {getActivePlotView, getNextHiPSPlotId, getPlotViewAry, primePlot} from '../PlotViewUtil.js';
 import WebPlotRequest from '../WebPlotRequest.js';
 import {getAViewFromMultiView, getMultiViewRoot, IMAGE} from '../MultiViewCntlr.js';
 import {dispatchPlotHiPS} from '../ImagePlotCntlr';
@@ -18,14 +18,14 @@ import {onPlotComplete} from '../PlotCompleteMonitor';
 
 
 /** @type {TableWatcherDef} */
-export const mocWatcherDef = {
+export const getMocWatcherDef= once(() => ({
     id : 'MOCWatcher',
     watcher : watchForMOC,
     testTable : isTableMOC,
     stopPropagation: true,
     allowMultiples: false,
     actions: []
-};
+}));
 
 
 /**
@@ -75,9 +75,10 @@ function loadMOC(tbl_id) {
 
     onPlotComplete(plotId).then( (pv) => {
         if (!pv) return;
-        const dl = addNewMocLayer(table.tbl_id, undefined, null, table.tableData.columns[0].name, true);
+        const dl = addNewMocLayer({
+            tbl_id: table.tbl_id, uniqColName: table.tableData.columns[0].name, tablePreloaded: true});
         if (dl) {
-            dispatchAttachLayerToPlot(dl.drawLayerId, plotId, true, true);
+            dispatchAttachLayerToPlot(dl.drawLayerId, plotId, true, true, true);
         }
     });
 
@@ -107,7 +108,7 @@ function findAnyHiPS() {
 }
 
 function plotHiPS(url) {
-    const plotId = genHiPSPlotId.next().value;
+    const plotId = getNextHiPSPlotId();
 
     const hipsUrl = url || getAppHiPSForMoc();
 

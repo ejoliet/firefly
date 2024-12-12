@@ -1,14 +1,13 @@
+import {get, set, isEmpty, flatten, isArray} from 'lodash';
 import {getDrawLayersByType} from './PlotViewUtil.js';
 import {getDlAry, dispatchCreateDrawLayer} from './DrawLayerCntlr.js';
 import HiPSMOC from '../drawingLayers/HiPSMOC.js';
 import {getHealpixCornerTool} from './HiPSUtil.js';
-import {get, set, isEmpty, flatten, isArray} from 'lodash';
 import {getAppOptions} from '../core/AppDataCntlr.js';
-import {getTblById} from '../tables/TableUtil';
+import {getBooleanMetaEntry, getTblById} from '../tables/TableUtil';
+import {MetaConst} from 'firefly/data/MetaConst.js';
 const HEADER_KEY_COL = 1;
 const HEADER_VAL_COL = 2;
-const HEADER_COMMENT_COL = 3;
-const HEADER_IDX_COL = 0;
 
 const MOC = '_moc';
 let   mocCnt = 0;
@@ -58,7 +57,12 @@ function doHeadersMatchMOC(sourceHeaderEntries, doTableValidation= true) {
     const k= 0;
     const v= 1;
     const mocKeySet = [{PCOUNT: '0'}, {GCOUNT: '1'}, {TFIELDS: '1'},
-        [{TFORM1: '1J',  NAXIS1: '4'}, {TFORM1: '1K', NAXIS1: '8'}]];
+        [
+            {TFORM1: '1J',  NAXIS1: '4'},
+            {TFORM1: 'J',  NAXIS1: '4'},
+            {TFORM1: '1K', NAXIS1: '8'},
+            {TFORM1: 'K', NAXIS1: '8'}
+        ]];
 
     const mocKeys = flatten(mocKeySet).reduce((prev, oneCond) => {
         Object.keys(oneCond).forEach((aKey) => {
@@ -133,6 +137,7 @@ export function isTableMOC(table) {
     if (!table || !table.tableMeta || !table.tableData) return false;
     const columnsCnt= table.tableData.columns.filter( (c) => c.name!=='ROW_IDX' && c.name!=='ROW_NUM').length;
     if (columnsCnt>1) return false;
+    if (getBooleanMetaEntry(table, MetaConst.IGNORE_MOC)) return false;
     const entries= [
         ['TTYPE1', get(table.tableData, ['columns','0', 'name'])],
         ...Object.entries(table.tableMeta)
@@ -172,25 +177,28 @@ export function getMocOrderIndex(Nuniq) {
 
 /**
  * add new layer on MOC table
- * @param {string} tbl_id moc table id
- * @param {string} fitsPath moc fits path at the server after upload
- * @param {string} mocUrl  moc fits url
- * @param {string} uniqColName column name for uniq number
- * @param {boolean} tablePreloaded - true if the MOC table has already been loaded
+ * @param {Object} params moc table id
+ * @param {string} params.tbl_id moc table id
+ * @param {string} [params.title] optional title
+ * @param {string} params.fitsPath moc fits path at the server after upload
+ * @param {string} params.mocUrl  moc fits url
+ * @param {string} params.uniqColName column name for uniq number
+ * @param {boolean} params.tablePreloaded - true if the MOC table has already been loaded
+ * @param {string} [params.color] - color string
+ * @param {string} [params.mocGroupDefColorId ] - group color id
  * @returns {T|SelectInfo|*|{}}
  */
-export function addNewMocLayer(tbl_id, fitsPath, mocUrl, uniqColName = 'NUNIQ', tablePreloaded=false) {
+export function addNewMocLayer({tbl_id, title, fitsPath, mocUrl, uniqColName = 'NUNIQ',
+                                   tablePreloaded=false, color, mocGroupDefColorId }) {
     const dls = getDrawLayersByType(getDlAry(), HiPSMOC.TYPE_ID);
     let   dl = dls.find((oneLayer) => oneLayer.drawLayerId === tbl_id);
 
     if (!dl) {
-        let title;
-        if (tablePreloaded && tbl_id) {
-            const table= getTblById(tbl_id);
-            title= table && table.title && 'MOC - '+ table.title;
-        }
+        if (!title && tablePreloaded && tbl_id) title= getTblById(tbl_id)?.title;
+        if (title) title= 'MOC - ' + title;
         const mocFitsInfo = {fitsPath, mocUrl, uniqColName, tbl_id, tablePreloaded};
-        dl = dispatchCreateDrawLayer(HiPSMOC.TYPE_ID, {mocFitsInfo,title});
+        dl = dispatchCreateDrawLayer(HiPSMOC.TYPE_ID,
+            {mocFitsInfo,title,layersPanelLayoutId:'mocUIGroup', color, mocGroupDefColorId });
     }
     return dl;
 }
@@ -428,3 +436,40 @@ export function isTileVisibleByPosition(wpCorners, cc) {
     });
 }
 
+
+export function getDefaultMOCList() {
+    return [
+        'ivo://CDS/P/GALEXGR6/AIS/color',
+        'ivo://CDS/P/GALEXGR6/AIS/FUV',
+        'ivo://CDS/P/GALEXGR6/AIS/NUV ',
+        'ivo://CDS/P/ROSATWFC/color',
+        'ivo://cxc.harvard.edu/P/cda/hips/allsky/rgb',
+        'ivo://CDS/P/PanSTARRS/DR1/color-z-zg-g',
+        'ivo://CDS/P/SDSS9/color',
+        'ivo://CDS/P/ZTF/DR7/color',
+        'ivo://CDS/P/ZTF/DR7/g',
+        'ivo://CDS/P/ZTF/DR7/i',
+        'ivo://CDS/P/ZTF/DR7/r',
+        'ivo://CDS/P/DES-DR1/Y',
+        'ivo://CDS/P/DES-DR1/g',
+        'ivo://CDS/P/DES-DR1/i',
+        'ivo://CDS/P/DES-DR1/r',
+        'ivo://CDS/P/DES-DR1/z',
+        'ivo://CDS/P/VISTA/VVV/DR4/J',
+        'ivo://CDS/P/VISTA/VVV/DR4/Y',
+        'ivo://CDS/P/VISTA/VVV/DR4/Z',
+        'ivo://CDS/C/HIPASS',
+        'ivo://CDS/P/NVSS',
+        'ivo://CDS/P/SUMSS',
+        'ivo://ov-gso/P/SUMSS',
+        'ivo://ESAVO/P/HERSCHEL/PACS-color',
+        'ivo://CDS/P/SPITZER/IRAC1',
+        'ivo://CDS/P/SPITZER/IRAC2',
+        'ivo://CDS/P/SPITZER/IRAC3',
+        'ivo://CDS/P/SPITZER/IRAC4',
+        'ivo://xcatdb/P/XMM/PN/eb4',
+        'ivo://ESAVO/P/EXOSAT/all',
+        'ivo://CDS/P/HST/PHAT/F275W',
+        'ivo://CDS/P/HLA/SDSSg'
+    ];
+}

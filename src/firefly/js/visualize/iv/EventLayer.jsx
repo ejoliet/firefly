@@ -2,7 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 import React, {memo, useRef, useEffect} from 'react';
-import PropTypes from 'prop-types';
+import {func,string,object} from 'prop-types';
 import {makeScreenPt} from '../Point.js';
 import {MouseState}  from '../VisMouseSync.js';
 import {Matrix} from '../../externalSource/transformation-matrix-js/matrix';
@@ -23,42 +23,44 @@ function fireEvent(ev,transform, plotId,mouseState, eventCallback, doPreventDefa
 function fireDocEvent(element, nativeEv,transform, plotId,mouseState, eventCallback) {
     nativeEv.preventDefault();
     nativeEv.stopPropagation();
+    if (!element) return;
     const {screenX, screenY, pageX:x, pageY:y}= nativeEv;
     const {left, top}= element.getBoundingClientRect();
-    const compOffX= x-left;
-    const compOffY= y-top;
+    const compOffX= x-left-window.scrollX;
+    const compOffY= y-top-window.scrollY;
     const trans= Matrix.from(transform).inverse();
     const tmpScreenPt= trans.applyToPoint(compOffX, compOffY);
     const spt= makeScreenPt(tmpScreenPt.x,tmpScreenPt.y);
     eventCallback(plotId,mouseState,spt,screenX,screenY,nativeEv);
 }
 
+function clearDocListeners(eRef) {
+    eRef.mouseMoveDocListener && document.removeEventListener('mousemove', eRef.mouseMoveDocListener);
+    eRef.mouseUpDocListener && document.removeEventListener('mouseup', eRef.mouseUpDocListener);
+    eRef.mouseMoveDocListener= undefined;
+    eRef.mouseUpDocListener= undefined;
+}
+
+function addDocListeners (eRef,onDocumentMouseMove,onDocumentMouseUp) {
+    eRef.mouseMoveDocListener= onDocumentMouseMove;
+    eRef.mouseUpDocListener= onDocumentMouseUp;
+    document.addEventListener('mousemove', eRef.mouseMoveDocListener);
+    document.addEventListener('mouseup', eRef.mouseUpDocListener);
+}
+
+
 export const EventLayer = memo( ({transform,plotId, eventCallback}) => {
     const {current:eRef}= useRef({
         mouseDown:false, element: undefined, mouseMoveDocListener: undefined, mouseUpDocListener: undefined});
 
-    const clearDocListeners= () =>{
-        eRef.mouseMoveDocListener && document.removeEventListener('mousemove', eRef.mouseMoveDocListener);
-        eRef.mouseUpDocListener && document.removeEventListener('mouseup', eRef.mouseUpDocListener);
-        eRef.mouseMoveDocListener= undefined;
-        eRef.mouseUpDocListener= undefined;
-    };
-
-    const addDocListeners= () =>{
-        eRef.mouseMoveDocListener= onDocumentMouseMove;
-        eRef.mouseUpDocListener= onDocumentMouseUp;
-        document.addEventListener('mousemove', eRef.mouseMoveDocListener);
-        document.addEventListener('mouseup', eRef.mouseUpDocListener);
-    };
-
-    useEffect(() => clearDocListeners ,[]);
+    useEffect(() => () => clearDocListeners(eRef) ,[]); // make sure clearDocListeners is when component goes away
 
     const onDocumentMouseMove= (nativeEv) =>
         eRef.mouseDown && fireDocEvent(eRef.element, nativeEv,transform,plotId,MouseState.DRAG, eventCallback);
 
     const onDocumentMouseUp= (nativeEv) => {
         eRef.mouseDown= false;
-        clearDocListeners();
+        clearDocListeners(eRef);
         fireDocEvent(eRef.element, nativeEv,transform,plotId,MouseState.UP, eventCallback);
     };
 
@@ -74,8 +76,8 @@ export const EventLayer = memo( ({transform,plotId, eventCallback}) => {
 
     const onMouseDown= (ev) => {
         eRef.mouseDown= true;
-        fireEvent(ev,transform,plotId,MouseState.DOWN, eventCallback);
-        addDocListeners();
+        fireEvent(ev,transform,plotId,MouseState.DOWN, eventCallback,true,false);
+        addDocListeners(eRef,onDocumentMouseMove,onDocumentMouseUp);
     };
 
     const onMouseMove= (ev) => !eRef.mouseDown && fireEvent(ev,transform,plotId,MouseState.MOVE, eventCallback, true, false);
@@ -84,7 +86,7 @@ export const EventLayer = memo( ({transform,plotId, eventCallback}) => {
 
     const onTouchCancel= (ev) => {
         eRef.mouseDown= false;
-        fireEvent(ev,transform,plotId,MouseState.UP, eventCallback);
+        fireEvent(ev,transform,plotId,MouseState.UP, eventCallback,true,false);
     };
 
     const onTouchEnd= (ev) => {
@@ -96,7 +98,7 @@ export const EventLayer = memo( ({transform,plotId, eventCallback}) => {
 
     const onTouchStart= (ev) => {
         eRef.mouseDown= true;
-        fireEvent(ev,transform,plotId,MouseState.DOWN, eventCallback);
+        fireEvent(ev,transform,plotId,MouseState.DOWN, eventCallback,true,false);
     };
 
     const onWheel= (ev) => {
@@ -105,23 +107,19 @@ export const EventLayer = memo( ({transform,plotId, eventCallback}) => {
     };
 
     useEffect( () => {
-        eRef.element?.addEventListener('wheel', onWheel);
+        eRef.element?.addEventListener('wheel', onWheel, {passive:false});
         return () => eRef.element?.removeEventListener('wheel', onWheel);
-    }, [eRef.element, transform,plotId, eventCallback]);
+    }, [eRef.element, transform, plotId, eventCallback]);
 
     return (
-        <div className='event-layer' style={style}
-             ref={ (c) => eRef.element=c}
-             onClick={onClick} onDoubleClick={onDoubleClick} onMouseDownCapture={onMouseDown}
-             onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}
-             onMouseMoveCapture={onMouseMove} onTouchCancel={onTouchCancel}
-             onTouchEnd={onTouchEnd} onTouchMove={onTouchMove} onTouchStart={onTouchStart}
-        />
+        <div {...{className:'event-layer', style, ref:(c) => eRef.element=c,
+            onClick, onDoubleClick, onMouseDownCapture:onMouseDown, onMouseEnter, onMouseLeave,
+            onMouseMoveCapture:onMouseMove, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart }} />
     );
 });
 
 EventLayer.propTypes= {
-    eventCallback : PropTypes.func.isRequired,
-    plotId : PropTypes.string,
-    transform : PropTypes.object.isRequired
+    eventCallback : func.isRequired,
+    plotId : string,
+    transform : object.isRequired
 };

@@ -18,15 +18,27 @@ public class Ref<T> {
         this.source = source;
     }
 
-    public void setSource(T source) {
+    public void set(T source) {
         this.source = source;
     }
 
-    public T getSource() {
+    public T get() {
         return source;
     }
 
-    public boolean hasSource() {
+    public boolean has() {
         return source != null;
+    }
+
+    public String toString() {
+        return source == null ? super.toString() : source.toString();
+    }
+
+    public boolean equals(Object obj) {
+        return source == null ? super.equals(obj) : source.equals(obj);
+    }
+
+    public int hashCode() {
+        return source == null ? super.hashCode() : source.hashCode();
     }
 }

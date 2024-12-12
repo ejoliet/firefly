@@ -6,21 +6,14 @@ package edu.caltech.ipac.firefly.visualize;
 import edu.caltech.ipac.astro.conv.CoordConv;
 import edu.caltech.ipac.astro.conv.LonLat;
 import edu.caltech.ipac.visualize.plot.CoordinateSys;
+import edu.caltech.ipac.visualize.plot.ImagePt;
 import edu.caltech.ipac.visualize.plot.Pt;
 import edu.caltech.ipac.visualize.plot.WorldPt;
 
 import java.util.ArrayList;
 import java.util.List;
 /**
- * User: roby
  * Date: Nov 13, 2008
- * Time: 1:37:56 PM
- */
-
-
-/**
- * Shared by client and server
- *
  * @author Trey Roby
  */
 public class VisUtil {
@@ -33,10 +26,6 @@ public class VisUtil {
 //======================================================================
 //----------------------- Public Methods -------------------------------
 //======================================================================
-
-    public static boolean isLargePlot(float zFact, int width, int height) {
-        return (zFact > 4 && (width > 2000 || height > 2000));
-    }
 
     public static double computeScreenDistance(double x1, double y1, double x2, double y2) {
         double deltaXSq = (x1 - x2) * (x1 - x2);
@@ -82,6 +71,7 @@ public class VisUtil {
      * @return WorldPt the world point in the new coordinate system
      */
     public static WorldPt convert(WorldPt wpt, CoordinateSys to) {
+        if (wpt==null) return null;
         WorldPt retval;
         CoordinateSys from = wpt.getCoordSys();
         if (from.equals(to) || to == null) {
@@ -290,18 +280,7 @@ public class VisUtil {
     }
 
 
-    public static class CentralPointRetval {
-        private final WorldPt _wp;
-        private final double _radius;
-
-        public CentralPointRetval(WorldPt wp, double radius) {
-            _wp = wp;
-            _radius = radius;
-        }
-
-        public WorldPt getWorldPt() { return _wp; }
-        public double getRadius() { return _radius; }
-    }
+    public record CentralPointRetval(WorldPt worldPt, double radius) { }
 
 
     /**
@@ -321,11 +300,7 @@ public class VisUtil {
         if (w0 <= 0 || h0 <= 0 || w <= 0 || h <= 0) {
             return false;
         }
-        return (x + w > x0 &&
-                y + h > y0 &&
-                x < x0 + w0 &&
-                y < y0 + h0);
-
+        return (x + w > x0 && y + h > y0 && x < x0 + w0 && y < y0 + h0);
     }
 
 
@@ -340,8 +315,7 @@ public class VisUtil {
      * @return true if rectangles intersect
      */
     public static boolean contains(int x0, int y0, int w0, int h0, int x, int y) {
-        return (x >= x0 && y >= y0 &&
-                x < x0 + w0 && y < y0 + h0);
+        return (x >= x0 && y >= y0 && x < x0 + w0 && y < y0 + h0);
     }
     /**
      * test to see if the first rectangle contains the second rectangle
@@ -613,6 +587,38 @@ public class VisUtil {
 	    }
 	    return new WorldPt(lon, lat);
 	}
+
+
+    /**
+     * This function will create a line. either based on y or based on x depend on which is farther apart. The is will return
+     * a point with x,y
+
+     * @param x1 start point x
+     * @param y1 start point y
+     * @param x2 end point x
+     * @param y2 end point y
+     * @param independentValue the x or y depending how the line is computed
+     * @return {number}
+     */
+    public static ImagePt getXorYinEquation(double x1, double y1, double x2, double y2, double independentValue) {
+        double deltaX = Math.abs(x2 - x1);
+        double deltaY = Math.abs(y2 - y1);
+
+        if (deltaX > deltaY) {
+            double slope = (y2-y1)/(x2-x1);
+            double yIntercept = y1-slope*x1;
+            double y= (slope*independentValue + yIntercept);
+            return new ImagePt(independentValue,y);
+        } else {
+            double  islope = (x2-x1)/(y2-y1);
+            double xIntercept = x1-islope*y1;
+            double x = (islope*independentValue + xIntercept);
+            return new ImagePt(x,independentValue);
+        }
+    }
+
+
+
 	
     /**
      * Find the corners of a bounding box given the center and the radius
@@ -635,75 +641,10 @@ public class VisUtil {
         return new Corners(upperLeft, upperRight, lowerLeft, lowerRight);
     }
 
-    public static class Corners {
-        WorldPt upperLeft;
-        WorldPt upperRight;
-        WorldPt lowerLeft;
-        WorldPt lowerRight;
+    public record Corners(WorldPt upperLeft, WorldPt upperRight, WorldPt lowerLeft, WorldPt lowerRight) { }
 
-        public Corners(WorldPt upperLeft, WorldPt upperRight,
-                       WorldPt lowerLeft, WorldPt lowerRight) {
-            this.upperLeft = upperLeft;
-            this.upperRight = upperRight;
-            this.lowerLeft = lowerLeft;
-            this.lowerRight = lowerRight;
-        }
-
-        public WorldPt getUpperLeft() { return upperLeft; }
-        public WorldPt getUpperRight() { return upperRight; }
-        public WorldPt getLowerLeft() { return lowerLeft; }
-        public WorldPt getLowerRight() { return lowerRight; }
-
-        @Override
-        public String toString() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("upper_left RA = " + upperLeft.getLon() + "  DEC = ").append(upperLeft.getLat());
-            sb.append("upper_right RA = " + upperRight.getLon() + "  DEC = ").append(upperRight.getLat());
-            sb.append("lower_left RA = " + lowerLeft.getLon() + "  DEC = ").append(lowerLeft.getLat());
-            sb.append("lower_right RA = " + lowerRight.getLon() + "  DEC = ").append(lowerRight.getLat());
-            return sb.toString();
-        }
-
-        public static void main(String [] args)
-        {
-            double ra = 10.0;  // degrees
-            double dec = 60.0;  // degrees
-            double radius = 3600.0;  // arcsec
-            
-            
-            WorldPt imageCenterPt = new WorldPt(10, 10,CoordinateSys.SCREEN_PIXEL);
-			WorldPt convertToJ2000 = convertToJ2000(imageCenterPt);
-            System.out.println(imageCenterPt+", " +convertToJ2000);
-            
-            System.out.println(getCorners(new WorldPt(ra, dec), radius));
-        }
-    }
-
-
-
-
-    public static class NorthEastCoords {
-        public final int x1, y1, x2, y2;
-        public final int barbX1, barbY1;
-        public final int barbX2, barbY2;
-        public final int textX, textY;
-
-        public NorthEastCoords(int x1, int y1,
-                               int x2, int y2,
-                               int barbX1, int barbY1,
-                               int barbX2, int barbY2,
-                               int textX, int textY) {
-            this.x1 = x1;
-            this.y1 = y1;
-            this.x2 = x2;
-            this.y2 = y2;
-            this.barbX1 = barbX1;
-            this.barbY1 = barbY1;
-            this.barbX2 = barbX2;
-            this.barbY2 = barbY2;
-            this.textX = textX;
-            this.textY = textY;
-        }
+    public record NorthEastCoords(int x1, int y1, int x2, int y2, int barbX1, int barbY1, int barbX2, int barbY2, int textX,
+                                  int textY) {
     }
 }
 

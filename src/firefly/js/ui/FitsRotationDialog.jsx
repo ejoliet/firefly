@@ -4,6 +4,7 @@
 import React, {useEffect} from 'react';
 import {dispatchShowDialog, dispatchHideDialog} from '../core/ComponentCntlr.js';
 import Validate from '../util/Validate.js';
+import {isEastLeftOfNorth} from '../visualize/WebPlotAnalysis';
 import CompleteButton from './CompleteButton.jsx';
 import DialogRootContainer from './DialogRootContainer.jsx';
 import {PopupPanel} from './PopupPanel.jsx';
@@ -13,7 +14,6 @@ import {SimpleLayerOnOffButton} from '../visualize/ui/SimpleLayerOnOffButton';
 import {RotateType} from '../visualize/PlotState.js';
 import {StateInputField} from './StatedInputfield';
 import {useStoreConnector} from './SimpleComponent';
-import {isEastLeftOfNorth} from '../visualize/VisUtil';
 import {RangeSliderView} from './RangeSliderView';
 
 import HelpIcon from './HelpIcon.jsx';
@@ -21,6 +21,7 @@ import ROTATE_NORTH_OFF from 'html/images/icons-2014/RotateToNorth.png';
 import ROTATE_NORTH_ON from 'html/images/icons-2014/RotateToNorth-ON.png';
 import {hasWCSProjection} from '../visualize/PlotViewUtil';
 import {isImage} from '../visualize/WebPlot';
+import {Box, Stack, Typography} from '@mui/joy';
 
 const DIALOG_ID= 'fitsRotationDialog';
 
@@ -36,14 +37,20 @@ export function showFitsRotationDialog() {
 
 function getCurrentRotation(pv) {
     if (!pv || !pv.rotation || pv.rotation>359 || pv.rotation<.5) return 0;
-    const angle=  isEastLeftOfNorth(primePlot(pv)) ? 360-pv.rotation : pv.rotation;
+    let angle;
+    if (isEastLeftOfNorth(primePlot(pv)) && !pv.flipY) angle= 360-pv.rotation;
+    else if (!isEastLeftOfNorth(primePlot(pv)) && pv.flipY) angle= 360-pv.rotation;
+    else angle= pv.rotation;
     return Math.round(angle);
 }
 
-const marks = { 0: '0', 45:'45', 90:'90', 135: '135', 180:'180', 225: '225', 270:'270', 315:'315', 359:'359' };
+const marks = [ { label: '0', value: 0 }, { label: '45', value: 45 }, { label: '90', value: 90 },
+    { label: '135', value: 135 }, { label: '180', value: 180 }, { label: '225', value: 225 }, { label: '270', value: 270 },
+    { label: '315', value: 315 }, { label: '359', value: 359 }
+];
 
 function FitsRotationImmediatePanel() {
-    const [pv] = useStoreConnector(() => getActivePlotView(visRoot()));
+    const pv = useStoreConnector(() => getActivePlotView(visRoot()));
 
     useEffect(() => {
         (!pv || !isImage(primePlot(pv))) && dispatchHideDialog(DIALOG_ID);
@@ -77,48 +84,43 @@ function FitsRotationImmediatePanel() {
         changeRotation(newRot);
     };
 
-    if (!pv) return (<div style={{whiteSpace:'nowrap', padding:'10px 35px'}}>No Image Loaded</div>);
-
+    if (!pv) return (<Typography style={{whiteSpace:'nowrap', padding:'10px 35px'}}>No Image Loaded</Typography>);
+    
     return (
-        <div className={'disable-select'}>
-            <div style={{padding: '25px 20px 10px 20px'}}>
-                <div style={{display:'flex', flexDirection: 'column', alignItems:'center',
-                                      justifyContent:'space-between', padding: '0 3px'}}>
-                    <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
-                        <StateInputField defaultValue={currRotation+''} valueChange={(v) => changeRotation(v.value)}
-                                         labelWidth={35} label={'Angle: '}
-                                         tooltip={'Enter the angle between 0 and 359 degrees'}
-                                         message={'Angle must be a number between 0 and 359'}
-                                         showWarning={true}
-                                         validator={validator} onKeyDown={handleKeyDown} />
-
-                        <SimpleLayerOnOffButton plotView={pv}
-                                                style={{border: '1px solid rgba(0,0,0,.2)'}}
-                                                isIconOn={pv&&plot ? pv.plotViewCtx.rotateNorthLock : false }
-                                                tip='Rotate this image so that North is up'
-                                                enabled={hasWcs}
-                                                visible={true}
-                                                iconOn={ROTATE_NORTH_ON}
-                                                iconOff={ROTATE_NORTH_OFF}
-                                                onClick={(pv,rNorth)=> doRotateNorth(rNorth)} />
-                    </div>
-
+        <Box className={'disable-select'}>
+            <Box pt={0} pr={2.5} pb={1.25} pl={2.5}>
+                <Stack justifyContent='space-between' alignItems='center' spacing={1}>
+                    <StateInputField defaultValue={currRotation+''} valueChange={(v) => changeRotation(v.value)}
+                                     label={'Angle'}
+                                     tooltip={'Enter the angle between 0 and 359 degrees'}
+                                     message={'Angle must be a number between 0 and 359'}
+                                     showWarning={true}
+                                     endDecorator={
+                                         <SimpleLayerOnOffButton plotView={pv}
+                                                                 style={{border: '1px solid rgba(0,0,0,.2)', marginTop:'15px'}}
+                                                                 isIconOn={pv&&plot ? pv.plotViewCtx.rotateNorthLock : false }
+                                                                 tip='Rotate this image so that North is up'
+                                                                 enabled={hasWcs}
+                                                                 visible={true}
+                                                                 iconOn={ROTATE_NORTH_ON}
+                                                                 iconOff={ROTATE_NORTH_OFF}
+                                                                 onClick={(pv,rNorth)=> doRotateNorth(rNorth)} />
+                                     }
+                                     validator={validator} onKeyDown={handleKeyDown} />
                     <RangeSliderView {...{
-                        wrapperStyle:{paddingTop: 15, width: 225},
+                        sx:{pt: 2, width: 225},
                         min:0,max:359, step:1,vertical:false, marks,
                         defaultValue:currRotation, slideValue:currRotation,
                         handleChange:(v) => changeRotation(v)}} />
-                </div>
-                <div style={{paddingTop:40, textAlign:'center'}}>
+                </Stack>
+                <Typography level='body-xs' pt={3} pb={2} textAlign={'center'}>
                     {hasWcs?'Angle in degrees East of North' : 'Angle in degrees counter clockwise'}
-                </div>
-            </div>
-            <div style={{textAlign:'center', display:'flex', justifyContent:'space-between', padding: '0 16px'}}>
+                </Typography>
+            </Box>
+            <Stack {...{textAlign:'center', direction:'row', justifyContent:'space-between', px:1, pb:1}}>
                 <CompleteButton text='Close' dialogId={DIALOG_ID} />
-                <div style={{ textAlign:'center', marginBottom: 20}}>
-                    <HelpIcon helpId={'visualization.rotate'} />
-                </div>
-            </div>
-        </div>
+                <HelpIcon helpId={'visualization.rotate'} />
+            </Stack>
+        </Box>
     );
 }

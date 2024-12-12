@@ -1,12 +1,11 @@
 /*
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
-import {get, set, omitBy, pickBy, pick, isNil, cloneDeep, findKey, isEqual, unset, merge} from 'lodash';
+import {get, set, omitBy, pickBy, pick, isNil, cloneDeep, findKey, unset, merge} from 'lodash';
 
 import {flux} from '../core/ReduxFlux.js';
 import * as TblUtil from './TableUtil.js';
-import {MAX_ROW} from './TableRequestUtil.js';
-import {submitBackgroundSearch} from '../rpc/SearchServicesJson.js';
+import {MAX_ROW, getRequestFromJob} from './TableRequestUtil.js';
 import shallowequal from 'shallowequal';
 import {dataReducer} from './reducer/TableDataReducer.js';
 import {uiReducer} from './reducer/TableUiReducer.js';
@@ -14,12 +13,13 @@ import {resultsReducer} from './reducer/TableResultsReducer.js';
 import {updateMerge} from '../util/WebUtil.js';
 import {Logger} from '../util/Logger.js';
 import {FilterInfo} from './FilterInfo.js';
-import {selectedValues} from '../rpc/SearchServicesJson.js';
-import {trackBackgroundJob, isSuccess, isDone, getErrMsg} from '../core/background/BackgroundUtil.js';
-import {REINIT_APP} from '../core/AppDataCntlr.js';
+import {selectedValues, asyncFetchTable} from '../rpc/SearchServicesJson.js';
+import { trackBackgroundJob, isSuccess, isDone, getErrMsg} from '../core/background/BackgroundUtil.js';
+import {REINIT_APP, getAppOptions} from '../core/AppDataCntlr.js';
 import {dispatchComponentStateChange} from '../core/ComponentCntlr.js';
 import {dispatchJobAdd} from '../core/background/BackgroundCntlr.js';
-import {getTblInfo} from './TableUtil';
+import {fixPageSize} from './TableUtil.js';
+import {SelectInfo} from 'firefly/tables/SelectInfo';
 
 
 export const TABLE_SPACE_PATH = 'table_space';
@@ -182,8 +182,8 @@ export function dispatchTableAddLocal(tableModel, options, addUI=true, dispatche
 /**
  * Fetch table data from the server.
  * @param request a table request params object.
- * @param hlRowIdx set the highlightedRow.  default to startIdx.
- * @param invokedBy used to indicate what trigger the fetch.
+ * @param [hlRowIdx] set the highlightedRow.  default to startIdx.
+ * @param [invokedBy] used to indicate what trigger the fetch.
  * @param {function} dispatcher only for special dispatching uses such as remote
  */
 export function dispatchTableFetch(request, hlRowIdx, invokedBy, dispatcher= flux.process) {
@@ -203,7 +203,7 @@ export function dispatchTableSort(request, hlRowIdx, dispatcher= flux.process) {
 /**
  * Filter the table given the request.
  * @param request a table request params object.
- * @param hlRowIdx set the highlightedRow.  default to startIdx.
+ * @param [hlRowIdx] set the highlightedRow.  default to startIdx.
  * @param {function} dispatcher only for special dispatching uses such as remote
  */
 export function dispatchTableFilter(request, hlRowIdx, dispatcher= flux.process) {
@@ -334,11 +334,9 @@ function tableSearch(action) {
             const {tbl_ui_id, backgroundable = false, showPaging=true} = options;
             const {tbl_id} = request;
             const title = get(request, 'META_INFO.title');
-            if (showPaging) {
-                request.pageSize = options.pageSize = options.pageSize || request.pageSize || 100;
-            } else {
-                request.pageSize = MAX_ROW;
-            }
+            // use pageSize when given.  otherwise, use default or max if paging is not shown.
+            const pageSize = options.pageSize ?? request.pageSize ?? (showPaging ? getAppOptions()?.table?.pageSize : MAX_ROW);
+            request.pageSize = options.pageSize = fixPageSize(pageSize);
             if (TblUtil.getTblById(tbl_id)) {
                 // table exists... this is a new search.  old data should be removed.
                 dispatchTableRemove(tbl_id, false);
@@ -359,9 +357,10 @@ function tableAddLocal(action) {
 
         tableModel = fixClientTable(tableModel);
         const {title, tbl_id} = tableModel;
-        const tbl_ui_id = options.tbl_ui_id || TblUtil.uniqueTblUiId();
-
-        if (addUI) dispatchTblResultsAdded(tbl_id, title, options, tbl_ui_id);
+        if (addUI) {
+            const tbl_ui_id = options.tbl_ui_id || TblUtil.uniqueTblUiId();
+            dispatchTblResultsAdded(tbl_id, title, options, tbl_ui_id);
+        }
         dispatch( {type: TABLE_REPLACE, payload: tableModel} );
         dispatchTableLoaded(Object.assign( TblUtil.getTblInfo(tableModel), {invokedBy: TABLE_FETCH}));
     };
@@ -373,14 +372,16 @@ function fixClientTable(tableModel) {
         tableModel.tbl_id = get(tableModel, 'request.tbl_id') || TblUtil.uniqueTblId();
     }
     if (!tableModel.title) {
-        tableModel.title  = get(tableModel, 'request.META_INFO.title') || 'untitled';
+        tableModel.title  = get(tableModel, 'request.META_INFO.title');
     }
 
-    tableModel.totalRows = tableModel?.tableData?.data.length ?? 0;
+    tableModel.totalRows = tableModel?.tableData?.data?.length ?? 0;
 
     if (!tableModel.origTableModel) {
         tableModel = TblUtil.cloneClientTable(tableModel);
     }
+
+    set(tableModel, 'request.pageSize', fixPageSize(tableModel.request?.pageSize));
 
     return tableModel;
 }
@@ -392,10 +393,7 @@ function tblResultsAdded(action) {
             var {tbl_id, title, options={}, tbl_ui_id} = action.payload;
 
             options = Object.assign({tbl_group: 'main', removable: true, setAsActive:true}, options);
-            const pageSize = get(options, 'pageSize');
-            if ( pageSize && !Number.isInteger(pageSize)) {
-                options.pageSize = parseInt(pageSize);
-            }
+            if (options.pageSize)   options.pageSize = fixPageSize(options.pageSize);
             if (!TblUtil.getTableInGroup(tbl_id, options.tbl_group)) {
                 tbl_ui_id = tbl_ui_id || TblUtil.uniqueTblUiId();
                 dispatch({type: TBL_RESULTS_ADDED, payload: {tbl_id, title, tbl_ui_id, options}});
@@ -430,7 +428,7 @@ function tblRemove(action) {
 function highlightRow(action) {
 
     const dispatchHighlight = (dispatch, tableModel) => {
-        const {tbl_id, highlightedRow, request, selectInfo} = getTblInfo(tableModel);
+        const {tbl_id, highlightedRow, selectInfo} = TblUtil.getTblInfo(tableModel);
         const cols = TblUtil.getAllColumns(tableModel);
         const highlightedValues = TblUtil.getRowValues(tableModel, highlightedRow)
                                 .map( (v, idx) => [cols[idx]?.name, v])
@@ -444,15 +442,17 @@ function highlightRow(action) {
 
     return (dispatch) => {
         const {tbl_id, highlightedRow, request={}} = action.payload;
-        TblUtil.fixRequest(request);
-        var tableModel = TblUtil.getTblById(tbl_id);
+        const tableModel = TblUtil.getTblById(tbl_id);
         if (!tableModel || tableModel.error || highlightedRow < 0 || highlightedRow >= tableModel.totalRows) return;   // out of bound.. ignore.
         if (highlightedRow === tableModel.highlightedRow && !request.pageSize) return;   // nothing to change
 
-        var tmpModel = TblUtil.smartMerge(tableModel, action.payload);
+        const tmpModel = TblUtil.smartMerge(tableModel, action.payload);
         const {hlRowIdx, startIdx, endIdx, pageSize} = TblUtil.getTblInfo(tmpModel);
         if (TblUtil.isTblDataAvail(startIdx, endIdx, tableModel)) {
             const aTableModel = {...tableModel, highlightedRow};
+            if (pageSize !== tableModel?.request?.pageSize) {
+                dispatch({type: TABLE_UPDATE, payload: {tbl_id, request}});
+            }
             dispatchHighlight(dispatch, aTableModel);
         } else {
             const request = cloneDeep(tableModel.request);
@@ -462,7 +462,7 @@ function highlightRow(action) {
                     dispatch({type: TABLE_UPDATE, payload: tableModel});
                     dispatchHighlight(dispatch, tableModel);
                 }).catch( (error) => {
-                    dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, `Unable to load table. \n   ${error.message}`)});
+                    dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, error)});
                 });
             }
         }
@@ -473,7 +473,7 @@ function tableSelect(action) {
     return (dispatch) => {
         const {tbl_id, selectInfo={}} = action.payload;
         const cSelectInfo = get(TblUtil.getTblById(tbl_id), 'selectInfo', {});
-        if (!isEqual(selectInfo, cSelectInfo)) {
+        if (!SelectInfo.isEqual(selectInfo, cSelectInfo)) {
             dispatch(action);       // only dispatch action if changes are needed.
         }
     };
@@ -491,7 +491,13 @@ function tableFetch(action) {
             dispatchTableLoaded(Object.assign(TblUtil.getTblInfo(tableModel), {invokedBy: TABLE_FETCH}));
         });
 
-        doTableFetch({tbl_id, request, hlRowIdx, dispatch});
+        request.startIdx = request.startIdx || 0;
+        const backgroundable = get(request, 'META_INFO.backgroundable', false);
+        if (backgroundable) {
+            asyncFetch(request, hlRowIdx, dispatch, tbl_id);
+        } else {
+            syncFetch(request, hlRowIdx, dispatch, tbl_id);
+        }
     };
 }
 
@@ -515,7 +521,7 @@ function tableSort(action) {
                 dispatch(action);
             });
 
-            doTableFetch({tbl_id, request: nreq, hlRowIdx, dispatch});
+            syncFetch(nreq, hlRowIdx, dispatch, tbl_id);
         }
     };
 }
@@ -556,7 +562,7 @@ function tableFilter(action) {
                 dispatch(action);
             });
 
-            doTableFetch({tbl_id, request: nreq, hlRowIdx,  dispatch});
+            syncFetch(nreq, hlRowIdx, dispatch, tbl_id);
         }
     };
 }
@@ -643,7 +649,6 @@ function getRowIdFor(request, selected) {
 }
 
 function syncFetch(request, hlRowIdx, dispatch, tbl_id) {
-    unset(request, 'META_INFO.backgroundable');
     TblUtil.doFetchTable(request, hlRowIdx)
         .then( (tableModel) => {
             try {
@@ -652,40 +657,40 @@ function syncFetch(request, hlRowIdx, dispatch, tbl_id) {
                 logger.error(e.stack);
             }
         }).catch((error) => {
-            dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, error.message)});
+            dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, error)});
         });
 }
 
 function asyncFetch(request, hlRowIdx, dispatch, tbl_id) {
-    const onComplete = (bgStatus) => {
-        const {STATE} = bgStatus || {};
-        if (isSuccess(STATE)) {
-            syncFetch(request, hlRowIdx, dispatch, tbl_id);
+    unset(request, 'META_INFO.backgroundable');
+    const onComplete = (jobInfo) => {
+        if (isSuccess(jobInfo)) {
+            syncFetch(getRequestFromJob(jobInfo.jobId), hlRowIdx, dispatch, tbl_id);
         } else {
-            dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, getErrMsg(bgStatus))});
+            dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, getErrMsg(jobInfo))});
         }
     };
 
-    const sentToBg = (bgStatus) => {
+    const sentToBg = (jobInfo) => {
         dispatchTblResultsRemove(tbl_id);
-        dispatchJobAdd(bgStatus);
+        dispatchJobAdd(jobInfo);
     };
 
     const bgKey = TblUtil.makeBgKey(tbl_id);
-    dispatchComponentStateChange(bgKey, {inProgress:true, bgStatus:undefined});
-    submitBackgroundSearch(request, request, 1000)
-        .then ( (bgStatus) => {
-            if (bgStatus) {
-                dispatchComponentStateChange(bgKey, {bgStatus});
-                if (isDone(bgStatus.STATE)) {
-                    onComplete(bgStatus);
-                    dispatchComponentStateChange(bgKey, {inProgress:false, bgStatus:undefined});
-                } else {
-                    // not done; track progress
-                    trackBackgroundJob({bgID: bgStatus.ID, key: bgKey, onComplete, sentToBg});
-                }
+    dispatchComponentStateChange(bgKey, {inProgress:true});
+    asyncFetchTable(request)
+        .then ( (jobInfo) => {
+            const jobId = jobInfo?.jobId;
+            const inProgress = !isDone(jobInfo);
+            dispatchComponentStateChange(bgKey, {inProgress, jobId});
+            if (inProgress) {
+                // not done; track progress
+                trackBackgroundJob({jobId, key: bgKey, onComplete, sentToBg});
+            } else {
+                onComplete(jobInfo);
             }
         }).catch( (error) => {
+            dispatchComponentStateChange(bgKey, {inProgress:false});
             dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, error.message)});
         });
 }

@@ -2,14 +2,14 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-
-import {get} from 'lodash';
+import React from 'react';
 import {firefly} from './Firefly.js';
 import {mergeObjectOnly} from './util/WebUtil.js';
 import {getFireflyViewerWebApiCommands} from './api/webApiCommands/ViewerWebApiCommands';
 import {getLcCommands} from './api/webApiCommands/LcWebApiCommands.js';
-import FFTOOLS_ICO from 'html/images/fftools-logo-offset-small-42x42.png';
-
+import {getDatalinkUICommands} from './api/webApiCommands/DatalinkUICommands.js';
+import {getDefaultMOCList} from 'firefly/visualize/HiPSMocUtil.js';
+import APP_ICON from 'html/images/fftools-logo-offset-small-42x42.png';
 
 /**
  * @example
@@ -20,37 +20,53 @@ import FFTOOLS_ICO from 'html/images/fftools-logo-offset-small-42x42.png';
  *      window.firefly = {app: {views: 'images | tables', menu}};
  *   </script>
  */
-var props = {
+const defProps = {
     appTitle: 'Firefly',
     initLoadingMessage: window?.firefly?.options?.initLoadingMessage,
-    appIcon : FFTOOLS_ICO
+    appIcon: <img src={APP_ICON} style={{width:38}}/>
 };
 
-var options = {
+const props = mergeObjectOnly(defProps, window?.firefly?.app ?? {});
+const {template}= props;
+
+
+props.fileDropEventAction= template!=='LightCurveViewer' ? 'FileUploadDropDownCmd' : 'LCUpload';
+
+const defOptions = {
     MenuItemKeys: {maskOverlay:true},
-    catalogSpacialOp: 'polygonWhenPlotExist',
+    catalogSpatialOp: 'polygonWhenPlotExist',
     workspace : {showOptions: false},
     imageMasterSourcesOrder: ['WISE', '2MASS', 'Spitzer'],
     charts: {
         singleTraceUI: false
     },
+    image : {
+        canCreateExtractionTable: (template==='FireflyViewer' || template==='FireflySlate'),
+    },
     hips : {
         useForImageSearch: true,
         hipsSources: 'irsa,cds',
         defHipsSources: {source: 'irsa', label: 'IRSA Featured'},
+        adhocMocSource: {
+            sources: getDefaultMOCList(),
+            label: 'Featured MOC '
+        },
         mergedListPriority: 'Irsa'
     },
-    coverage : { // example of using DSS and wise combination for coverage (not that anyone would want to combination)
-    }
+    coverage : { }
 };
 
-props = mergeObjectOnly(props, get(window, 'firefly.app', {}));
-options = mergeObjectOnly(options, get(window, 'firefly.options', {}));
-const {template}= props;
-let apiCommands;
+const options = mergeObjectOnly(defOptions, window?.firefly?.options ?? {});
 
-if (template==='FireflyViewer' || template==='FireflySlate') apiCommands= getFireflyViewerWebApiCommands();
-else if (template==='LightCurveViewer') apiCommands= getLcCommands();
+let apiCommands;
+if (template==='FireflyViewer' || template==='FireflySlate') {
+    apiCommands= [...getFireflyViewerWebApiCommands(), ...getDatalinkUICommands(false,'DLGeneratedDropDownCmd')];
+}
+else if (template==='LightCurveViewer') {
+    apiCommands= getLcCommands();
+}
+
+
+if (!template || template==='LightCurveViewer') options.searchActions= [];
 
 firefly.bootstrap(props, options, apiCommands);
-
