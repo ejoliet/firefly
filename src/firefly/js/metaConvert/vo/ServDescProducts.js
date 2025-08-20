@@ -1,23 +1,23 @@
-import {isEmpty, isNumber} from 'lodash';
-import {dispatchComponentStateChange, getComponentState} from '../../core/ComponentCntlr.js';
-import {getCellValue, getColumnByRef} from '../../tables/TableUtil.js';
-import {makeCircleString} from '../../ui/dynamic/DynamicUISearchPanel';
-import {isSIAStandardID} from '../../ui/dynamic/ServiceDefTools';
-import {makeWorldPt} from '../../visualize/Point';
-import {isDatalinkTable, isObsCoreLike} from '../../voAnalyzer/TableAnalysis';
+import {isEmpty, isNumber, isUndefined} from 'lodash';
+import {getComponentState} from '../../core/ComponentCntlr.js';
+import {getCellValue} from '../../tables/TableUtil.js';
+import {CONTEXT_PARAMS_STR, makeCircleString} from '../../ui/dynamic/DynamicUISearchPanel';
+import {hasAnySpacial, isSIAStandardID, sdToFieldDefAry} from '../../ui/dynamic/ServiceDefTools';
+import {findCutoutTarget, getCutoutErrorStr, getCutoutSize, setCutoutSize} from '../../ui/tap/Cutout';
+import {PlotAttribute} from '../../visualize/PlotAttribute';
+import {isCatalog, isObsCoreLike} from '../../voAnalyzer/TableAnalysis';
 import {CUTOUT_UCDs, DEC_UCDs, RA_UCDs} from '../../voAnalyzer/VoConst';
 
-import {isDataLinkServiceDesc} from '../../voAnalyzer/VoDataLinkServDef.js';
+import {findWorldPtInServiceDef, isDataLinkServiceDesc} from '../../voAnalyzer/VoDataLinkServDef.js';
 import {isDefined} from '../../util/WebUtil.js';
 import {makeAnalysisActivateFunc} from '../AnalysisUtils.js';
-import {DEFAULT_DATA_PRODUCTS_COMPONENT_KEY} from '../DataProductsCntlr.js';
-import {dpdtAnalyze, dpdtImage} from '../DataProductsType.js';
+import { dispatchSetSearchParams, isServiceDescriptorActivated } from '../DataProductsCntlr';
+import {dpdtAnalyze, dpdtImage, DPtypes} from '../DataProductsType.js';
 import {createSingleImageActivate, createSingleImageExtraction} from '../ImageDataProductsUtil';
 import {getObsCoreRowMetaInfo} from './ObsCoreConverter';
 import {makeObsCoreRequest} from './VORequest.js';
 
 
-export const SD_CUTOUT_KEY= 'sdCutoutSize';
 export const SD_DEFAULT_SPACIAL_CUTOUT_SIZE= .01;
 export const SD_DEFAULT_PIXEL_CUTOUT_SIZE= 200;
 
@@ -25,54 +25,61 @@ export const SD_DEFAULT_PIXEL_CUTOUT_SIZE= 200;
  *
  * @param {Object} p
  * @param p.name
- * @param p.serDef
+ * @param p.dropDownText
+ * @param {ServiceDescriptorDef} p.serDef
  * @param p.sourceTable
  * @param p.sourceRow
  * @param p.idx
  * @param p.positionWP
+ * @param p.dlData
  * @param p.activateParams
  * @param {DataProductsFactoryOptions} p.options
  * @param p.titleStr
  * @param p.activeMenuLookupKey
  * @param p.menuKey
- * @param [p.datalinkExtra]
  * @return {DataProductsDisplayType}
  */
-export function makeServiceDefDataProduct({
-                                              name, serDef, sourceTable, sourceRow, idx, positionWP, activateParams,
-                                              options, titleStr, activeMenuLookupKey, menuKey,
-                                              datalinkExtra = {} }) {
+export function makeServiceDefDataProduct({ dropDownText, name, serDef, sourceTable, sourceRow, idx, positionWP,
+                                              activateParams, options, titleStr, activeMenuLookupKey, menuKey, dlData={}}) {
+
     const {title: servDescTitle = '', accessURL, standardID, serDefParams, ID} = serDef;
     const {activateServiceDef=false}= options;
 
     const allowsInput = serDefParams.some((p) => p.allowsInput);
     const noInputRequired = serDefParams.some((p) => !p.inputRequired);
-    const {semantics, size, sRegion, prodTypeHint, serviceDefRef, dlAnalysis} = datalinkExtra;
+    const {semantics, size, serviceDefRef, dlAnalysis} = dlData;
+    const sRegion= dlData.sourceObsCoreData?.s_region ?? '';
 
-    if (dlAnalysis?.isCutout && canMakeCutoutProduct(serDef,positionWP,sourceRow)) {
+    if (dlAnalysis?.isCutout && canMakeCutoutProduct(serDef,sourceTable,sourceRow,options)) {
        return makeCutoutProduct({
-           name, serDef, sourceTable, sourceRow, idx, positionWP, activateParams,
-           options, titleStr, activeMenuLookupKey, menuKey, datalinkExtra
+           name, serDef, sourceTable, sourceRow, idx, activateParams,
+           options, titleStr, activeMenuLookupKey, menuKey, dlData,
        });
     }
     else if (activateServiceDef && noInputRequired) {
         const url= makeUrlFromParams(accessURL, serDef, idx, getComponentInputs(serDef,options));
         const request = makeObsCoreRequest(url, positionWP, titleStr, sourceTable, sourceRow);
         const activate = makeAnalysisActivateFunc({table:sourceTable, row:sourceRow, request, activateParams,
-            menuKey, dataTypeHint:prodTypeHint, serDef, options});
+            menuKey, activeMenuLookupKey, serDef, dlData, originalTitle:name, options});
+        const tName= (titleStr || name);
+        dispatchSetSearchParams({dpId:activateParams.dpId,
+            autoActiveStatus : { [serDef?.internalServiceDescriptorID]: true }
+        });
+
         return dpdtAnalyze({
-            name:'Show: ' + (titleStr || name), activate, url:request.getURL(), serDef, menuKey,
-            activeMenuLookupKey, request, sRegion, prodTypeHint, semantics, size, serviceDefRef});
+            name:tName, dropDownText: dropDownText ?? 'Show: '+tName,
+            activate, url:request.getURL(), serDef, menuKey, dlData,
+            activeMenuLookupKey, request, sRegion, semantics, size, serviceDefRef});
     } else {
         const request = makeObsCoreRequest(accessURL, positionWP, titleStr, sourceTable, sourceRow);
-        const activate = makeAnalysisActivateFunc({table:sourceTable, row:sourceRow, request, activateParams, menuKey,
-            dataTypeHint:prodTypeHint ?? 'unknown', serDef, originalTitle:name,options});
-        const entryName = `Show: ${titleStr || servDescTitle || `Service #${idx}: ${name}`} ${allowsInput ? ' (Input Required)' : ''}`;
+        const activate = makeAnalysisActivateFunc({table:sourceTable, row:sourceRow, request, activateParams,
+            menuKey, activeMenuLookupKey, dlData, serDef, originalTitle:name,options});
+        const tName = `${titleStr || servDescTitle || `Service #${idx}: ${name}`} ${allowsInput ? ' (Input Required)' : ''}`;
         return dpdtAnalyze({
-            name:entryName, activate, url:request.getURL(), serDef, menuKey,
+            name:tName, dropDownText: dropDownText ?? 'Show: '+tName,
+            activate, url:request.getURL(), serDef, menuKey,
             activeMenuLookupKey, request, allowsInput, serviceDefRef, standardID, ID,
-            semantics, size, sRegion,
-            prodTypeHint: prodTypeHint ?? 'unknown'
+            semantics, size, sRegion, dlData,
             });
     }
 }
@@ -80,9 +87,10 @@ export function makeServiceDefDataProduct({
 
 const CUTOUT_NAME_GUESS_LIST= ['size'];
 
-function canMakeCutoutProduct(serDef, positionWP,sourceRow){
+export function canMakeCutoutProduct(serDef,table,sourceRow,options){
     const {standardID,serDefParams} = serDef;
 
+    const {positionWP}= findCutoutTarget(options.dataProductsComponentKey,serDef,table,sourceRow);
     if (!positionWP) { // look for ra/dec columns
         const wp= findWorldPtInServiceDef(serDef,sourceRow);
         if (!wp) return false;
@@ -102,54 +110,23 @@ function canMakeCutoutProduct(serDef, positionWP,sourceRow){
     return Boolean(nameGuess);
 }
 
-function findWorldPtInServiceDef(serDef,sourceRow) {
-    const {serDefParams,sdSourceTable, dataLinkTableRowIdx} = serDef;
-    const raParam= serDefParams.find( ({UCD=''}) =>
-        RA_UCDs.find( (testUcd) => UCD.toLowerCase().includes(testUcd)) );
-    const decParam= serDefParams.find( ({UCD=''}) =>
-        DEC_UCDs.find( (testUcd) => UCD.toLowerCase().includes(testUcd)) );
-    if (!raParam && !decParam) return;
 
-    let raVal= raParam.value;
-    let decVal= decParam.value;
-
-    if (raVal && decVal) return makeWorldPt(raVal,decVal);
-    if (!sdSourceTable) return;
-
-    const hasDLTable= isDatalinkTable(sdSourceTable);
-    const hasDLRow= isDefined(dataLinkTableRowIdx);
-    const hasSourceRow= isDefined(sourceRow);
-    const row= hasDLTable && hasDLRow ? dataLinkTableRowIdx : hasSourceRow ? sourceRow : undefined;
-
-    if (!raVal && raParam.ref) {
-        const col = getColumnByRef(sdSourceTable, raParam.ref);
-        if (col && row > -1) raVal = getCellValue(sdSourceTable, row, col.name);
-    }
-
-    if (!decVal && decParam.ref) {
-        const col = getColumnByRef(sdSourceTable, decParam.ref);
-        if (col && row > -1) decVal = getCellValue(sdSourceTable, row, col.name);
-    }
-
-    return (raVal && decVal) ? makeWorldPt(raVal,decVal) : undefined;
-}
-
-function makeCutoutProduct({ name, serDef, sourceTable, sourceRow, idx, positionWP, activateParams,
+export function makeCutoutProduct({ name, serDef, sourceTable, sourceRow, idx, activateParams, dlData,
                              options, titleStr, menuKey}) {
 
     const {accessURL, standardID, serDefParams, sdSourceTable} = serDef;
-    const key= options.dataProductsComponentKey ?? DEFAULT_DATA_PRODUCTS_COMPONENT_KEY;
-    const cutoutSize= getComponentState(key,{})[SD_CUTOUT_KEY] ?? 0.0213;
+    const key= options.dataProductsComponentKey;
+    const cutoutSize= getCutoutSize(key);
+
     if (cutoutSize<=0) return; // must be greater than 0
-    if (!positionWP) {
-        positionWP= findWorldPtInServiceDef(serDef,sourceRow);
-    }
-    if (!positionWP) return;  // this must exist, should check in calling function
+
+    const {requestedType,foundType,positionWP}= findCutoutTarget(key,serDef,sourceTable,sourceRow);
+    if (!positionWP) return;  // positionWP must exist
 
     let titleToUse= titleStr;
 
-    if (isDefined(serDef.dataLinkTableRowIdx) && isObsCoreLike(sourceTable)) { // this service def, from datalink, in obscore (normal cawse)
-        titleToUse= getObsCoreRowMetaInfo(sourceTable,sourceRow)?.titleStr ?? titleStr;
+    if (isDefined(serDef.dataLinkTableRowIdx)) {
+        titleToUse= getObsCoreRowMetaInfo(sourceTable,sourceRow).titleStr || name || titleStr;
     }
     let params;
     const cutoutOptions= {...options};
@@ -163,17 +140,29 @@ function makeCutoutProduct({ name, serDef, sourceTable, sourceRow, idx, position
         const obsFieldParam= serDefParams.find( ({UCD=''}) =>
                               CUTOUT_UCDs.find( (testUcd) => UCD.toLowerCase().includes(testUcd)) );
         if (obsFieldParam) {
-            const ucd= obsFieldParam.UCD;
+            const raParam= serDefParams.find( ({UCD=''}) =>
+                RA_UCDs.find( (testUcd) => UCD.toLowerCase().includes(testUcd)) );
+            const decParam= serDefParams.find( ({UCD=''}) =>
+                DEC_UCDs.find( (testUcd) => UCD.toLowerCase().includes(testUcd)) );
+            const obsfieldUcd= obsFieldParam.UCD;
             const sdSizeValue= Number(obsFieldParam.value);
-            cutoutOptions.ucdKeys= [...ucdKeys,ucd];
+            cutoutOptions.ucdKeys= [...ucdKeys,obsfieldUcd];
 
             // note: the size is set as a number, if is a string it is coming from the dialog
             if (isNumber(cutoutSize) && cutoutSize===SD_DEFAULT_SPACIAL_CUTOUT_SIZE && sdSizeValue!==cutoutSize) {
-                params= {[ucd] : sdSizeValue};
-                dispatchComponentStateChange(key,{ [SD_CUTOUT_KEY]: sdSizeValue } );
+                params= {[obsfieldUcd] : sdSizeValue};
+                setCutoutSize(key,sdSizeValue, sourceTable?.tbl_id);
             }
             else {
-                params= {[ucd] : cutoutSize};
+                params= {[obsfieldUcd] : cutoutSize};
+            }
+            if (raParam) {
+                cutoutOptions.ucdKeys.push(raParam.UCD);
+                params[raParam.UCD]= positionWP.x;
+            }
+            if (decParam) {
+                cutoutOptions.ucdKeys.push(decParam.UCD);
+                params[decParam.UCD]= positionWP.y;
             }
         }
         else { // handle pixel based cutout
@@ -187,22 +176,25 @@ function makeCutoutProduct({ name, serDef, sourceTable, sourceRow, idx, position
             else {
                 const valNum= parseInt(nameGuess.value) || SD_DEFAULT_PIXEL_CUTOUT_SIZE;
                 params= {[nameGuess.name] : valNum};
-                dispatchComponentStateChange(key,{ [SD_CUTOUT_KEY]: valNum+'px' } );
+                setCutoutSize(key,valNum+'px', sourceTable?.tbl_id);
             }
             pixelBasedCutout= true;
         }
     }
-    const url= makeUrlFromParams(accessURL, serDef, idx, getComponentInputs(serDef,cutoutOptions,params));
+    const url= makeUrlFromParams(accessURL, serDef, dlData?.rowIdx ?? idx, getComponentInputs(serDef,cutoutOptions,params));
     const request = makeObsCoreRequest(url, positionWP, titleToUse, sourceTable, sourceRow);
+    if (foundType!==requestedType) {
+        request.setAttributes({[PlotAttribute.USER_WARNINGS]: getCutoutErrorStr(foundType,requestedType)});
+    }
 
     const tbl= sourceTable ?? sdSourceTable;
     const activate= createSingleImageActivate(request,activateParams.imageViewerId, tbl?.tbl_id,
         tbl?.highlightedRow);
     return dpdtImage({
         name:'Show: Cutout: ' + (titleToUse || name),
-        activate, menuKey,
-        extraction: createSingleImageExtraction(request), enableCutout:true, pixelBasedCutout,
-        request, override:false, interpretedData:false, requestDefault:false});
+        activate, menuKey, dlData,
+        extraction: createSingleImageExtraction(request, dlData?.sourceObsCoreData), enableCutout:true, pixelBasedCutout,
+        request, override:false, interpretedData:false});
 }
 
 
@@ -210,10 +202,11 @@ function makeCutoutProduct({ name, serDef, sourceTable, sourceRow, idx, position
  * return a list of inputs from the user that will go into the service descriptor URL
  * @param serDef
  * @param {DataProductsFactoryOptions} options
+ * @param moreParams
  * @return {Object.<string, *>}
  */
 function getComponentInputs(serDef, options, moreParams={}) {
-    const key= options.dataProductsComponentKey ?? DEFAULT_DATA_PRODUCTS_COMPONENT_KEY;
+    const key= options.dataProductsComponentKey;
     const valueObj= {...getComponentState(key,{}), ...moreParams};
     if (isEmpty(valueObj)) return {};
     const {serDefParams}= serDef;
@@ -256,37 +249,57 @@ function getComponentInputs(serDef, options, moreParams={}) {
  * @return {Array.<DataProductsDisplayType>}
  */
 export function createServDescMenuRet({ descriptors, positionWP, table, row,
-                                          activateParams, activeMenuLookupKey, options }) {
+                                        activateParams, activeMenuLookupKey, options,
+                                      }) {
+
+    // common case: a catalog table, activateServiceDef not specifically set
+    // then activate the service descriptor if it is not a spacial search
+    const determineActivate= !isObsCoreLike(table) && isCatalog(table) && isUndefined(options.activateServiceDef);
+
     return descriptors
         .filter((sDesc) => !isDataLinkServiceDesc(sDesc))
         .map((serDef, idx) => {
+            let activateServiceDef= determineActivate
+                ? !hasAnySpacial(sdToFieldDefAry({serviceDef:serDef}))
+                : options.activateServiceDef;
+
+            const currentlyActive= isServiceDescriptorActivated(activateParams.dpId,serDef.internalServiceDescriptorID);
+            if (isDefined(currentlyActive)) activateServiceDef= currentlyActive;
+
+
             return makeServiceDefDataProduct({
-                name: 'Show: ' + serDef.title,
+                name: serDef.title,
+                dropDownText: 'Show: ' + serDef.title,
                 serDef, positionWP,
                 sourceTable: table, sourceRow: row, idx: row,
-                activateParams, options, activeMenuLookupKey,
+                activateParams,
+                options: {...options,activateServiceDef},
+                activeMenuLookupKey,
                 titleStr: serDef.title, menuKey: 'serdesc-dlt-' + idx
             });
         });
 }
 
 export function makeUrlFromParams(url, serDef, rowIdx, userInputParams = {}) {
-    const sendParams = {};
+    if (!url) return undefined;
+    const sendParams = new URLSearchParams();
     serDef?.serDefParams  // if it is defaulted, then set it
         ?.filter(({value}) => isDefined(value))
-        .forEach(({name, value}) => sendParams[name] = value);
+        .forEach(({name, value}) => sendParams.set(name, value));
     serDef?.serDefParams // if it is referenced, then set it
         ?.filter(({ref}) => ref)
-        .forEach((p) => sendParams[p.name] = getCellValue(serDef.sdSourceTable, rowIdx, p.colName));
-    userInputParams && Object.entries(userInputParams).forEach(([k, v]) => v && (sendParams[k] = v));
-    const newUrl = new URL(url);
-    if (!newUrl) return undefined;
-    Object.entries(sendParams).forEach(([k, v]) => newUrl.searchParams.append(k, v));
-    logServiceDescriptor(newUrl, sendParams, newUrl.toString());
-    return newUrl.toString();
+        .forEach((p) => sendParams.set(p.name, getCellValue(serDef.sdSourceTable, rowIdx, p.colName)));
+    Object.entries(userInputParams)
+        .forEach(([k, v]) => v && k!==CONTEXT_PARAMS_STR && sendParams.set(k,v));
+
+    const inputURL= new URL(url);
+    const additionalParams= new URLSearchParams(userInputParams?.[CONTEXT_PARAMS_STR]);
+    const params= new URLSearchParams([...inputURL.searchParams, ...sendParams, ...additionalParams]);
+    const newUrl= params.size ? inputURL.toString().split('?')[0]+'?'+params.toString() : url;
+    logServiceDescriptor(newUrl, params, newUrl);
+    return newUrl;
 }
-function logServiceDescriptor(baseUrl, sendParams, newUrl) {
-    // console.log(`service descriptor base URL: ${baseUrl}`);
-    // Object.entries(sendParams).forEach(([k,v]) => console.log(`param: ${k}, value: ${v}`));
-    console.log(`service descriptor new URL: ${newUrl}`);
+function logServiceDescriptor(baseUrl, params, newUrl) {
+     // console.log(`service descriptor base URL: ${baseUrl}`);
+     // console.log(`service descriptor new URL: ${newUrl}`);
 }

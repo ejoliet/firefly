@@ -1,3 +1,4 @@
+import {getPreferCutout} from '../../ui/tap/Cutout';
 import {getDataLinkData} from '../../voAnalyzer/VoDataLinkServDef.js';
 import {createDataLinkSingleRowItem} from './DataLinkProcessor.js';
 
@@ -15,9 +16,21 @@ export function makeDatalinkStaneAloneConverter(table,converterTemplate,options=
 }
 
 export async function getDatalinkStandAlineDataProduct(table, row, activateParams, options) {
-    const dataLinkData= getDataLinkData(table);
-    const dlData= dataLinkData?.[row];
+    const dataLinkData= getDataLinkData(table,true);
+    const {dataProductsComponentKey}= options;
+    const preferCutout= getPreferCutout(dataProductsComponentKey,table?.tbl_id);
 
-    const item= createDataLinkSingleRowItem({dlData, activateParams, baseTitle:'Datalink data', options});
-    return item;
+    let dlData= dataLinkData?.[row];
+    if (!dlData) return;
+    const {isCutout,cutoutFullPair,usableEntry}= dlData.dlAnalysis;
+
+    if (cutoutFullPair && usableEntry) {
+        if (preferCutout) {
+            dlData = isCutout ? dlData : dlData.relatedDLEntries.cutout;
+        }
+        else {
+            dlData = !isCutout ? dlData : dlData.relatedDLEntries.fullImage;
+        }
+    }
+    return createDataLinkSingleRowItem({dlData, activateParams, options});
 }

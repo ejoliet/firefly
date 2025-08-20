@@ -70,8 +70,11 @@ export const LC = {
     META_ERR_NAMES: 'ts_errorNames',
 
     META_MISSION: MetaConst.TS_DATASET,
+    UPLOAD_FILENAME: 'uploadFileName',
     MISSION_DATA: 'missionEntries',
     GENERAL_DATA:'generalEntries',
+    SLIDER_RANGE_MIN: 'sliderRangeMin',
+    SLIDER_RANGE_MAX: 'sliderRangeMax',
 
     TABLE_PAGESIZE: MAX_ROW
 };
@@ -104,6 +107,10 @@ function getDEC(layoutInfo) {
 
 function getCoordSys(layoutInfo) {
     return get(layoutInfo, [LC.MISSION_DATA, LC.META_COORD_SYS]);
+}
+
+function getUploadFileName(layoutInfo) {
+    return get(layoutInfo, ['missionEntries', LC.UPLOAD_FILENAME]);
 }
 
 function getCutoutSize(layoutInfo) {
@@ -274,7 +281,7 @@ export function* lcManager(params={}) {
 function updateRawTableChart(timeCName, fluxCName, converterId) {
 
     if (timeCName && fluxCName) {
-
+        const missionName = getConverter(converterId).missionName;
         const title =getConverter(converterId).showPlotTitle?getConverter(converterId).showPlotTitle(LC.RAW_TABLE):'';
 
         const chartX = get(getChartData(LC.RAW_TABLE), ['tablesources', 0, 'mappings', 'x']);
@@ -300,7 +307,7 @@ function updateRawTableChart(timeCName, fluxCName, converterId) {
                 mode: 'markers'
             }],
             layout: {
-                title,
+                title: `${missionName}` + ' ' + `${title}`,
                 yaxis: {autorange: 'reversed', showgrid: true, title: {text: fluxCName}}
             }
         };
@@ -472,6 +479,7 @@ function clearResults(layoutInfo) {
         missionEntries: null,
         generalEntries: null,
         fullRawTable: null,
+        rawTableRequest: null,
         rawTableColumns:null,
         error:''
     });
@@ -496,8 +504,9 @@ function handleNewSearch(layoutInfo, action) {
  */
 function handleRawTableLoad(layoutInfo, tblId) {
     const rawTable = getTblById(tblId);
+    const uploadedFilename = rawTable.request.uploadFileName;
     const generalEntries = get(layoutInfo, LC.GENERAL_DATA) || getGeneralEntries();
-    const {converterData, missionEntries} = makeMissionEntries(rawTable.tableMeta);
+    const {converterData, missionEntries} = makeMissionEntries(rawTable.tableMeta, layoutInfo, uploadedFilename);
 
     if (!converterData) {
         logger.error('Unknown mission or no converter');
@@ -734,6 +743,7 @@ export function setupImages(layoutInfo, invokedBy=TABLE_FETCH){
     const newPlotIdAry = makePlotIds(tableModel.highlightedRow, tableModel.totalRows, count);
     const maxPlotIdAry = makePlotIds(tableModel.highlightedRow, tableModel.totalRows, LC.MAX_IMAGE_CNT);
     const cutoutSize = getCutoutSize(layoutInfo);
+    const uploadFilename = getUploadFileName(layoutInfo) || '';
 
     try {
         newPlotIdAry.forEach((plotId) => {

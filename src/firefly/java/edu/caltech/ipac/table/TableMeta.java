@@ -60,6 +60,7 @@ public class TableMeta implements Serializable {
 
     public static final String RESULTSET_ID = "resultSetID";            // this meta if exists contains the ID of the resultset returned.
     public static final String RESULTSET_REQ = "resultSetRequest";      // this meta if exists contains the Request used to create this resultset.
+    public static final String DATA_ORIGIN = "data_origin";             // with values like, "internal", "external", or others future values
 
 
     public static final String ID = "ID";
@@ -69,6 +70,8 @@ public class TableMeta implements Serializable {
     public static final String XTYPE = "xtype";
     public static final String DESC = "description";
     public static final String NAME = "name";
+    public static final String TYPE = "type";
+    public static final String VALUE = "value";
     public static final String DERIVED_FROM = "DERIVED_FROM";
 
     public static final String DOCLINK = "doclink.url";

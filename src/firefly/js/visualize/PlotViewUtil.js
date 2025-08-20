@@ -5,6 +5,7 @@ import {dispatchDeletePlotView, ExpandType, visRoot} from 'firefly/visualize/Ima
 import {has, isArray, isEmpty, isObject, isString, isUndefined} from 'lodash';
 import shallowequal from 'shallowequal';
 import {memorizeLastCall} from '../util/WebUtil';
+import {Band} from './Band';
 import CysConverter, {CCUtil} from './CsysConverter';
 import {getNumberHeader, HdrConst} from './FitsHeaderUtil.js';
 import {getViewer} from './MultiViewCntlr.js';
@@ -15,7 +16,7 @@ import {makeDevicePt, makeImagePt, makeWorldPt, pointEquals} from './Point.js';
 import {getWavelength} from './projection/Wavelength.js';
 import {removeRawData} from './rawData/RawDataCache.js';
 import {hasClearedDataInStore, hasLocalStretchByteDataInStore} from './rawData/RawDataOps.js';
-import {computeDistance} from './VisUtil';
+import {computeDistance, WAVELENGTH_UNITS} from './VisUtil';
 import {isHiPS, isHiPSAitoff, isImage} from './WebPlot.js';
 
 
@@ -369,8 +370,7 @@ export function getPlotStateAry(pv) {
  * @return {boolean}
  */
 export function hasOverlayColorLock(pv,plotGroup) {
-    return Boolean(plotGroup && plotGroup.plotGroupId && plotGroup.overlayColorLock &&
-        pv && pv.plotGroupId===plotGroup.plotGroupId);
+    return Boolean(plotGroup?.overlayColorLock && pv?.plotGroupId===plotGroup?.plotGroupId);
 }
 
 /**
@@ -932,14 +932,22 @@ export function getCubePlaneFromWavelength(pv,wl,imPt) {
 
 /**
  * Return the units string
- * @param plot
+ * @param {WebPlot|undefined} plot
+ * @param {Band} [band]
  * @return {string}
  */
-export function getWaveLengthUnits(plot) {
-    if (!plot || !hasWLInfo(plot)) return '';
-    return plot.wlData?.spectralCoords?.[0].units ?? '';
-}
+export const getWaveLengthUnits= (plot, band) => getWlUnitValue(plot,0,band);
 
+/**
+ * Return the units string
+ * @param {WebPlot} plot
+ * @param {Band} [band]
+ * @return {string}
+ */
+export const getBandWidthUnits= (plot, band) => getWlUnitValue(plot,1,band);
+
+const getWlUnitValue= (plot, idx, band= Band.NO_BAND) =>
+    hasWLInfo(plot) ? plot.wlDataAry[band.value]?.spectralCoords?.[idx]?.units : '';
 
 
 /**
@@ -949,7 +957,7 @@ export function getWaveLengthUnits(plot) {
  * @return {string}
  */
 export function getFormattedWaveLengthUnits(plotOrStr, anyPartOfStr=false) {
-    const MICRON_SYMBOL= String.fromCharCode(0x03BC)+'m';
+    const MICRON_SYMBOL= WAVELENGTH_UNITS.um.symbol;
     const uStr= isString(plotOrStr) ? plotOrStr : getWaveLengthUnits(plotOrStr);
     if (anyPartOfStr) {
         return uStr.replace(new RegExp('microns|micron|um|micrometers','gi'),MICRON_SYMBOL);
@@ -966,11 +974,25 @@ export function getFormattedWaveLengthUnits(plotOrStr, anyPartOfStr=false) {
  * @param {WebPlot|undefined} plot
  * @param {Point} pt
  * @param {number} cubeIdx
+ * @param {Band} [band]
  * @return {number}
  */
-export const getPtWavelength= (plot, pt, cubeIdx) =>
-    (plot && hasWLInfo(plot) && getWavelength(CCUtil.getImageCoords(plot,pt),cubeIdx,plot.wlData))?.[0] ?? 0;
+export const getPtWavelength= (plot, pt, cubeIdx, band) => getPtSpectralCoords(plot, pt, cubeIdx, band)[0];
 
+/**
+ *
+ * @param {WebPlot|undefined} plot
+ * @param {Point} pt
+ * @param {number} cubeIdx
+ * @param {Band} [band]
+ * @return {Array.<number>}
+ */
+export function getPtSpectralCoords(plot, pt, cubeIdx, band= Band.NO_BAND) {
+    if (!plot?.wlDataAry?.[band.value] || !hasWLInfo(plot)) return [0,0];
+    const ipt= CCUtil.getImageCoords(plot,pt);
+    if (!ipt) return [0,0];
+    return getWavelength(ipt, cubeIdx, plot.wlDataAry[band.value]) ?? [0,0];
+}
 
 //=============================================================
 //=============================================================

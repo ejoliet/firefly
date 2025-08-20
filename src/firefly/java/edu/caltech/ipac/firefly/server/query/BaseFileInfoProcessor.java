@@ -10,15 +10,15 @@ import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.table.DataType;
-import edu.caltech.ipac.table.TableUtil;
 import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.util.cache.Cache;
 import edu.caltech.ipac.util.cache.CacheManager;
 import edu.caltech.ipac.util.cache.StringKey;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.util.List;
+
+import static edu.caltech.ipac.util.cache.Cache.fileInfoCheck;
 
 
 /**
@@ -34,10 +34,10 @@ public abstract class BaseFileInfoProcessor implements SearchProcessor<FileInfo>
     public FileInfo getData(ServerRequest request) throws DataAccessException {
         try {
             FileInfo fi = null;
-            Cache cache = getCache(request);
+            Cache<FileInfo> cache = getCache(request);
             StringKey key = new StringKey(getClass().getName(), getUniqueID(request));
             if (doCache()) {
-                fi = cache != null ? (FileInfo) cache.get(key) : null;
+                fi = cache != null ? cache.get(key) : null;
             }
             if (fi == null) {
                 fi = loadData(request);
@@ -54,8 +54,8 @@ public abstract class BaseFileInfoProcessor implements SearchProcessor<FileInfo>
         }
     }
 
-    public Cache getCache(ServerRequest request) {
-        return CacheManager.getCache(Cache.TYPE_PERM_SMALL);
+    public Cache<FileInfo> getCache(ServerRequest request) {
+        return CacheManager.<FileInfo>getLocal().validateOnGet(fileInfoCheck);
     }
 
     public QueryDescResolver getDescResolver() {

@@ -6,19 +6,22 @@ import {isFunction} from 'lodash';
 import {bool, string} from 'prop-types';
 import React, {memo, useContext, useEffect, useState} from 'react';
 import {
-    dataProductRoot, dispatchInitDataProducts, dispatchSetSearchParams, dispatchUpdateActiveKey, getActivateParams,
+    dataProductRoot, dispatchInitDataProducts, dispatchSetSearchParams,
+    dispatchUpdateActiveKey, getActivateParams,
     getActiveFileMenuKey, getActiveFileMenuKeyByKey, getDataProducts, getSearchParams, getServiceParamsAry,
+    isServiceDescriptorActivated,
 } from '../../../metaConvert/DataProductsCntlr.js';
 import {DPtypes, SHOW_CHART, SHOW_IMAGE, SHOW_TABLE} from '../../../metaConvert/DataProductsType.js';
 import {ServiceDescriptorPanel} from '../../../ui/dynamic/ServiceDescriptorPanel.jsx';
 import {RenderTreeIdCtx} from '../../../ui/RenderTreeIdCtx.jsx';
 import {useStoreConnector} from '../../../ui/SimpleComponent.jsx';
+import {isDefined} from '../../../util/WebUtil';
 import {
     dispatchAddViewer, dispatchViewerUnmounted, getLayoutDetails, getMultiViewRoot, GRID, IMAGE, NewPlotMode,
     PLOT2D, SINGLE
 } from '../../MultiViewCntlr.js';
 import {createMakeDropdownFunc} from './DPDropdown.jsx';
-import {AdvancedMessage, ProductMessage} from './MPMessages.jsx';
+import {AdvancedMessage, ProductDownload, ProductMessage, TextFileViewer} from './MPMessages.jsx';
 import {MultiProductChoice} from './MultiProductChoice.jsx';
 
 const getInitList= () => dataProductRoot().map( ({dpId}) => dpId);
@@ -58,14 +61,15 @@ const MultiProductViewerImpl= memo(({ dpId, activateParams, metaDataTableId, noP
     const [lookupKey, setLookKey] = useState(undefined);
     const dataProductsState = useStoreConnector((old) => {
             const newDp= getDataProducts(dataProductRoot(),dpId)||{};
-            return (!old || (newDp!==old && newDp.displayType && newDp.displayType!==DPtypes.DOWNLOAD)) ? newDp : old;
+            return (!old || (newDp!==old && newDp.displayType)) ? newDp : old;
         }, [dpId, metaDataTableId, factoryKey]);
     const serviceParamsAry = useStoreConnector(() => getServiceParamsAry(dataProductRoot(),dpId));
+    // const serDescActive = isServiceDescriptorActivated(dpId,dataProductsState?.serDef?.internalServiceDescriptorID);
 
     const {imageViewerId,chartViewerId}= activateParams;
 
     const {displayType=DPtypes.UNSUPPORTED, menu,fileMenu, isWorkingState, menuKey,
-        activeMenuLookupKey,singleDownload= false, chartTableDefOption=SHOW_CHART,
+        activeMenuLookupKey,chartTableDefOption=SHOW_CHART,
         imageActivate, allowsInput=false, serDef= undefined}= dataProductsState;
     let {activate}= dataProductsState;
     const extraction= enableExtraction && dataProductsState.extraction;
@@ -96,8 +100,10 @@ const MultiProductViewerImpl= memo(({ dpId, activateParams, metaDataTableId, noP
         setLookKey(displayType===DPtypes.CHOICE_CTI ? ctLookupKey : undefined);
     }, [displayType,initCTIChoice,ctLookupKey]);
 
+    const getInput= shouldGetInput(dpId,dataProductsState);
+
     useEffect(() => {
-        if (allowsInput && !searchParams) return;
+        if (getInput) return;
         const deActivate= activate?.(menu,searchParams);
         return () => isFunction(deActivate) &&
             deActivate( {
@@ -108,8 +114,7 @@ const MultiProductViewerImpl= memo(({ dpId, activateParams, metaDataTableId, noP
 
     const doResetButton= displayType!==DPtypes.ANALYZE && !isWorkingState && Boolean(searchParams || serDef?.serDefParams?.some( (sdp) => !sdp.ref));
 
-    const getInput= displayType===DPtypes.ANALYZE && allowsInput && !searchParams;
-    const showMenu= !singleDownload || (singleDownload && (displayType===DPtypes.DOWNLOAD_MENU_ITEM || displayType===DPtypes.MESSAGE));
+    const showMenu= shouldShowMenu(dataProductsState);
     const doMakeDropdown= menu?.length || fileMenu?.menu?.length || extraction;
 
     const makeDropDown= doMakeDropdown ?
@@ -123,24 +128,42 @@ const MultiProductViewerImpl= memo(({ dpId, activateParams, metaDataTableId, noP
     );
 });
 
+function shouldShowMenu(dataProductsState) {
+    const {menu, displayType}= dataProductsState;
+    let showMenu= menu?.length>0;
+    if (showMenu && menu.length===1 &&
+        displayType===DPtypes.MESSAGE && menu[0].displayType===DPtypes.DOWNLOAD) {
+        showMenu= false;
+    }
+    return showMenu;
+}
+
 
 function ViewerRender({dpId, dataProductsState, noProductMessage, metaDataTableId, makeDropDown, activateParams,
                           setCurrentCTIChoice, ctiChoice, ctLookupKey, getInput, doResetButton, factoryKey}) {
-    const {displayType=DPtypes.UNSUPPORTED, menu, singleDownload, isWorkingState, message, activeMenuLookupKey,
-        menuKey, imageActivate, url, serDef, serviceDefRef, sRegion, name:title, standardID }= dataProductsState;
+    const {displayType=DPtypes.UNSUPPORTED, menu, isWorkingState, message, activeMenuLookupKey,
+        menuKey, imageActivate, url, serDef, serviceDefRef, sRegion, name:title}= dataProductsState;
     const {imageViewerId,chartViewerId,tableGroupViewerId}=  activateParams;
     switch (displayType) {
         case DPtypes.ANALYZE :
-            if (!getInput) return (<ProductMessage {...{menu, singleDownload, makeDropDown, isWorkingState, message}}/>);
+            if (!getInput) return (<ProductMessage {...{menu, makeDropDown, isWorkingState, message}}/>);
             return (<ServiceDescriptorPanel {...{
-                serDef, serviceDefRef, title, makeDropDown, sRegion, standardID,
-                setSearchParams: (params) => dispatchSetSearchParams({dpId,activeMenuLookupKey,menuKey,params}),
+                serDef, serviceDefRef, title, makeDropDown, sRegion,
+                setSearchParams: (params) => {
+                    const {internalServiceDescriptorID}= serDef;
+                    dispatchSetSearchParams({dpId,activeMenuLookupKey,menuKey,params,
+                        autoActiveStatus : { [internalServiceDescriptorID]: true }
+                    });
+                },
             }} />);
         case DPtypes.MESSAGE :
         case DPtypes.PROMISE :
             return <AdvancedMessage {...{dpId, dataProductsState, noProductMessage, doResetButton, makeDropDown}}/>;
         case DPtypes.DOWNLOAD_MENU_ITEM :
-            return (<ProductMessage {...{menu, singleDownload, makeDropDown, message}} />);
+        case DPtypes.DOWNLOAD:
+            return (<ProductDownload {...{ menu, makeDropDown, message:message || 'This file type cannot be displayed',
+                downloadName:title, url, loadInBrowserMsg:dataProductsState.loadInBrowserMsg,
+                fileType:dataProductsState.fileType } } />);
         case DPtypes.IMAGE :
             return (<MultiProductChoice {...{dataProductsState,dpId,makeDropDown,metaDataTableId, imageViewerId,whatToShow:SHOW_IMAGE, factoryKey}}/>);
         case DPtypes.TABLE :
@@ -161,10 +184,12 @@ function ViewerRender({dpId, dataProductsState, noProductMessage, metaDataTableI
                 }} />);
         case DPtypes.PNG :
             return (<ProductPNG {...{makeDropDown, url}}/>);
+        case DPtypes.TXT :
+            return (<TextFileViewer {...{makeDropDown, menu, url, fileType:dataProductsState.fileType}}/>);
     }
 
     if (noProductMessage) {
-        return (<ProductMessage {...{menu, singleDownload, makeDropDown, isWorkingState, message:noProductMessage}} />);
+        return (<ProductMessage {...{menu, makeDropDown, isWorkingState, message:noProductMessage}} />);
     }
     else {
         return (<div/>);
@@ -182,3 +207,19 @@ const ProductPNG = ( {makeDropDown, url}) => (
     </Stack> );
 
 const makeChartTableLookupKey= (activeItemLookupKey, fileMenuKey) => `${activeItemLookupKey}-charTable-${fileMenuKey}`;
+
+
+
+function shouldGetInput(dpId,dataProductsState) {
+    if (!dataProductsState) return false;
+    const {displayType, allowsInput=false, serDef= undefined, activeMenuLookupKey, menuKey}= dataProductsState;
+    if (displayType!==DPtypes.ANALYZE || !allowsInput || !serDef || !activeMenuLookupKey ) return false;
+
+    const noInputRequired = serDef.serDefParams.some((p) => !p.inputRequired);
+    const serviceParamsAry = getServiceParamsAry(dataProductRoot(),dpId);
+    const searchParams= getSearchParams(serviceParamsAry,activeMenuLookupKey,menuKey);
+    const serDescActive = isServiceDescriptorActivated(dpId,serDef.internalServiceDescriptorID);
+    if (noInputRequired && isDefined(serDescActive)) return !serDescActive;
+    return !Boolean(searchParams);
+}
+

@@ -1,3 +1,4 @@
+import React from 'react';
 import {getPreference} from '../../core/AppDataCntlr';
 import {dispatchAddActionWatcher} from '../../core/MasterSaga';
 import {MetaConst} from '../../data/MetaConst';
@@ -8,6 +9,7 @@ import {
     dispatchTableHighlight, dispatchTableUiUpdate, TABLE_HIGHLIGHT, TABLE_REMOVE, TABLE_SELECT, TABLE_UPDATE
 } from '../../tables/TablesCntlr';
 import {getMetaEntry, getTableUiByTblId, getTblById} from '../../tables/TableUtil';
+import {isDefined} from '../../util/WebUtil';
 import CysConverter from '../../visualize/CsysConverter';
 import {COLOR_HIGHLIGHTED_PT, getNextColor, makeDrawingDef} from '../../visualize/draw/DrawingDef';
 import DrawLayer, {ColorChangeType, DataTypes} from '../../visualize/draw/DrawLayer';
@@ -20,6 +22,8 @@ import DrawLayerCntlr, {
     dispatchForceDrawLayerUpdate, dispatchModifyCustomField, dispatchUpdateDrawLayer, dlRoot, getDlAry, SUBGROUP
 } from '../../visualize/DrawLayerCntlr';
 import ImagePlotCntlr, {dispatchUseTableAutoScroll, visRoot} from '../../visualize/ImagePlotCntlr';
+import {dispatchBottomUIComponent, findViewerWithItemId, getMultiViewRoot, IMAGE} from '../../visualize/MultiViewCntlr';
+import {PlotAttribute} from '../../visualize/PlotAttribute';
 import {
     getCenterOfProjection, getConnectedPlotsIds, getDrawLayerById, getPlotViewIdListByPositionLock, primePlot
 } from '../../visualize/PlotViewUtil';
@@ -27,8 +31,9 @@ import {pointEquals} from '../../visualize/Point';
 import {makeTableColorTitle} from '../../visualize/ui/DrawLayerUIComponents';
 import {MouseState} from '../../visualize/VisMouseSync';
 import {isHiPS, isImage} from '../../visualize/WebPlot';
+import {makeWorldPtUsingCenterColumns} from '../../voAnalyzer/TableAnalysis';
 import {CatalogType} from '../Catalog';
-import {getUIComponent} from '../CatalogUI';
+import {getUIComponent, OptionalHighlight} from '../CatalogUI';
 import {
     HPX_GROUP_TYPE_PREF, DEFAULT_MIN_HPX_GROUP, HPX_MIN_GROUP_PREF, TYPE_ID, DEFAULT_HPX_GROUP_TYPE, HPX_GRID_SIZE_PREF,
     DEFAULT_HPX_GRID_SIZE, HPX_HEATMAP_LABEL_PREF, DEFAULT_HEATMAP_LABELS, HPX_HEATMAP_STRETCH_PREF, DEFAULT_HPX_STRETCH
@@ -137,7 +142,8 @@ function saveLastDown(mouseStatePayload) {
  * @param mouseStatePayload
  */
 function highlightChange(mouseStatePayload) {
-    const {drawLayer,plotId,screenPt,worldPt}= mouseStatePayload;
+    const {drawLayer,plotId,screenPt,worldPt,shiftDown}= mouseStatePayload;
+    if (shiftDown) return;
     const plot= primePlot(visRoot(),plotId);
     const center= getCenterOfProjection(plot);
     if (lastProjectionCenter && (!pointEquals(center, lastProjectionCenter?.center) || lastProjectionCenter.plotId!==plotId)) return;
@@ -153,7 +159,7 @@ function makeHighlightDeferred(drawLayer,plotId,screenPt,worldPt) {
     let minDist = 20;
     const data = drawLayer.drawData?.data?.[plotId];
     if (!data) return;
-    const {tableRequest} = drawLayer;
+    const {tableRequest,tbl_id} = drawLayer;
     let closestIdx = -1;
     const plot = primePlot(visRoot(), plotId);
 
@@ -185,7 +191,27 @@ function makeHighlightDeferred(drawLayer,plotId,screenPt,worldPt) {
                     if (vr.autoScrollToHighlightedTableRow && vr.useAutoScrollToHighlightedTableRow) {
                         dispatchUseTableAutoScroll(false);
                     }
-                    dispatchTableHighlight(drawLayer.tbl_id,data[closestIdx].fromRow,tableRequest);
+                    const table= getTblById(tbl_id);
+                    if (drawLayer.tbl_id===plot.attributes[PlotAttribute.RELATED_TABLE_ID] &&
+                        isDefined(plot.attributes[PlotAttribute.RELATED_TABLE_ROW])) {
+                        const viewerId= findViewerWithItemId(getMultiViewRoot(),plotId,IMAGE);
+                        if (!viewerId || data[closestIdx].fromRow===table.highlightedRow) {
+                            viewerId && dispatchBottomUIComponent({viewerId});
+                            return;
+                        }
+                        const renderTime= Date.now();
+                        dispatchBottomUIComponent({viewerId,
+                            bottomUIComponent: () => (
+                                <OptionalHighlight{...{viewerId, tbl_id,
+                                    originalCurrentRow:table.highlightedRow,
+                                    highlightRow:data[closestIdx].fromRow,
+                                    tableRequest, renderTime}}/>)
+                        });
+                    }
+                    else {
+                        if (data[closestIdx].fromRow===table.highlightedRow) return;
+                        dispatchTableHighlight(drawLayer.tbl_id,data[closestIdx].fromRow,tableRequest);
+                    }
                 }
             }
         }
@@ -222,6 +248,8 @@ function makeHighlightDeferred(drawLayer,plotId,screenPt,worldPt) {
     },0);
     return () => window.clearInterval(id);
 }
+
+
 
 function getMaxExpandedTiles(norder,tbl_id,ipixAry) {
 
@@ -261,9 +289,10 @@ function getDrawData(dataType, plotId, drawLayer, action, lastDataRet) {
 function getHighlightData(dl) {
     if (isNaN(dl.highlightedRow)) return [];
     const idxData= getHpxIndexData(dl.tbl_id);
-    if (!idxData) return [];
+     // two ways to fine the highlighted point, one should always work
+    let wpt= makeWorldPtUsingCenterColumns(dl.tbl_id,dl.highlightedRow);
+    if (!wpt && idxData) wpt= makeHpxWpt(idxData,dl.highlightedRow);
 
-    const wpt= makeHpxWpt(idxData,dl.highlightedRow);
     if (!wpt) return [];
     const s = dl.drawingDef.size+2 || 5;
     const s2 = DrawUtil.getSymbolSizeBasedOn(DrawSymbol.X, Object.assign({}, dl.drawingDef, {size: s}));
@@ -345,10 +374,10 @@ function handlePlotActions(action, cancelSelf, params) {
             break;
 
         case ImagePlotCntlr.UPDATE_VIEW_SIZE:
+        case ImagePlotCntlr.RECENTER:
             if (!connectedIds.includes(plotId)) return;
             void makeTileDataAndUpdate(dl,plotId,tbl_id, action.type!==ImagePlotCntlr.CHANGE_CENTER_OF_PROJECTION);
             break;
-        case ImagePlotCntlr.RECENTER:
         case ImagePlotCntlr.ANY_REPLOT:
         case ImagePlotCntlr.CHANGE_HIPS:
         case ImagePlotCntlr.CHANGE_CENTER_OF_PROJECTION:
@@ -365,11 +394,20 @@ const tableAborts= {};
 async function makeTileDataAndUpdate(dl, plotId, tbl_id, clearExpanded=true, newExpanded) {
     const abortId= `${dl.drawLayerId}-${tbl_id}-${plotId}`;
     tableAborts[abortId]?.();
-    const {makeTileData, abort}= createTileDataMaker();
-    tableAborts[abortId]= abort;
-    const newDrawData= await makeTileData(dl, plotId, tbl_id, clearExpanded ? {} : newExpanded ?? dl.expandedTiles);
+    const expanded= clearExpanded ? {} : newExpanded ?? dl.expandedTiles;
+    const tileMaker= createTileDataMaker({drawLayer:dl, plotId, tbl_id,expanded});
+    tableAborts[abortId]= tileMaker.abort;
+    const newDrawData= await tileMaker.makeTileData(dl, plotId, tbl_id, );
     if (!newDrawData) return;
+    updateDrawDataOnLayer(newDrawData, dl, plotId, newExpanded, clearExpanded);
 
+    if (tileMaker.hasPartialTileUpdate()) {
+        const updatedNewDrawData= await tileMaker.getSecondaryPartialTileUpdate();
+        if (updatedNewDrawData) updateDrawDataOnLayer(updatedNewDrawData, dl, plotId, newExpanded, clearExpanded);
+    }
+}
+
+function updateDrawDataOnLayer(newDrawData, dl, plotId, newExpanded, clearExpanded, ) {
     const updatedDl= getDrawLayerById(dlRoot(),dl.drawLayerId);
     const newDl= {...updatedDl};
     if (!newDl.drawData) newDl.drawData={data:{}};
@@ -378,4 +416,5 @@ async function makeTileDataAndUpdate(dl, plotId, tbl_id, clearExpanded=true, new
     if (clearExpanded) newDl.expandedTiles={};
     dispatchUpdateDrawLayer(newDl);
     dispatchForceDrawLayerUpdate(dl.drawLayerId, plotId);
+
 }

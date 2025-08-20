@@ -284,11 +284,12 @@ async function makeHiPSPlot(rawAction, dispatcher) {
 
 
 export function createHiPSMocLayerFromPreloadedTable({tbl_id,title, fitsPath, mocUrl, plotId, visible=false,
-                                                         color, mocGroupDefColorId, attachAllPlot=false} ) {
+                                                         maxFetchDepth, color, mocGroupDefColorId, attachAllPlot=false} ) {
     const table= getTblById(tbl_id);
-    if (!table) return;
+    if (!table || table.isFetching) return;
     const uniqColName= table.tableData.columns[0].name;
-    const dl = addNewMocLayer({ tbl_id, title, fitsPath, mocUrl, uniqColName, color, tablePreloaded:true,  mocGroupDefColorId });
+    const dl = addNewMocLayer({ tbl_id, title, fitsPath, mocUrl, uniqColName,
+        color, tablePreloaded:true,  maxFetchDepth, mocGroupDefColorId });
     if (dl && plotId) {
         dispatchAttachLayerToPlot(dl.drawLayerId, plotId, attachAllPlot, visible, true);
     }
@@ -381,6 +382,17 @@ async function doHiPSChange(rawAction, dispatcher, getState) {
         }
         const s = await result.text();
         const hipsProperties = parseProperties(s);
+
+        const someMocs= getDrawLayersByType(dlRoot(),HiPSMOC.TYPE_ID);
+        if (!blank && someMocs?.length) { //start moc retrieval but don't wait
+            void createHiPSMocLayer({
+                ivoid: getPropertyItem(hipsProperties, 'ivoid'),
+                title: getPropertyItem(hipsProperties, 'obs_title'),
+                hipsUrl: resolvedHipsRootUrl,
+                plot
+            });
+        }
+
         dispatcher(
             {
                 type: ImagePlotCntlr.CHANGE_HIPS,

@@ -2,16 +2,14 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React from 'react';
-import {isNil, isObject} from 'lodash';
-
 import {flux} from '../ReduxFlux';
-import {updateSet} from '../../util/WebUtil.js';
-import {showBackgroundMonitor} from './BackgroundMonitor.jsx';
+
+import {updateObject, updateSet} from '../../util/WebUtil.js';
+import {showJobMonitor, showMultiResults} from './JobMonitor.jsx';
 import {isSuccess} from './BackgroundUtil.js';
 import * as SearchServices from '../../rpc/SearchServicesJson.js';
 import {doPackageRequest} from './BackgroundUtil.js';
-import {showInfoPopup, hideInfoPopup} from '../../ui/PopupUtil.jsx';
+import {showInfoPopup} from '../../ui/PopupUtil.jsx';
 import {WORKSPACE} from '../../ui/WorkspaceSelectPane.jsx';
 import {validateFileName} from '../../ui/WorkspaceViewer.jsx';
 import {dispatchWorkspaceUpdate} from '../../visualize/WorkspaceCntlr.js';
@@ -22,12 +20,15 @@ export const BACKGROUND_PATH = 'background';
 
 /*---------------------------- ACTIONS -----------------------------*/
 export const BG_JOB_INFO        = `${BACKGROUND_PATH}.jobInfo`;
+export const BG_LOAD_JOBS       = `${BACKGROUND_PATH}.loadJobs`;
 export const BG_MONITOR_SHOW    = `${BACKGROUND_PATH}.bgMonitorShow`;
 
 export const BG_JOB_ADD         = `${BACKGROUND_PATH}.bgJobAdd`;
 export const BG_JOB_REMOVE      = `${BACKGROUND_PATH}.bgJobRemove`;
 export const BG_JOB_CANCEL      = `${BACKGROUND_PATH}.bgJobCancel`;
-export const BG_SET_EMAIL       = `${BACKGROUND_PATH}.bgSetEmail`;
+export const BG_JOB_SET_NOTIF   = `${BACKGROUND_PATH}.bgJobSetNotif`;
+export const BG_JOB_ARCHIVE     = `${BACKGROUND_PATH}.bgJobArchive`;
+export const BG_SET_INFO        = `${BACKGROUND_PATH}.bgSetInfo`;
 export const BG_Package         = `${BACKGROUND_PATH}.bgPackage`;
 
 export default {actionCreators, reducers};
@@ -36,11 +37,13 @@ export default {actionCreators, reducers};
 function actionCreators() {
     return {
         [BG_MONITOR_SHOW]: bgMonitorShow,
-        [BG_SET_EMAIL]: bgSetEmail,
+        [BG_SET_INFO]: bgSetInfo,
         [BG_Package]: bgPackage,
         [BG_JOB_ADD]: bgJobAdd,
         [BG_JOB_REMOVE]: bgJobRemove,
-        [BG_JOB_CANCEL]: bgJobCancel
+        [BG_JOB_CANCEL]: bgJobCancel,
+        [BG_JOB_ARCHIVE]: bgJobArchive,
+        [BG_JOB_SET_NOTIF]: bgSetJobNofif
     };
 }
 
@@ -55,28 +58,26 @@ function reducers() {
 /*---------------------------- DISPATCHERS -----------------------------*/
 
 /**
- * Action to show/hide the background monitor.  To hide, set showBgMonitor to false
- * @param {Object}  p   payload
- * @param {boolean} p.showBgMonitor
- */
-export function dispatchBgMonitorShow({show=true}) {
-    flux.process({ type : BG_MONITOR_SHOW, payload: {show} });
-}
-
-/**
  * Add/update the jobInfo of the background job referenced by jobId.
- * @param {JobInfo}  jobInfo
+ * @param {Job}  jobInfo
  */
 export function dispatchBgJobInfo(jobInfo) {
     flux.process({ type : BG_JOB_INFO, payload: jobInfo });
+}
+
+/*
+ * Load the full list of background jobs.
+ */
+export function dispatchBgLoadJobs(jobListInfo) {
+    flux.process({ type : BG_LOAD_JOBS, payload: jobListInfo });
 }
 
 /**
  * set the email used for background status notification 
  * @param {string}  email
  */
-export function dispatchBgSetEmailInfo({email, enableEmail}) {
-    flux.process({ type : BG_SET_EMAIL, payload: {email, enableEmail} });
+export function dispatchBgSetInfo({email, notifEnabled}) {
+    flux.process({ type : BG_SET_INFO, payload: {email, notifEnabled} });
 }
 
 /**
@@ -96,11 +97,30 @@ export function dispatchJobRemove(jobId) {
 }
 
 /**
+ * Archive the job
+ * @param {string} jobId
+ */
+export function dispatchJobArchive(jobId) {
+    flux.process({ type : BG_JOB_ARCHIVE, payload: {jobId} });
+}
+
+/**
  * Cancel the background job given its id.
  * @param {string} jobId
  */
 export function dispatchJobCancel(jobId) {
     flux.process({ type : BG_JOB_CANCEL, payload: {jobId} });
+}
+
+/**
+ * Set whether to send notification for this job.
+ * @param {object} p
+ * @param {string} p.jobId
+ * @param {boolean} p.enable notification for this job
+ * @param {string} p.email email address to send notification to, if notification by email is enabled
+ */
+export function dispatchSetJobNotif({jobId, enable, email}) {
+    flux.process({ type : BG_JOB_SET_NOTIF, payload: {jobId, enable, email} });
 }
 
 /**
@@ -110,8 +130,8 @@ export function dispatchJobCancel(jobId) {
  * @param {string} selectionInfo
  * @param {string} bgKey  used for updating UI states related to backgrounding
  */
-export function dispatchPackage(dlRequest, searchRequest, selectionInfo, bgKey) {
-    flux.process({ type : BG_Package, payload: {dlRequest, searchRequest, selectionInfo, bgKey} });
+export function dispatchPackage(dlRequest, searchRequest, selectionInfo, bgKey, downloadType) {
+    flux.process({ type : BG_Package, payload: {dlRequest, searchRequest, selectionInfo, bgKey, downloadType} });
 }
 
 
@@ -121,7 +141,7 @@ export function dispatchPackage(dlRequest, searchRequest, selectionInfo, bgKey) 
 function bgMonitorShow(action) {
     return (dispatch) => {
         const {show=true} = action.payload;
-        showBackgroundMonitor(show);
+        showJobMonitor(show);
         dispatch(action);
     };
 }
@@ -140,6 +160,7 @@ function bgJobRemove(action) {
     return (dispatch) => {
         const {jobId} = action.payload;
         if (jobId) {
+            SearchServices.cancel(jobId);
             SearchServices.removeBgJob(jobId);
             dispatch(action);
         }
@@ -156,30 +177,41 @@ function bgJobCancel(action) {
     };
 }
 
-function bgSetEmail(action) {
+function bgSetJobNofif(action) {
     return (dispatch) => {
-        const {email} = action.payload;
-        if (!isNil(email)) {
-            SearchServices.setEmail(email);
+        const {jobId, enable, email} = action.payload;
+        SearchServices.setJobNotif(jobId, enable, email);
+        dispatch(action);
+    };
+}
+
+function bgJobArchive(action) {
+    return (dispatch) => {
+        const {jobId} = action.payload;
+        if (jobId) {
+            SearchServices.archive(jobId);
+            dispatch(action);
         }
+    };
+}
+
+function bgSetInfo(action) {
+    return (dispatch) => {
+        const {email, notifEnabled} = action.payload;
+        SearchServices.setBgInfo(email, notifEnabled);
         dispatch(action);
     };
 }
 
 function bgPackage(action) {
     return (dispatch) => {
-        const {dlRequest={}, searchRequest, selectionInfo, bgKey=''} = action.payload;
-        let {fileLocation, wsSelect, BaseFileName} = dlRequest;
+        const {dlRequest={}, searchRequest, selectionInfo, bgKey='', downloadType} = action.payload;
+        let {fileLocation, wsSelect, Title} = dlRequest; //use Title as the file name
 
-        BaseFileName = BaseFileName.endsWith('.zip') ? BaseFileName : BaseFileName.trim() + '.zip';
+        Title = Title.endsWith('.zip') ? Title : Title.trim() + '.zip';
         if (fileLocation === WORKSPACE) {
-            if (!validateFileName(wsSelect, BaseFileName)) return false;
+            if (!validateFileName(wsSelect, Title)) return false;
         }
-
-        const showBgMonitor = () => {
-            showBackgroundMonitor();
-            hideInfoPopup();
-        };
 
         const onComplete = (jobInfo) => {
             const results = jobInfo?.results;     // on immediate download, there can only be one item(file).
@@ -189,14 +221,7 @@ function bgPackage(action) {
                     dispatchWorkspaceUpdate();
                 } else {
                     if (results?.length > 1) {
-                        dispatchJobAdd(jobInfo);
-                        const msg = (
-                            <div style={{fontStyle: 'italic', width: 275}}>This download resulted in multiple files.<br/>
-                                See <div onClick={showBgMonitor} className='clickable' style={{color: 'blue', display: 'inline'}} >Background Monitor</div> for download options
-                            </div>
-                        );
-                        showInfoPopup(msg, 'Multipart download');
-
+                        showMultiResults(jobInfo);
                     } else {
                         const url= jobInfo?.results?.[0]?.href;
                         download(url);
@@ -206,7 +231,7 @@ function bgPackage(action) {
                 jobInfo?.error && showInfoPopup(jobInfo.error);
             }
         };
-        doPackageRequest({dlRequest, searchRequest, selectInfo:selectionInfo, bgKey, onComplete});
+        doPackageRequest({dlRequest, searchRequest, selectInfo:selectionInfo, bgKey, downloadType, onComplete});
     };
 }
 
@@ -215,7 +240,7 @@ function reducer(state={}, action={}) {
 
     switch (action.type) {
         case BG_JOB_INFO:
-            const {jobId} = action.payload;
+            const jobId = action.payload?.meta?.jobId;
             let nstate = state;
             if (jobId) {
                 const updates = {jobs: {[jobId]: action.payload}};
@@ -223,17 +248,23 @@ function reducer(state={}, action={}) {
             }
             return nstate;
             break;
-        case BG_SET_EMAIL : {
-            const {email, enableEmail} = action.payload;
+        case BG_LOAD_JOBS: {
+            const {jobs, overflow} = action.payload;
             let nstate = state;
-            if (!isNil(email)) nstate = updateSet(state, 'email', email);
-            if (!isNil(enableEmail)) nstate = updateSet(state, 'enableEmail', enableEmail);
+            if (jobs) {
+                const updates = {jobs, overflow};
+                nstate = updateObject(nstate, updates);
+            }
             return nstate;
             break;
         }
-        case BG_JOB_ADD :
-        case BG_JOB_CANCEL :
-        case BG_JOB_REMOVE :
+        case BG_SET_INFO : {
+            const {email, notifEnabled} = action.payload;
+            let nstate = updateSet(state, 'email', email);
+            nstate  = updateSet(nstate, 'notifEnabled', notifEnabled);
+            return nstate;
+            break;
+        }
         default:
             return state;
     }

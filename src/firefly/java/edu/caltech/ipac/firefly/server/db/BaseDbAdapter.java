@@ -3,6 +3,7 @@
  */
 package edu.caltech.ipac.firefly.server.db;
 
+import edu.caltech.ipac.firefly.core.Util;
 import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.data.SortInfo;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.INCL_COLUMNS;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.parseSqlFilter;
 import static edu.caltech.ipac.firefly.server.db.DbMonitor.getDbInstances;
@@ -65,6 +67,7 @@ abstract public class BaseDbAdapter implements DbAdapter {
 //====================================================================
 
     public BaseDbAdapter(File dbFile) { this.dbFile = dbFile; }
+
     public File getDbFile() { return dbFile; }
 
     public DbInstance getDbInstance() {
@@ -151,11 +154,6 @@ abstract public class BaseDbAdapter implements DbAdapter {
         var dg = dataGroupSupplier.get();
         StopWatch.getInstance().printLog("  ingestData: getDataGroup");
         if (dg != null) {
-            // remove ROW_IDX or ROW_NUM if exists
-            // these are transient values and should not be persisted.
-            dg.removeDataDefinition(DataGroup.ROW_IDX);
-            dg.removeDataDefinition(DataGroup.ROW_NUM);
-
             IpacTableUtil.consumeColumnInfo(dg);
 
             StopWatch.getInstance().start("  ingestData: load data for " + forTable);
@@ -296,7 +294,7 @@ abstract public class BaseDbAdapter implements DbAdapter {
             LOGGER.warn("execQuery failed with error: " + e.getMessage(),
                     "sql: " + sql,
                     "refTable: " + refTable,
-                    "dbFile: " + getDbFile().getAbsolutePath());
+                    "dbFile: " + ifNotNull(getDbFile()).get(File::getAbsolutePath));
             throw handleSqlExp("Query failed", e);
         }
     }
@@ -713,6 +711,11 @@ abstract public class BaseDbAdapter implements DbAdapter {
     }
 
     protected Object[] getDdFrom(DataType dt, int colIdx) {
+        colIdx = switch (dt.getKeyName()) {     // place these at the end, so it will always appear there.
+            case ROW_IDX -> 1_000_000;
+            case ROW_NUM -> 1_000_001;
+            default -> colIdx;
+        };
         return new Object[] {
                 dt.getKeyName(),
                 dt.getLabel(),
@@ -735,7 +738,7 @@ abstract public class BaseDbAdapter implements DbAdapter {
                 dt.getRef(),
                 dt.getMaxValue(),
                 dt.getMinValue(),
-                serialize(dt.getLinkInfos()),       // index(21) is used in HsqlDbAdapter.  if it changes, update.
+                Util.serialize(dt.getLinkInfos()),       // index(21) is used in HsqlDbAdapter.  if it changes, update.
                 dt.getDataOptions(),
                 dt.getArraySize(),
                 dt.getCellRenderer(),
@@ -913,10 +916,10 @@ abstract public class BaseDbAdapter implements DbAdapter {
         return new Object[] {
                 dg.getTitle(),
                 dg.size(),
-                serialize(dg.getGroupInfos()),
-                serialize(dg.getLinkInfos()),
-                serialize(dg.getParamInfos()),
-                serialize(dg.getResourceInfos())
+                Util.serialize(dg.getGroupInfos()),
+                Util.serialize(dg.getLinkInfos()),
+                Util.serialize(dg.getParamInfos()),
+                Util.serialize(dg.getResourceInfos())
         };
     }
 
@@ -995,7 +998,9 @@ abstract public class BaseDbAdapter implements DbAdapter {
         while (cause != null && cause.getCause() != null) {
             cause = cause.getCause();
         }
-        if (cause instanceof DataAccessException dax) {
+        if (cause instanceof DataAccessException.Aborted aborted) {
+            return aborted;
+        } else if (cause instanceof DataAccessException dax) {
             return new DataAccessException(msg, dax);   // if DataAccessException, then no need to interpret the error message
         }
         return new DataAccessException(msg, new SQLDataException(interpretError(cause)));

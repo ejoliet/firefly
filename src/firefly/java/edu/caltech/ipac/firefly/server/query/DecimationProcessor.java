@@ -75,22 +75,30 @@ public class DecimationProcessor extends TableFunctionProcessor {
         deciFunc.setCols(deciInfo.getxExp(), deciInfo.getyExp());
 
         int dataPoints = Math.min(deciKey.getxCount(), deciKey.getyCount());
-        int deciEnableSize = deciInfo.getDeciEnableSize() > 0 ? deciInfo.getDeciEnableSize() : DECI_ENABLE_SIZE;
+        int deciEnableSize = deciInfo.getDeciEnableSize() > -1 ? deciInfo.getDeciEnableSize() : DECI_ENABLE_SIZE;
         String tblName = getResultSetTable(treq);
         if (dataPoints < deciEnableSize) {
             String sql = """
                 CREATE TABLE %s as (
                 SELECT %s as "%s", %s as "%s", ROW_NUM as "rowidx", ROW_NUMBER() OVER () AS %s, ROW_NUMBER() OVER () AS %s,
-                FROM %s
-                """.formatted(tblName, deciInfo.getxExp(), deciKey.getXCol(), deciInfo.getyExp(), deciKey.getYCol(), ROW_NUM, ROW_IDX, dataTbl);
+                FROM %s WHERE "%s" IS NOT NULL AND "%s" IS NOT NULL )
+                """.formatted(tblName, deciInfo.getxExp(), deciKey.getXCol(), deciInfo.getyExp(), deciKey.getYCol(), ROW_NUM, ROW_IDX, dataTbl, deciKey.getXCol(), deciKey.getYCol());
             dbAdapter.execUpdate(sql);
         } else {
             String sql = """
                 CREATE TABLE %s as (
-                SELECT FIRST(%s) as "%s", FIRST(%s) as "%s", FIRST(ROW_NUM) as "rowidx", count(*) as "weight", %s as "dkey", ROW_NUMBER() OVER () AS %s, ROW_NUMBER() OVER () AS %s,
-                FROM %s
-                GROUP BY "dkey" )
-                """.formatted(tblName, deciInfo.getxExp(), deciKey.getXCol(), deciInfo.getyExp(), deciKey.getYCol(), deciFunc, ROW_NUM, ROW_IDX, dataTbl);
+                SELECT *, ROW_NUMBER() OVER () AS %s, ROW_NUMBER() OVER () AS %s
+                FROM (
+                    SELECT
+                       FIRST(%s) as "%s",
+                       FIRST(%s) as "%s",
+                       FIRST(ROW_NUM) as "rowidx",
+                       count(*) as "weight",
+                       %s as "dkey"
+                    FROM %s GROUP BY "dkey"
+                ) WHERE "%s" IS NOT NULL AND "%s" IS NOT NULL
+                )
+                """.formatted(tblName, ROW_NUM, ROW_IDX, deciInfo.getxExp(), deciKey.getXCol(), deciInfo.getyExp(), deciKey.getYCol(), deciFunc, dataTbl, deciKey.getXCol(), deciKey.getYCol());
             dbAdapter.execUpdate(sql);
 
             // add decimation info to the returned table

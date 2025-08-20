@@ -3,15 +3,23 @@ import {makeSearchActionObj, SearchTypes} from '../core/ClickToAction.js';
 import {flux} from '../core/ReduxFlux.js';
 import {ServerParams} from '../data/ServerParams.js';
 import {sprintf} from '../externalSource/sprintf.js';
-import {getTableUiByTblId, makeFileRequest} from '../api/ApiUtilTable.jsx';
+import {getActiveTableId, getTableUiByTblId, getTblById, getTblRowAsObj, makeFileRequest, onTableLoaded
+} from '../api/ApiUtilTable.jsx';
+import {extractDatalinkTable} from '../metaConvert/TableDataProductUtils';
 import {makeVOCatalogRequest} from '../tables/TableRequestUtil.js';
-import {dispatchTableSearch} from '../tables/TablesCntlr.js';
-import {findTableCenterColumns} from '../voAnalyzer/TableAnalysis.js';
+import {dispatchTableSearch, dispatchTableUiUpdate, dispatchTableUpdate} from '../tables/TablesCntlr.js';
+import {tokenSub} from '../util/WebUtil';
+import { findTableCenterColumns, isFormatDataLink, isObsCoreLike } from '../voAnalyzer/TableAnalysis.js';
 import {DEFAULT_FITS_VIEWER_ID} from '../visualize/MultiViewCntlr.js';
+import {getTableModel} from '../voAnalyzer/VoCoreUtils';
+import {getServiceDescriptors, isDataLinkServiceDesc} from '../voAnalyzer/VoDataLinkServDef';
 import {setMultiSearchPanelTab} from './MultiSearchPanel.jsx';
 import {Format} from 'firefly/data/FileAnalysis';
 import {doJsonRequest} from 'firefly/core/JsonUtils';
-import {showInfoPopup} from 'firefly/ui/PopupUtil';
+import {showInfoPopup, showPinMessage} from 'firefly/ui/PopupUtil';
+import {getDataServiceOptionByTable} from './tap/DataServicesOptions';
+import {PrepareDownload} from 'firefly/templates/common/ttFeatureWatchers';
+import React from 'react';
 
 //note - these two redundant function are here because of circular dependencies.
 // this file is imported very early and webpack is creating errors
@@ -100,6 +108,24 @@ export const makeDefImageSearchActions = () => {
 
 export const makeDefTableSearchActions= () => {
     return [
+        makeSearchActionObj({cmd:'showDatalinkTable',
+            groupId:'resolver',
+            label:'all data productions',
+            tip:'',
+            searchType: SearchTypes.point_table_only,
+            execute: () => showDatalinkTable(),
+            supported: (table) => canShowDatalinkTable(table),
+            searchDesc: ({tbl_id}) => {
+                const table= getTableModel(tbl_id);
+                const defStr= getDataServiceOptionByTable( 'datalinkExtractTableDesc', table,
+                    'Show table with all data products for this row (Datalink)');
+
+                const colObj= getTblRowAsObj(table, table.highlightedRow);
+                // const cNames= getAllColumns(getTableModel(tbl_id)).map( (c) => c.name);
+                const retStr= tokenSub(colObj,defStr);
+                return retStr;
+            }
+        } ),
         makeSearchActionObj({cmd:'tableNed',
             groupId:'resolver',
             label:'NED',
@@ -143,7 +169,6 @@ export const makeDefTableSearchActions= () => {
             execute: (sa, wp) => showImage( {searchParams: {wp, type: 'hipsImage'}}),
             searchDesc: 'Display HiPS for row'
         } ),
-
         makeSearchActionObj({
             cmd: 'tableTapUpload',
             groupId: 'tableTap',
@@ -152,9 +177,8 @@ export const makeDefTableSearchActions= () => {
             searchType: SearchTypes.wholeTable,
             execute: (sa,table) => searchWholeTable(table),
             searchDesc: 'Use table as an upload to TAP search'
-        })
-];
-
+        }),
+    ];
 };
 
 export const makeExternalSearchActions = () => {
@@ -188,7 +212,7 @@ export const makeExternalSearchActions = () => {
             min: .001,
             max: 5,
             execute: (sa,cenWpt,radius) => gotoAndSearchSimbad(cenWpt,radius),
-            searchDesc: (wp,size) => `Go to Simbad and search (cone) with radius of ${sprintf('%.4f',size)} degrees`} ),
+            searchDesc: ({wp,size}) => `Go to Simbad and search (cone) with radius of ${sprintf('%.4f',size)} degrees`} ),
     ];
 };
 
@@ -237,6 +261,31 @@ function searchNed(cenWpt,radius) {
     dispatchTableSearch(request);
 }
 
+
+async function showDatalinkTable() {
+    const table = getTblById(getActiveTableId());
+    if (!table) return;
+    const row = table.highlightedRow;
+
+    const result = await extractDatalinkTable(table, row, `${table.title}: Products row ${row + 1}`); //row+1 for better UX for user (since row is 0 based)
+
+    if (!result) return;
+    const {tbl_id, serviceId} = result;
+
+    const {tbl_ui_id, leftButtons = []} = getTableUiByTblId(tbl_id) ?? {};
+    leftButtons.unshift(() => <PrepareDownload tbl_id={tbl_id} viewerId={serviceId} downloadType={'script'} dataSource={serviceId}/>);
+    dispatchTableUiUpdate({ tbl_ui_id, leftButtons });
+    showPinMessage('Pinning to Table Area');
+}
+
+
+function canShowDatalinkTable(table) {
+    const isObsCore= isObsCoreLike(table) && isFormatDataLink(table,table.highlightedRow);
+    if (isObsCore) return true;
+    const serDefAry= getServiceDescriptors(table);
+    return Boolean(serDefAry && isDataLinkServiceDesc(serDefAry[0]));
+}
+
 function searchSimbad(cenWpt,radius) {
     const base = 'http://simbad.cds.unistra.fr/simbad/sim-coo';
     const params = {
@@ -248,7 +297,16 @@ function searchSimbad(cenWpt,radius) {
     };
     const url = base + '?' + new URLSearchParams(params).toString();
     const request= makeFileRequest('Simbad', url);
+    const {tbl_id}= request.META_INFO;
     dispatchTableSearch(request);
+    onTableLoaded(tbl_id).then( (table) => {
+        if (!table.error) return;
+        const lon= sprintf('%.5f',cenWpt.getLon());
+        const lat= sprintf('%.5f',cenWpt.getLat());
+        const radStr= sprintf('%.5f',Number(radius));
+        const error= `No data found for SIMBAD cone search with center ${lon}, ${lat} and radius ${radStr} degrees`;
+        dispatchTableUpdate({...table,error});
+    });
 }
 
 function gotoAndSearchSimbad(cenWpt,radius) {

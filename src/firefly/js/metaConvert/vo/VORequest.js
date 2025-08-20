@@ -1,8 +1,10 @@
 import {uniqueId} from 'lodash';
+import {TableDataType} from '../../data/FileAnalysis';
 import {sprintf} from '../../externalSource/sprintf.js';
 import {getCellValue, getColumn, getMetaEntry} from '../../tables/TableUtil.js';
 import {PlotAttribute} from '../../visualize/PlotAttribute.js';
 import RangeValues from '../../visualize/RangeValues.js';
+import {RequestType} from '../../visualize/RequestType';
 import {TitleOptions, WebPlotRequest} from '../../visualize/WebPlotRequest.js';
 import {ZoomType} from '../../visualize/ZoomType.js';
 import {getSSATitle, isSSATable} from '../../voAnalyzer/TableAnalysis.js';
@@ -21,8 +23,8 @@ export function makeObsCoreRequest(dataSource, positionWP, titleStr, table, row)
     const r = WebPlotRequest.makeURLPlotRequest(dataSource, 'DataProduct');
     r.setZoomType(ZoomType.FULL_SCREEN);
     const ssa= isSSATable(table);
-    const titleStringToUse= ssa ? getSSATitle(table,row) ?? 'spectrum' : titleStr;
-    if (titleStringToUse?.length > 7) {
+    const titleStringToUse= ssa ? getSSATitle(table,row) ?? TableDataType.Spectrum : titleStr;
+    if (titleStringToUse?.length > 2) {
         r.setTitleOptions(TitleOptions.NONE);
         r.setTitle(titleStringToUse);
     }
@@ -30,6 +32,8 @@ export function makeObsCoreRequest(dataSource, positionWP, titleStr, table, row)
         r.setTitleOptions(TitleOptions.FILE_NAME);
     }
     r.setPlotId(uniqueId('obscore-'));
+    r.setWorldPt(positionWP);
+    r.setRequestType(RequestType.URL);
 
     const emMinCol = getColumn(table, 'em_max', true);
     const emMaxCol = getColumn(table, 'em_max', true);

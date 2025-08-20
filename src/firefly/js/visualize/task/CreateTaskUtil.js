@@ -208,7 +208,7 @@ function findCubePlane(plotCreate) {
 
 /**
  * @param {Array.<WebPlotInitializer>} plotCreate
- * @return {Array.<Object>}
+ * @return {Array.<CubeCtx>}
  */
 export function makeCubeCtxAry(plotCreate) {
     let cubeStartIdx = -1;
@@ -239,7 +239,6 @@ export function makeCubeCtxAry(plotCreate) {
                 dataWidth: cubeStartPC.dataWidth,
                 dataHeight: cubeStartPC.dataHeight,
                 imageCoordSys: cubeStartPC.imageCoordSys,
-                fluxUnits: cubeStartPC.fitsData.fluxUnits,
                 getFitsFileSize: cubeStartPC.fitsData.getFitsFileSize,
                 desc: cubeStartPC.desc
             };
@@ -281,6 +280,7 @@ export function populateFromHeader(plotCreateHeader, plotCreate) {
         }
         plotCreate[i].dataDesc = plotCreateHeader.dataDesc;
         plotCreate[i].zeroHeaderAry = plotCreateHeader.zeroHeaderAry;
+        plotCreate[i].totalImageHdusInFile= plotCreateHeader.totalImageHdusInFile ?? 1;
         if (plotCreateHeader.multiImage) plotCreate[i].plotState.multiImage = plotCreateHeader.multiImage;
     }
 }

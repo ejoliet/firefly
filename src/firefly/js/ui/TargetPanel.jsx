@@ -3,6 +3,7 @@
  */
 
 import {Box, Divider, Stack} from '@mui/joy';
+import {isString} from 'lodash';
 import React, {memo, useContext, useEffect} from 'react';
 import PropTypes, {arrayOf, object, bool, string, shape} from 'prop-types';
 import {ConnectionCtx} from './ConnectionCtx.js';
@@ -25,7 +26,7 @@ const nedThenSimbad= 'nedthensimbad';
 const simbadThenNed= 'simbadthenned';
 
 const TargetPanelView = (props) =>{
-    const {showHelp, feedback, valid, message, onChange, value, button, slotProps,
+    const {showHelp, feedback, valid, message, onChange, value, button, slotProps, fieldKey,
         children, resolver, showResolveSourceOp= true, showExample= true,
         label= LABEL_DEFAULT,
         targetPanelExampleRow1, targetPanelExampleRow2,
@@ -63,7 +64,7 @@ const TargetPanelView = (props) =>{
     return (
         <Stack direction='column'>
             {positionInput}
-            {(showExample || !showHelp) && <TargetFeedback {...{showHelp, feedback,
+            {(showExample || !showHelp) && <TargetFeedback {...{showHelp, feedback, fieldKey,
                 targetPanelExampleRow1, targetPanelExampleRow2, examples, ...slotProps?.feedback}}/> }
         </Stack>
     );
@@ -181,6 +182,31 @@ function handleOnChange(value, source, params, fireValueChange) {
 
 }
 
+
+
+export function ingestNewTargetValue(value, setter, params, ) {
+    const {resolver= nedThenSimbad}= params ?? {};
+
+    const displayValue= value;
+
+    const parseResults= parseTarget(displayValue, undefined, resolver);
+    let {resolvePromise}= parseResults;
+
+    const targetResolve= (asyncParseResults) => {
+        return asyncParseResults ? setter(makePayloadAndUpdateActive(displayValue, asyncParseResults, null, resolver)) : null;
+    };
+
+    resolvePromise= resolvePromise ? resolvePromise.then(targetResolve) : null;
+
+
+    setter(makePayloadAndUpdateActive(displayValue,parseResults, resolvePromise, resolver));
+
+}
+
+
+
+const prepareResult= (v) => isString(v) ? v : v?.toString();
+
 /**
  * Make a payload and update the active target, Note: this function has as side effect to fires an action to update the active target
  * @param displayValue
@@ -201,7 +227,8 @@ function makePayloadAndUpdateActive(displayValue, parseResults, resolvePromise, 
         valid : parseResults.valid,
         showHelp : parseResults.showHelp,
         feedback : parseResults.feedback,
-        parseResults
+        prepareResult,
+        parseResults,
     };
     if (resolver) payload.resolver= resolver;
     return payload;
@@ -221,10 +248,10 @@ export const DEF_TARGET_PANEL_KEY= 'UserTargetWorldPt';
 export const TargetPanel = memo( ({fieldKey= DEF_TARGET_PANEL_KEY,initialState= {},
                                        defaultToActiveTarget= true, ...restOfProps}) => {
     const {viewProps, fireValueChange, groupKey}=  useFieldGroupConnector({
-                                fieldKey, initialState,
+                                fieldKey, initialState: {...initialState, prepareResult},
                                 confirmValueOnInit: (v, props,initialState,computedState) => replaceValue(v,defaultToActiveTarget,computedState)});
     const newProps= computeProps(viewProps, restOfProps, fieldKey, groupKey);
-    return ( <TargetPanelView {...newProps}
+    return ( <TargetPanelView {...{...newProps,fieldKey}}
                               onChange={(value,source) => handleOnChange(value,source,newProps, fireValueChange)}/>);
 });
 

@@ -70,8 +70,9 @@ public class ServerCommandAccess {
         _cmdMap.put(ServerParams.ADD_JOB,                new SearchServerCommands.AddBgJob());
         _cmdMap.put(ServerParams.REMOVE_JOB,             new SearchServerCommands.RemoveBgJob());
         _cmdMap.put(ServerParams.CANCEL,                 new SearchServerCommands.Cancel());
-        _cmdMap.put(ServerParams.SET_EMAIL,              new SearchServerCommands.SetEmail());
-        _cmdMap.put(ServerParams.RESEND_EMAIL,           new SearchServerCommands.ResendEmail());
+        _cmdMap.put(ServerParams.ARCHIVE,                new SearchServerCommands.Archive());
+        _cmdMap.put(ServerParams.SET_BG_INFO,            new SearchServerCommands.SetBgInfo());
+        _cmdMap.put(ServerParams.SET_JOB_NOTIF,          new SearchServerCommands.SetJobNotif());
         _cmdMap.put(ServerParams.CREATE_DOWNLOAD_SCRIPT, new SearchServerCommands.CreateDownloadScript());
         _cmdMap.put(ServerParams.UWS_JOB_INFO,           new SearchServerCommands.UwsJobInfo());
         _cmdMap.put(ServerParams.GET_CAPABILITIES,       new SearchServerCommands.GetCapabilities());
@@ -80,6 +81,7 @@ public class ServerCommandAccess {
 
         _cmdMap.put(ServerParams.REPORT_USER_ACTION,     new SearchServerCommands.ReportUserAction());
         _cmdMap.put(ServerParams.PACKAGE_REQUEST,        new SearchServerCommands.PackageRequest());
+        _cmdMap.put(ServerParams.DOWNLOAD_SCRIPT_REQUEST,new SearchServerCommands.DownloadScriptRequest());
         _cmdMap.put(ServerParams.TABLE_SEARCH,           new SearchServerCommands.TableSearch());
         _cmdMap.put(ServerParams.QUERY_TABLE,            new SearchServerCommands.QueryTable());
         _cmdMap.put(ServerParams.SELECTED_VALUES,        new SearchServerCommands.SelectedValues());
@@ -102,6 +104,7 @@ public class ServerCommandAccess {
         _cmdMap.put(ServerParams.LOGOUT,                 new AppServerCommands.Logout());
         _cmdMap.put(ServerParams.GET_USER_INFO,          new AppServerCommands.GetUserInfo());
         _cmdMap.put(ServerParams.GET_ALERTS,             new AppServerCommands.GetAlerts());
+        _cmdMap.put(ServerParams.TEXT_FILE,              new AppServerCommands.TextFile());
 
     }
 

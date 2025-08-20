@@ -6,9 +6,9 @@ package edu.caltech.ipac.firefly.server.network;
 import com.google.common.net.HttpHeaders;
 import edu.caltech.ipac.firefly.server.util.VersionUtil;
 import edu.caltech.ipac.util.FileUtil;
+import edu.caltech.ipac.util.KeyVal;
 import edu.caltech.ipac.util.download.URLDownload;
 import edu.caltech.ipac.firefly.server.util.Logger;
-import edu.caltech.ipac.util.CollectionUtil;
 import org.apache.commons.httpclient.Header;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.HttpMethod;
@@ -24,8 +24,6 @@ import org.apache.commons.httpclient.methods.multipart.StringPart;
 import org.apache.commons.httpclient.params.HttpConnectionManagerParams;
 import org.apache.commons.httpclient.cookie.CookiePolicy;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -35,8 +33,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 
@@ -51,14 +51,20 @@ import static edu.caltech.ipac.util.StringUtils.isEmpty;
  * @version $Id: $
  */
 public class HttpServices {
-    public static final int BUFFER_SIZE = FileUtil.BUFFER_SIZE;    // 64k
+    public static final int BUFFER_SIZE = (int) (8*FileUtil.K);    // optimal buffer size
     private static final Logger.LoggerImpl LOG = Logger.getLogger();
+
+    /* Takes the header name and value, and returns a sanitized value if needed. */
+    private static final List<BiFunction<String, String, String>> headerSanitizers = List.of(
+            (k, v) -> v.replaceAll("[\\r\\n]", ""),        // remove any new line characters from value
+            new AuthHeader()
+    );
 
     private static HttpClient newHttpClient() {
         HttpClient httpClient = new HttpClient();
         HttpConnectionManagerParams params = httpClient.getHttpConnectionManager().getParams();
         params.setConnectionTimeout(5000);
-        params.setSoTimeout(0);     // this is the default.. but, setting it explicitly to be sure
+        params.setSoTimeout(0);     // this is the default. but, setting it explicitly to be sure
         return httpClient;
     }
 
@@ -241,7 +247,7 @@ public class HttpServices {
 
             handleHeaders(method, input.getHeaders());
 
-            handleParams(method, input.getParams(), input.getFiles());
+            handleParams(method, input.getParamPairs(), input.getFiles());
 
             logRequestStart(method, input);
 
@@ -350,20 +356,16 @@ public class HttpServices {
         }
 
         public Status handleResponse(HttpMethod method) {
-            BufferedInputStream bis = null;
-            BufferedOutputStream bos = null;
-            try {
-                bis = new BufferedInputStream(getResponseBodyAsStream(method));
-                bos = new BufferedOutputStream(results);
-                int b;
-                while ((b = bis.read()) != -1) {
-                    bos.write(b);
+            try (InputStream in = getResponseBodyAsStream(method);
+                 OutputStream out = results) {
+
+                byte[] buffer = new byte[BUFFER_SIZE]; // 8 KB buffer
+                int bytesRead;
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
                 }
             } catch (IOException e) {
                 return new Status(400, String.format("Error while reading response body: %s", e.getMessage()));
-            } finally {
-                FileUtil.silentClose(bis);
-                FileUtil.silentClose(bos);
             }
             return new Status(method.getStatusCode(), method.getStatusText());
         }
@@ -427,16 +429,14 @@ public class HttpServices {
         }
     }
 
-    private static void handleParams(HttpMethod method, Map<String,String> params, Map<String,File> files) throws FileNotFoundException {
+    private static void handleParams(HttpMethod method, List<KeyVal<String, String>> params, Map<String,File> files) throws FileNotFoundException {
         if (method instanceof PostMethod) {
             PostMethod postMethod = (PostMethod) method;
             if (files != null) {
                 // this is a multipart request
                 List<Part> parts = new ArrayList<>();
                 if (params != null) {
-                    for(String key : params.keySet()) {
-                        parts.add(new StringPart(key, params.get(key)));
-                    }
+                    params.forEach((p) -> parts.add(new StringPart(p.getKey(), p.getValue())));
                 }
                 for(String key : files.keySet()) {
                     parts.add(new FilePart(key, files.get(key)));
@@ -445,17 +445,16 @@ public class HttpServices {
 
             } else {
                 if (params != null) {
-                    params.entrySet().stream()
-                            .forEach( (e) -> postMethod.addParameter(e.getKey(), e.getValue()) );
+                    params.forEach((p) -> postMethod.addParameter(p.getKey(), p.getValue()));
                 }
             }
         } else {
             if (isEmpty(method.getQueryString())) {
-                if (params != null && params.size() > 0) {
-                    List<NameValuePair> args = new ArrayList<>();
-                    params.entrySet().stream()
-                            .forEach( (e) -> args.add(new NameValuePair(e.getKey(), e.getValue())) );
-                    method.setQueryString(args.toArray(new NameValuePair[0]));
+                if (params != null && !params.isEmpty()) {
+                    NameValuePair[] args = params.stream()
+                            .map((p) -> new NameValuePair(p.getKey(), p.getValue()))
+                            .toArray(NameValuePair[]::new);
+                    method.setQueryString(args);
                 }
             }
         }
@@ -494,8 +493,8 @@ public class HttpServices {
                     "\n\tstatus: " + status.getStatusCode() + "-" + status.getErrMsg() +
                     "\n\turl: " + method.getURI() +
                     input.getDesc() +
-                    "\n\tREQUEST HEADERS: " + CollectionUtil.toString(method.getRequestHeaders()).replaceAll("\\r|\\n", "") +
-                    "\n\tRESPONSE HEADERS: " + CollectionUtil.toString(method.getResponseHeaders()).replaceAll("\\r|\\n", "");
+                    "\n\tREQUEST HEADERS: " + sanitizeHeaders(method.getRequestHeaders()) +
+                    "\n\tRESPONSE HEADERS: " + sanitizeHeaders(method.getResponseHeaders());
 
             final StringBuilder curl = new StringBuilder("curl -v");
             for(Header h : method.getRequestHeaders())  curl.append(String.format(" -H '%s'", h.toString().trim()));
@@ -514,7 +513,41 @@ public class HttpServices {
         }
     }
 
+    /**
+     * Sanitize the header value for logging purposes.
+     * @param name      name of the header
+     * @param value     value of the header
+     * @return  the sanitized value of the header
+     */
+    public static String sanitizeHeader(String name, String value) {
+        String rval = value;
+        for (BiFunction<String, String, String> sanitizer : headerSanitizers) {
+            rval = sanitizer.apply(name, rval);
+        }
+        return rval;
+    }
 
+    public static String sanitizeHeaders(Header[] headers) {
+        if (headers == null || headers.length == 0) return "";
+        return Arrays.stream(headers)
+                .map(h -> "%s: %s".formatted(h.getName(), sanitizeHeader(h.getName(), h.getValue())))
+                .collect(Collectors.joining(", "));
+    }
+
+    private static class AuthHeader implements BiFunction<String, String, String> {
+        // // Authorization: <scheme> <credentials>
+        public String apply(String key, String value) {
+            if (key == null || value == null) return value;
+            if (key.equalsIgnoreCase("Authorization")) {
+                int sep = value.indexOf(' ');
+                if (sep > 0) {
+                    String scheme = value.substring(0, sep);
+                    return scheme + " [redacted]";
+                }
+            }
+            return value;
+        }
+    }
 
     public interface Handler {
         Status handleResponse(HttpMethod method);

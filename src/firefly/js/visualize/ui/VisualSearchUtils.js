@@ -1,4 +1,4 @@
-import {isString} from 'lodash';
+import {isString, isUndefined} from 'lodash';
 import {dispatchHideDialog} from '../../core/ComponentCntlr.js';
 import SearchSelectTool from '../../drawingLayers/SearchSelectTool.js';
 import SelectArea, {getImageBoundsSelection} from '../../drawingLayers/SelectArea.js';
@@ -16,7 +16,7 @@ import {PlotAttribute} from '../PlotAttribute.js';
 import {getDrawLayerByType, getPlotViewById, isDrawLayerAttached, primePlot} from '../PlotViewUtil.js';
 import {isValidPoint, makeDevicePt, makeImagePt, makeWorldPt, parseWorldPt, pointEquals} from '../Point.js';
 import {
-    calculatePosition, computeCentralPointAndRadius, computeDistance, getPointOnEllipse
+    calculatePosition, computeCentralPointAndRadius, computeDistance, convertCelestial, getPointOnEllipse
 } from '../VisUtil.js';
 import {changeHiPSProjectionCenter, getDevPixScaleDeg, isImage} from '../WebPlot.js';
 import {CONE_CHOICE_KEY, POLY_CHOICE_KEY} from './CommonUIKeys.js';
@@ -221,7 +221,7 @@ export function updateUIFromPlot({plotId, setWhichOverlay, whichOverlay, setTarg
             if (pointEquals(userEnterWorldPt(), cenWpt) && drawRadius === userEnterSearchRadius()) return;
             setTargetWp(cenWpt.toString());
             dispatchActiveTarget(cenWpt);
-            setHiPSRadius(drawRadius + '');
+            setUISize(radius,minSize,maxSize,userEnterSearchRadius(),setHiPSRadius);
             updatePlotOverlayFromUserInput(plotId, CONE_CHOICE_KEY, cenWpt, drawRadius, undefined);
             setTimeout(() => {
                 canUpdateModalEndInfo ? updateModalEndInfo(plot.plotId) : closeToolbarModalLayers();
@@ -231,6 +231,7 @@ export function updateUIFromPlot({plotId, setWhichOverlay, whichOverlay, setTarg
             const wp = plot.attributes[PlotAttribute.USER_SEARCH_WP];
             if (!wp) return;
             const utWPt = userEnterWorldPt();
+            setUISize(plot.attributes[PlotAttribute.USER_SEARCH_RADIUS_DEG],minSize,maxSize,userEnterSearchRadius(),setHiPSRadius);
             if (!utWPt || (isValidPoint(utWPt) && !pointEquals(wp, utWPt))) {
                 setTargetWp(wp.toString());
                 dispatchActiveTarget(wp);
@@ -245,7 +246,9 @@ export function updateUIFromPlot({plotId, setWhichOverlay, whichOverlay, setTarg
         if (plot.attributes[PlotAttribute.SELECTION] && plot.attributes[PlotAttribute.SELECTION_SOURCE]===SelectArea.TYPE_ID) {
             if (isWpArysEquals(corners, userEnterPolygon())) return;
             wpStr= cenWpt.toString();
-            setPolygon(convertWpAryToStr(corners, plot));
+            const polyStr= convertWpAryToStr(corners, plot);
+            setPolygon(polyStr);
+            dispatchAttributeChange({ plotId, changes:{[PlotAttribute.POLYGON_ARY]: convertStrToWpAry(polyStr)}});
             setTimeout(() => {
                 canUpdateModalEndInfo ? updateModalEndInfo(plot.plotId) : closeToolbarModalLayers();
             }, 10);
@@ -260,6 +263,13 @@ export function updateUIFromPlot({plotId, setWhichOverlay, whichOverlay, setTarg
         }
         if (wpStr && wpStr !== getTargetWp()) setTargetWp(wpStr);
     }
+}
+
+function setUISize(size, minSize, maxSize, uiCurrentValue, setter) {
+    if (isUndefined(size) || isNaN(size)) return;
+    const sizeToSet = size <= maxSize ? (size >= minSize ? size : minSize) : maxSize;
+    if (uiCurrentValue===sizeToSet) return;
+    setter(sizeToSet+'');
 }
 
 
@@ -331,7 +341,7 @@ export function updatePlotOverlayFromUserInput(plotId, whichOverlay, wp, radius,
     if (!isCone && wp && radius && canGeneratePolygon) {
         const cc= CsysConverter.make(plot);
         const cen= cc.getDeviceCoords(wp);
-        const ptOnCone= cc.getDeviceCoords(calculatePosition(wp,radius*3600,radius*3600));
+        const ptOnCone= cc.getDeviceCoords(calculatePosition( convertCelestial(wp),radius*3600,radius*3600));
         const dist= Math.abs(cen.y-ptOnCone.y)*2;
         polygonAry= getCircumscribedCorners(cc,cen,dist,dist);
     }

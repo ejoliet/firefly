@@ -17,7 +17,7 @@ import edu.caltech.ipac.firefly.visualize.PlotState;
 import edu.caltech.ipac.firefly.visualize.WebPlotRequest;
 import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.table.TableUtil;
-import edu.caltech.ipac.table.TableUtil.Format;
+import edu.caltech.ipac.util.FormatUtil.Format;
 import edu.caltech.ipac.visualize.plot.ImagePt;
 import edu.caltech.ipac.visualize.plot.WorldPt;
 import org.json.simple.JSONArray;
@@ -207,6 +207,20 @@ public class SrvParam {
         if (ary != null && ary.length>0) {
             try {
                 return Float.parseFloat(ary[0]);
+            } catch (NumberFormatException e) {
+                return defValue;
+            }
+        }
+        else {
+            return defValue;
+        }
+    }
+
+    public long getOptionalLong(String key, long defValue) {
+        String[] ary = paramMap.get(key);
+        if (ary != null && ary.length>0) {
+            try {
+                return Long.parseLong(ary[0]);
             } catch (NumberFormatException e) {
                 return defValue;
             }

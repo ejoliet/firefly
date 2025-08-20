@@ -1,5 +1,11 @@
-import {makeFileRequest} from '../../tables/TableRequestUtil.js';
+import {isEmpty} from 'lodash';
+import {cloneRequest, makeFileRequest} from '../../tables/TableRequestUtil.js';
 import {doFetchTable} from '../../tables/TableUtil.js';
+import {synchronizeAsyncFunctionById} from '../../util/SynchronizeAsync';
+import { getObsCoreAccessURL, isFormatDataLink, isObsCoreLike } from '../../voAnalyzer/TableAnalysis';
+import {getTableModel} from '../../voAnalyzer/VoCoreUtils';
+import {getDataLinkData, getServiceDescriptors, isDataLinkServiceDesc} from '../../voAnalyzer/VoDataLinkServDef';
+import {makeDlUrl} from './DatalinkProducts';
 
 let dlTableCache = new Map();
 const maxEntries = 30;
@@ -11,73 +17,72 @@ function cacheCleanup() {
     dlTableCache = new Map(entries);
 }
 
-function cacheGet(url) {
-    const entry = dlTableCache.get(url);
+function cacheGet(fetchKey) {
+    const entry = dlTableCache.get(fetchKey);
     if (!entry) return undefined;
-    cacheSet(url, entry.table);
+    cacheSet(fetchKey, entry.table);
     return entry.table;
 }
 
-const cacheSet = (url, table) => dlTableCache.set(url, {time: Date.now(), table});
+const cacheSet = (fetchKey, table) => dlTableCache.set(fetchKey, {time: Date.now(), table});
 
-//todo - make version of this that supports concurrent all of same url, with on fetch
-export async function fetchDatalinkTable(url) {
-    const tableFromCache = cacheGet(url);
+export async function fetchDatalinkTable(url, requestOptions={}) {
+    const fetchKey= isEmpty(requestOptions) ? url : url+'--' + JSON.stringify(requestOptions);
+    const tableFromCache = cacheGet(fetchKey);
     if (tableFromCache) return tableFromCache;
-    // const request = makeFileRequest('dl table', url);
-    // const table = await doFetchTable(request);
-    const table= await doMultRequestTableFetch(url);
-    cacheSet(url, table);
+    const table= await doMultRequestTableFetch(fetchKey, url, requestOptions);
+    cacheSet(fetchKey, table);
     cacheCleanup();
     return table;
 }
 
-
-
-//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-const loadBegin= new Map();
-const waitingResolvers= new Map();
-const waitingRejectors= new Map();
-const LOAD_ERR_MSG='table retrieval fail, unknown reason ';
-
-function clearAll(url) {
-    loadBegin.delete(url);
-    waitingResolvers.delete(url);
-    waitingRejectors.delete(url);
+async function doMultRequestTableFetch(fetchKey, url, requestOptions) {
+    const request = cloneRequest(makeFileRequest('dl table', url), requestOptions);
+    const table= await synchronizeAsyncFunctionById(fetchKey, () => doFetchTable(request));
+    return table;
 }
 
-/**
- * This function supports doing a table fetch with the same url concurrently while only make one call the the server
- * @param url
- * @return {Promise<TableModel>}
- */
-async function doMultRequestTableFetch(url) {
 
-    if (!waitingResolvers.has(url)) waitingResolvers.set(url,[]);
-    if (!waitingRejectors.has(url)) waitingRejectors.set(url,[]);
-
-    if (!loadBegin.get(url)) {
-        loadBegin.set(url,true);
-        const request = makeFileRequest('dl table', url);
-        doFetchTable(request).then( (table) => {
-            if (table) {
-                (waitingResolvers.get(url)??[]).forEach((r) => r(table));
-            } else {
-                (waitingRejectors.get(url)??[]).forEach( (r) => r(Error(LOAD_ERR_MSG)));
-            }
-            clearAll(url);
-        }).catch( (err) => {
-            (waitingRejectors.get(url)??[]).forEach( (r) => r(err));
-            clearAll(url);
-        });
-    }
-    return new Promise( function(resolve, reject) {
-        waitingResolvers.get(url).push(resolve);
-        waitingRejectors.get(url).push(reject);
+export function fetchAllDatalinkTables(table, requestOptions) {
+    if (!table?.tableData) return;
+    const pAry= table.tableData.data.map( (d,idx)  => {
+        const dlUrl= getObsCoreAccessURL(table,idx);
+        return fetchDatalinkTable(dlUrl, requestOptions);
     });
-};
+    return Promise.all(pAry);
+}
 
+
+
+export async function fetchSemanticList(tableOrId,row=0) {
+    try {
+        const table = getTableModel(tableOrId);
+        if (!table) return [];
+        let url;
+        if (isObsCoreLike(table) && isFormatDataLink(table, row)) {
+            url = getObsCoreAccessURL(table, row);
+        }
+        if (!url) {
+            const serDefAry = getServiceDescriptors(table);
+            if (serDefAry) {
+                const dlDescriptor = serDefAry && serDefAry.filter((dDesc) => isDataLinkServiceDesc(dDesc))[0];
+                if (dlDescriptor?.accessURL) url = makeDlUrl(dlDescriptor, table, row);
+            }
+        }
+        if (!url) return [];
+        return await fetchDatalinkTableSemanticList(url);
+    }
+    catch (err) {
+        console.error('fetchSemanticList call failed',err);
+        return [];
+    }
+}
+
+export async function fetchDatalinkTableSemanticList(url, requestOptions={}) {
+    const dlTable= await fetchDatalinkTable(url,requestOptions);
+    const dataLinkData= getDataLinkData(dlTable);
+    return [...dataLinkData.reduce((semSet,{semantics}) => {
+        semSet.add(semantics);
+        return semSet;
+    },new Set())];
+}

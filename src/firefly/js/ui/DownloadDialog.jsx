@@ -27,10 +27,11 @@ import {CheckboxGroupInputField} from './CheckboxGroupInputField.jsx';
 import {getFieldVal} from '../fieldGroup/FieldGroupUtils.js';
 import {Stack, Typography, Box} from '@mui/joy';
 import {ToolbarButton} from 'firefly/ui/ToolbarButton';
+import {SwitchInputField} from 'firefly/ui/SwitchInputField';
 
 const DOWNLOAD_DIALOG_ID = 'Download Options';
 const OptionsContext = React.createContext();
-const emailNotif = 'enableEmailNotification';
+const sendNotif = 'enableNotification';
 const emailKey = 'Email';          // should match server DownloadRequest.EMAIL
 
 /**
@@ -78,9 +79,10 @@ const emailKey = 'Email';          // should match server DownloadRequest.EMAIL
  * @param props.children
  * @param props.checkSelectedRow
  * @param props.makeButton
+ * @param props.buttonText
  * @returns {*}
  */
-export function DownloadButton({tbl_id:inTblId , tbl_grp, children, checkSelectedRow=true, makeButton}) {
+export function DownloadButton({tbl_id:inTblId , tbl_grp, children, checkSelectedRow=true, makeButton, buttonText='Prepare Download'}) {
 
     const tblIdGetter = () => inTblId || getActiveTableId(tbl_grp);
     const selectInfoGetter = () => get(getTblById(tblIdGetter()), 'selectInfo');
@@ -108,7 +110,7 @@ export function DownloadButton({tbl_id:inTblId , tbl_grp, children, checkSelecte
     const isRowSelected = selectInfoCls.getSelectedCount()>0;
 
     const defButton=
-        <ToolbarButton variant={isRowSelected?'solid':'soft'} color='warning' onClick={() =>onClick()} text='Prepare Download'/>;
+        <ToolbarButton variant={isRowSelected?'solid':'soft'} color='warning' onClick={() =>onClick()} text={buttonText}/>;
 
     return (
         makeButton?.(onClick,tbl_id,isRowSelected) ?? defButton
@@ -130,11 +132,13 @@ const newBgKey = () => 'DownloadOptionPanel-' + Date.now();
 export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, help_id, children, style, title, dlParams,
                                          updateSearchRequest, updateDownloadRequest, validateOnSubmit,
                                          cancelText='Cancel', showZipStructure=true, showEmailNotify=false,
-                                         showFileLocation=true, showTitle=true, ...props}) {
+                                         showFileLocation=true, showTitle=true, downloadType='package', ...props}) {
     const {tbl_id:p_tbl_id, checkSelectedRow} = React.useContext(OptionsContext);
     const tbl_id = props.tbl_id || p_tbl_id;
 
     const [bgKey, setBgKey] = useState(newBgKey());
+
+    const downloadButtonText = downloadType === 'package' ? 'Prepare Download' : 'Download Script';
 
     const onSubmit = useCallback((formInputs={}) => {
 
@@ -156,8 +160,8 @@ export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, hel
         //make a download request
         let dlRequest = makeTblRequest(FileGroupProcessor, formInputs.Title, Object.assign(dlParams, {cutoutSize}, formInputs));
 
-        if (!dlParams[emailNotif]) Reflect.deleteProperty(dlRequest, emailKey);
-        Reflect.deleteProperty(dlRequest, emailNotif);
+        if (!dlParams[sendNotif]) Reflect.deleteProperty(dlRequest, emailKey);
+        Reflect.deleteProperty(dlRequest, sendNotif);
 
         //make a search request
         let searchRequest = cloneDeep(request);
@@ -176,7 +180,7 @@ export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, hel
         }
 
         const akey = newBgKey();
-        dispatchPackage(dlRequest, searchRequest, SelectInfo.newInstance(selectInfo).toString(), akey);
+        dispatchPackage(dlRequest, searchRequest, SelectInfo.newInstance(selectInfo).toString(), akey, downloadType);
         dlTitleIdx++;
         setBgKey(akey);
     }, [cutoutSize, dlParams, tbl_id]);
@@ -186,12 +190,7 @@ export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, hel
     const maskPanel = (<BgMaskPanel key={bgKey} componentKey={bgKey}
                                    onMaskComplete={() =>hideDownloadDialog()}/>);
 
-    const saveAsProps = {
-        initialState: {
-            value: get(dlParams, 'BaseFileName')
-        }
-    };
-    const dlTitle = get(dlParams, 'TitlePrefix', 'Download') + '-' + dlTitleIdx;
+    const dlTitle = get(dlParams, 'Title', 'Download' + '-' + dlTitleIdx); //title will also be filename of the downloaded file
     const preTitleMessage = dlParams?.PreTitleMessage ?? '';
     return (
         <Stack sx ={{m:1/2, position: 'relative', minWidth:400, height:'auto', ...style}}>
@@ -199,7 +198,7 @@ export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, hel
                 groupKey = {groupKey}
                 onSuccess= {onSubmit}
                 onCancel= {() => dispatchHideDialog(DOWNLOAD_DIALOG_ID)}
-                completeText='Prepare Download'
+                completeText={downloadButtonText}
                 cancelText={cancelText}
                 help_id  = {help_id}>
 
@@ -208,14 +207,14 @@ export function DownloadOptionPanel ({groupKey='DownloadDialog', cutoutSize, hel
                             {preTitleMessage}
                         </Typography>
                     )}
-                    <Stack spacing={1}>
+                    <Stack spacing={2}>
                         {showTitle && <TitleField {...{value:dlTitle}}/>}
 
                         {children}
 
                         {cutoutSize         && <DownloadCutout />}
-                        {showZipStructure   && <ZipStructure />}
-                        {showFileLocation   && <WsSaveOptions {...{groupKey, labelWidth:110, saveAsProps}}/>}
+                        {showZipStructure && <FileStructure/>}
+                        {showFileLocation   && <WsSaveOptions {...{groupKey, labelWidth:110}}/>}
                         {showEmailNotify    && <EmailNotification {...{groupKey}}/>}
                     </Stack>
                 </FieldGroup>
@@ -231,19 +230,19 @@ DownloadOptionPanel.propTypes = {
     cutoutSize: PropTypes.string,
     help_id:    PropTypes.string,
     title:      PropTypes.string,           // title of the dialog, appears at top of the dialog
+    downloadType: PropTypes.string, //either 'package' or 'script'
     style:      PropTypes.object,
 
-    showTitle:        PropTypes.bool,           // layout Title field.  This is the title of the package request.  It will be displayed in background monitor.
-    showZipStructure: PropTypes.bool,           // layout ZipStructure field
+    showTitle:        PropTypes.bool,           // layout Title field.  This is the title of the package request.  It will be displayed in Job History.
     showEmailNotify:  PropTypes.bool,           // layout EmailNotification field
     showFileLocation: PropTypes.bool,           // layout FileLocation field
     updateSearchRequest: PropTypes.func,   // customized parameters to be added or updated in request
     updateDownloadRequest:PropTypes.func,
+
     validateOnSubmit: PropTypes.func,      // to validate form inputs on submit
     dlParams:   PropTypes.shape({               // these params should be used as defaults value if they appears as input fields
-        TitlePrefix:    PropTypes.string,           // default title of the download..  an index number will be appended to this.
         FilePrefix:     PropTypes.string,           // packaged file prefix
-        BaseFileName:   PropTypes.string,           // zip file name
+        Title:   PropTypes.string,           // title in the UI, also the file name of the downloaded file
         DataSource:     PropTypes.string,
         MaxBundleSize:  PropTypes.number,
         FileGroupProcessor: PropTypes.string.isRequired,
@@ -255,28 +254,17 @@ export function TitleField({style={}, value, label='Title:', size=30}) {
     return (
         <ValidationField
             forceReinit={true}
-            fieldKey='Title'
+            fieldKey='Title' //title will also be used as the filename on the server
             tooltip='Enter a description to identify this download.'
             {...{validator:NotBlank, initialState:{value}, label, size, style}}
         />
     );
 }
 
-export function ZipStructure({fieldKey='zipType'}) {
-    return (
-        <ListBoxInputField
-            fieldKey = {fieldKey}
-            initialState = {{
-                tooltip: 'Zip File Structure',
-                label : 'Zip File Structure:'
-            }}
-            options = {[
-                {label: 'Structured (with folders)', value: 'folder'},
-                {label: 'Flattened (no folders)', value: 'flat'}
-            ]}
-        />
-
-    );
+export function FileStructure({fieldKey='isFlattenedStructure'}) {
+    return (<SwitchInputField fieldKey={fieldKey}
+                              label={'Flattened File Structure'}
+                              initialState={{value: false}}/>);
 }
 
 export function DownloadCutout({fieldKey='dlCutouts'}) {
@@ -294,17 +282,18 @@ export function DownloadCutout({fieldKey='dlCutouts'}) {
         />
     );
 }
+
 export function EmailNotification({style, groupKey}) {
-    const enableEmail = useStoreConnector(() => getFieldVal(groupKey, emailNotif));
+    const sendNotif = useStoreConnector(() => getFieldVal(groupKey, sendNotif));
 
     return (
         <Box sx={{...style}} spacing={1}>
             <Stack width={250} mt={2}>
-                <CheckboxGroupInputField fieldKey={emailNotif}
+                <CheckboxGroupInputField fieldKey={sendNotif}
                                      initialState= {{value: ''}}
                                      options={[{label:'Enable email notification', value: 'true'}]}/>
             </Stack>
-            {enableEmail &&
+            {sendNotif &&
                 <ValidationField
                     fieldKey={emailKey}
                     validator={Validate.validateEmail.bind(null, 'an email field')}

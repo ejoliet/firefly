@@ -88,7 +88,7 @@ public abstract class QueryVOTABLE extends EmbeddedDbProcessor {
     private File getSearchResult(TableServerRequest req) throws IOException, DataAccessException, EndUserException {
         String urlQuery = getQueryString(req);
 
-        jobExecIf(v -> v.getJobInfo().setDataOrigin(urlQuery));
+        updateJob(ji -> ji.getAux().setJobUrl(urlQuery));
 
         URL url;
         try {
@@ -110,6 +110,9 @@ public abstract class QueryVOTABLE extends EmbeddedDbProcessor {
         } catch (Exception e) {
             throw new DataAccessException("query failed", e);
         }
+
+        setJobResults(outFile);
+
         return outFile;
     }
 }

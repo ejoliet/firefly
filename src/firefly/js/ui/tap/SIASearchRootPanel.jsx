@@ -276,7 +276,7 @@ function Services({serviceUrl, servicesShowing, siaOps, onSiaServiceOptionSelect
                                     onSiaServiceOptionSelect, clearServiceOnDelete:value===serviceUrl}}/>),
                         }} /> )}
                     <FormHelperText sx={{m: .25}}>
-                        {enterUrl ? 'Type the url of a TAP service & press enter' : 'Choose a SIAv2 service from the list'}
+                        {enterUrl ? 'Type the url of a SIAv2 service & press enter' : 'Choose a SIAv2 service from the list'}
                     </FormHelperText>
                 </Stack>
             </Stack>
@@ -398,6 +398,11 @@ const noRowLimitMsg = (
     </div>
 );
 
+function getCutoutType(siaState) {
+    return siaState?.constraintFragments?.get('spatial')?.cutoutType ??
+        siaState?.constraintFragments?.get('location')?.cutoutType;
+}
+
 
 function onSIAv2SearchSubmit(request, serviceUrl, siaMeta, siaState, showErrors=true) {
 
@@ -417,25 +422,29 @@ function onSIAv2SearchSubmit(request, serviceUrl, siaMeta, siaState, showErrors=
     const constraints= cAry.map( (f) =>  f.siaConstraints).filter( (c) => c?.length).flat();
 
     if (!constraints.length && !errors.length) {
-        if (showErrors) showInfoPopup('You much enter some search parameters', 'Error');
+        if (showErrors) showInfoPopup('At least one search constraint must be provided', 'Error');
         return false;
     }
 
     const cStr= constraints.join('&');
     const hasMaxrec = !isNaN(parseInt(request.maxrec));
     const maxrec = parseInt(request.maxrec);
-    var baseRequestUrl= `${serviceUrl}?${cStr}`;
-
+    const baseRequestUrl= `${serviceUrl}?${cStr}`;
 
     const doSubmit = () => {
 
         const url= `${baseRequestUrl}${hasMaxrec?'&MAXREC='+maxrec : ''}`;
         const additionalSiaMeta= {serviceLabel: getSiaServiceLabel(serviceUrl)};
+        if (getCutoutType(siaState)) additionalSiaMeta[MetaConst.OBSCORE_CUTOUT_TYPE]= getCutoutType(siaState);
         const hips= getServiceHiPS(serviceUrl);
         if (hips) additionalSiaMeta[MetaConst.COVERAGE_HIPS]= hips;
         const title= makeNumberedTitle(userTitle || 'SIA Search');
         const treq= makeFileRequest(title,new URL(url).toString());
-        treq.META_INFO= {...treq.META_INFO, ...additionalSiaMeta};
+        treq.META_INFO= {
+            ...treq.META_INFO,
+            ...additionalSiaMeta,
+            [MetaConst.DATA_SERVICE_ID] : getSiaServiceLabel(serviceUrl),
+        };
         console.log('sia search: ' + url, new URL(url).toString());
         dispatchTableSearch(treq, {backgroundable: true, showFilters: true, showInfoButton: true});
     };

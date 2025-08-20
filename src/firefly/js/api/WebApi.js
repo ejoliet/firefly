@@ -1,9 +1,10 @@
 import {isEmpty, isArray, isObject} from 'lodash';
-import React from 'react';
 import {WSCH} from '../core/History';
 import {dispatchAddActionWatcher} from '../core/MasterSaga.js';
 import {Logger} from '../util/Logger.js';
+import {isDefined} from '../util/WebUtil';
 import {makeWorldPt, parseWorldPt} from '../visualize/Point';
+import {dispatchActiveTarget} from 'firefly/core/AppDataCntlr';
 
 
 const API_STR= 'api';
@@ -386,7 +387,7 @@ export function makeExample(desc,cmd=undefined, params=undefined) {
     const sp= params ? Object.entries(params)
         .reduce( (str,[k,v]) => {
             const ary= isArray(v) ? v : [v];
-            const result= ary.reduce( (pStr,e) => (pStr +`&${k}=${e}`),'');
+            const result= ary.reduce( (pStr,e) => (pStr + (isDefined(e) ? `&${k}=${e}` : `&${k}`)),'');
             return str+ result;
         } ,'') : '';
     const cmdStr= cmd ? `${API_STR}=${cmd}${sp}` : API_STR;
@@ -428,3 +429,14 @@ export function getReservedParamKeyDesc(paramKey) {
     }
 
 }
+
+
+export const processSpatialReservedParams= (inParams) => {
+    const params= {...inParams};
+    if (params[ReservedParams.POSITION.name]) dispatchActiveTarget(params[ReservedParams.POSITION.name]);
+    if (params[ReservedParams.SR.name]) {
+        params.radiusInArcSec= params[ReservedParams.SR.name] * 3600;
+        Reflect.deleteProperty(params, ReservedParams.SR.name);
+    }
+    return params;
+};

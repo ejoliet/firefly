@@ -2,19 +2,23 @@ import {RequestType} from 'firefly/api/ApiUtilImage.jsx';
 import {isArray} from 'lodash';
 import {getAppOptions} from '../core/AppDataCntlr';
 import {dispatchAddActionWatcher, dispatchCancelActionWatcher} from '../core/MasterSaga';
-import {DataProductTypes, FileAnalysisType} from '../data/FileAnalysis';
+import {FileAnalysisType, Format} from '../data/FileAnalysis';
 import {MetaConst} from '../data/MetaConst';
 import {upload} from '../rpc/CoreServices.js';
-import {getMetaEntry, getTblRowAsObj} from '../tables/TableUtil';
+import {getMetaEntry, getTblById, getTblRowAsObj} from '../tables/TableUtil';
 import {hashCode} from '../util/WebUtil';
 import {isDefined} from '../util/WebUtil.js';
 import ImagePlotCntlr from '../visualize/ImagePlotCntlr';
+import {getObsTitle} from '../voAnalyzer/TableAnalysis';
+import {getObsCoreData} from '../voAnalyzer/VoDataLinkServDef';
+import {makePdfEntry, makePngEntry, makeTarEntry, makeTextEntry} from './AnalysisUtils';
 import {
     dataProductRoot, dispatchUpdateActiveKey, dispatchUpdateDataProducts,
-    getActiveFileMenuKeyByKey, getDataProducts
+    getActiveFileMenuKeyByKey, getActiveMenuKey, getDataProducts
 } from './DataProductsCntlr';
 import {
-    dpdtImage, dpdtMessage, dpdtMessageWithDownload, dpdtMessageWithError, dpdtPNG, dpdtUploadError, DPtypes,
+    dpdtDownloadMenuItem,
+    dpdtImage, dpdtMessage, dpdtMessageWithDownload, dpdtMessageWithError, dpdtUploadError, DPtypes,
 } from './DataProductsType';
 import {dpdtSendToBrowser} from './DataProductsType.js';
 import {createSingleImageActivate, createSingleImageExtraction} from './ImageDataProductsUtil';
@@ -38,42 +42,33 @@ const parseAnalysis= (serverCacheFileKey, analysisResult) =>
  * @param {number} obj.row active row number
  * @param {WebPlotRequest} obj.request - used for image or just downloading files
  * @param {ActivateParams} obj.activateParams
- * @param {String} [obj.dataTypeHint]  stuff like 'spectrum', 'image', 'cube', etc
  * @param {DataProductsFactoryOptions} obj.options
  * @param {Array.<Object>} [obj.menu]
  * @param {ServiceDescriptorDef} [obj.serDef]
+ * @param {DatalinkData} [obj.dlData]
  * @param {Object} [obj.userInputParams]
  * @param {Function} [obj.analysisActivateFunc]
  * @param {string} [obj.originalTitle]
  * @param {string} [obj.menuKey]
+ * @param obj.serviceDescMenuList
  * @return {Promise.<DataProductsDisplayType>}
  */
-export async function doUploadAndAnalysis({ table, row, request, activateParams={}, dataTypeHint='', options, menuKey,
-                                 menu, serDef, userInputParams, analysisActivateFunc, originalTitle,serviceDescMenuList}) {
+export async function doUploadAndAnalysis({ table, row, request, activateParams={}, options, menuKey,
+                                              menu, serDef, dlData, userInputParams, analysisActivateFunc,
+                                              originalTitle,serviceDescMenuList}) {
 
     const {dpId}= activateParams;
 
 
     const processAnalysis= (serverCacheFileKey, fileFormat, fileAnalysis) => {
-        if (!fileAnalysis.parts || fileFormat==='UNKNOWN') {
-            return dpdtMessageWithDownload('No displayable data available for this row: Unknown file type',
-                                                  fileAnalysis.fileName&&'Download File', request.getURL());
-        }
         const result=  processAnalysisResult({ table, row, request, activateParams, serverCacheFileKey,
-            fileAnalysis, dataTypeHint, analysisActivateFunc, serDef, originalTitle, options, menuKey});
+            fileAnalysis, analysisActivateFunc, serDef, dlData, originalTitle, options, menuKey});
         if (serviceDescMenuList && result) {
              return makeSingleDataProductWithMenu(activateParams.dpId,result,1,serviceDescMenuList);
         }
         return result;
     };
 
-
-
-    //-----
-    //----- if this is a service descriptor and there are additional params then add them to the URL
-    //----- todo: we need to add the more sophisticated service descriptor url building from
-    //----  todo:        ServiceDefTools.js, makeServiceDescriptorSearchRequest
-    //-----
     if (request.getURL() && (serDef?.serDefParams || userInputParams)) {
         request= request.makeCopy();
         const rowIdx= isDefined(serDef.dataLinkTableRowIdx) ? serDef.dataLinkTableRowIdx : row;
@@ -109,7 +104,15 @@ export async function doUploadAndAnalysis({ table, row, request, activateParams=
     catch (e) {
         endUpdateWatcher(request.getURL());
         console.log('Call to Upload failed', e);
-        dispatchUpdateDataProducts(dpId, {...makeErrorResult(e.message),menu, serDef, analysisActivateFunc});
+        let activeItem;
+        if (menu?.[0]) {
+            const activeMenuKey= getActiveMenuKey(dpId, menu[0].activeMenuLookupKey);
+            activeItem= activeMenuKey ? menu.find( (m) => m.menuKey===activeMenuKey) : menu[0];
+        }
+        const {name,dropDownText,activeMenuLookupKey}= activeItem ?? {};
+        dispatchUpdateDataProducts(dpId,
+            {...makeErrorResult(e.message,undefined,request.getURL(),name),
+            menu, serDef, analysisActivateFunc, name,dropDownText, activeMenuLookupKey});
         return dpdtUploadError(request.getURL(),e);
     }
 }
@@ -171,20 +174,29 @@ function watchForUploadUpdate(action, cancelSelf, {url,dpId}) {
 
 
 
-function makeErrorResult(message, fileName,url) {
-    return dpdtMessageWithDownload(`No displayable data available for this row${message?': '+message:''}`, fileName&&'Download: '+fileName, url);
+function makeErrorResult(message, fileName,url,desc) {
+    const details= [];
+    if (url) details.push({text: 'Show failed URL',url});
+
+    if (message) {
+        details.push({title:'Server Message', text:message});
+    }
+    return dpdtMessage(`No displayable data available for ${desc ?? 'this row'}`, undefined, {details});
 }
 
-function makeAllImageEntry(request, path, parts, imageViewerId,  tbl_id, row, imagePartsLength) {
+function makeAllImageEntry({request, path, parts, imageViewerId,  dlData, tbl_id, row, imagePartsLength}) {
     const newReq= request.makeCopy();
     newReq.setFileName(path);
     newReq.setRequestType(RequestType.FILE);
     parts.forEach( (p) => Object.entries(p.additionalImageParams ?? {} )
             .forEach(([k,v]) => newReq.setParam(k,v)));
     const title= request.getTitle() || '';
-    return dpdtImage({name: `Show: ${title||'Image Data'} ${imagePartsLength>1? ': All Images in File' :''}`,
+    const sourceObsCoreData= dlData ? dlData.sourceObsCoreData : getObsCoreData(getTblById(tbl_id),row);
+    return dpdtImage({name: `${title||'Image Data'} ${imagePartsLength>1? ': All Images in File' :''}`,
+        dlData,
         activate: createSingleImageActivate(newReq,imageViewerId,tbl_id,row),
-        extraction: createSingleImageExtraction(newReq), request});
+        extraction: createSingleImageExtraction(newReq, sourceObsCoreData, dlData),
+        request});
 }
 
 /**
@@ -196,21 +208,27 @@ function makeAllImageEntry(request, path, parts, imageViewerId,  tbl_id, row, im
  * @param {ActivateParams} obj.activateParams
  * @param {String} obj.serverCacheFileKey - key to use for server calls to access the file
  * @param {FileAnalysisReport} obj.fileAnalysis results of the file analysis server call
- * @param {String} obj.dataTypeHint  stuff like 'spectrum', 'image', 'cube', etc
  * @param {Function} obj.analysisActivateFunc
  * @param {ServiceDescriptorDef} obj.serDef
+ * @param {DatalinkData} [obj.dlData]
  * @param {String} obj.originalTitle
  * @param {DataProductsFactoryOptions} obj.options
  * @param {String} obj.menuKey
  * @return {DataProductsDisplayType}
  */
 function processAnalysisResult({table, row, request, activateParams,
-                                   serverCacheFileKey, fileAnalysis, dataTypeHint,
-                                  analysisActivateFunc, serDef, originalTitle, options, menuKey}) {
+                                   serverCacheFileKey, fileAnalysis,
+                                  analysisActivateFunc, serDef, dlData, originalTitle, options, menuKey}) {
 
     const {parts,fileName,fileFormat}= fileAnalysis;
-    if (!parts) return makeErrorResult('',fileName,serverCacheFileKey);
 
+    if (fileFormat===Format.TEXT) {
+        return makeTextEntry(request.getURL(),undefined,getObsTitle(table,row));
+    }
+    if (!parts || fileFormat===Format.UNKNOWN) {
+        return dpdtMessageWithDownload('No displayable data available for this row: Unknown file type',
+            fileName&&'Download File', request.getURL());
+    }
 
     const url= request.getURL() || serverCacheFileKey;
 
@@ -219,23 +237,27 @@ function processAnalysisResult({table, row, request, activateParams,
 
     return deeperInspection({
         table, row, request, activateParams,
-        serverCacheFileKey, fileAnalysis, dataTypeHint,
-        analysisActivateFunc, serDef, originalTitle, url, options
+        serverCacheFileKey, fileAnalysis,
+        analysisActivateFunc, serDef, dlData, originalTitle, url, options
     });
 }
 
 
 function deeperInspection({ table, row, request, activateParams,
-                              serverCacheFileKey, fileAnalysis, dataTypeHint,
-                              analysisActivateFunc, serDef, originalTitle, url, options}) {
+                              serverCacheFileKey, fileAnalysis,
+                              analysisActivateFunc, serDef, dlData, originalTitle, url, options}) {
 
     const {parts,fileFormat, disableAllImageOption= false}= fileAnalysis;
     const {imageViewerId, dpId}= activateParams;
     const rStr= request.toString();
     const activeItemLookupKey= hashCode(rStr);
     const fileMenu= {fileAnalysis, menu:[],activeItemLookupKey, activeItemLookupKeyOrigin:rStr};
+    const title= parts.length===1 ? originalTitle : undefined;
 
-    const partAnalysis= parts.map( (p) => analyzePart(p,request, table, row, fileFormat, dataTypeHint, serverCacheFileKey,activateParams, options));
+    const partAnalysis= parts.map( (part) =>
+        analyzePart({part,request, table, row, fileFormat, originalTitle,
+            source: part.convertedFileName ?? serverCacheFileKey,
+            dlData, activateParams, options, title}));
     const imageParts= partAnalysis.filter( (pa) => pa.imageResult);
     let makeAllImageOption= !disableAllImageOption;
     if (makeAllImageOption) makeAllImageOption= imageParts.length>1 || (imageParts.length===1 && parts.length===1);
@@ -247,7 +269,8 @@ function deeperInspection({ table, row, request, activateParams,
 
 
     const imageEntry= makeAllImageOption &&
-        makeAllImageEntry(request,fileAnalysis.filePath, parts,imageViewerId,table?.tbl_id,row,imageParts.length);
+        makeAllImageEntry({request,path:fileAnalysis.filePath, parts,imageViewerId, dlData,
+            tbl_id:table?.tbl_id,row,imagePartsLength:imageParts.length});
 
     if (imageEntry) fileMenu.menu.push(imageEntry);
     partAnalysis.forEach( (pa) => {
@@ -265,6 +288,7 @@ function deeperInspection({ table, row, request, activateParams,
         }
     });
 
+
     fileMenu.menu.forEach( (m,idx) => {
         m.menuKey= 'fm-'+idx;
         m.analysisActivateFunc= analysisActivateFunc;
@@ -272,7 +296,7 @@ function deeperInspection({ table, row, request, activateParams,
         m.originalTitle= originalTitle;
     });
 
-    fileMenu.initialDefaultIndex= chooseDefaultEntry(fileMenu.menu,dataTypeHint);
+    fileMenu.initialDefaultIndex= 0;
 
     let actIdx=0;
     if (fileMenu.menu.length) {
@@ -281,9 +305,10 @@ function deeperInspection({ table, row, request, activateParams,
         if (actIdx<0) actIdx= fileMenu.initialDefaultIndex;
     }
     else {// error case
-        return makeErrorDP(parts,fileFormat);
+        const dp= makeErrorDP(parts,fileFormat,url);
+        fileMenu.menu.push({...dp, menuKey:'fm-1', analysisActivateFunc:undefined, serDef, originalTitle});
     }
-    dispatchUpdateActiveKey({dpId, activeFileMenuKeyChanges:{[fileMenu.activeItemLookupKey]:fileMenu.menu[actIdx].menuKey}});
+    dispatchUpdateActiveKey({dpId, activeFileMenuKeyChanges:{[activeItemLookupKey]:fileMenu.menu[actIdx].menuKey}});
     return {...fileMenu.menu[actIdx],fileMenu};
 
 }
@@ -292,7 +317,7 @@ function deeperInspection({ table, row, request, activateParams,
 function makeErrorDP(parts, fileFormat, url) {
     if (parts.every( (p) => p.type===FileAnalysisType.HeaderOnly) && fileFormat==='FITS') {
         const msg= 'You may only download this File - Nothing to display - FITS file has only header HDUs';
-        return dpdtMessageWithDownload(msg, 'Download File', url, fileFormat==='FITS'&&'FITS');
+        return dpdtDownloadMenuItem('Download FITS File',url,'download-0','Fits', {message:msg});
     }
     else {
         return dpdtMessage('Cannot analyze file');
@@ -312,13 +337,13 @@ function makeErrorDP(parts, fileFormat, url) {
 function getImmediateResponse(fileFormat,request,url,serDef,parts,menuKey) {
     switch (fileFormat) {
         case FileAnalysisType.PDF:
-            return dpdtMessageWithDownload('Cannot not display PDF file, you may only download it', 'Download PDF File', url);
+            return makePdfEntry(url);
         case FileAnalysisType.TAR:
-            return dpdtMessageWithDownload('Cannot not display Tar file, you may only download it', 'Download Tar File', url);
+            return makeTarEntry(url);
         case FileAnalysisType.REGION:
             return dpdtMessageWithDownload('Cannot not display Region file, you may only download it', 'Download Region File', url);
         case FileAnalysisType.PNG:
-            return dpdtPNG('PNG Image', url);
+            return makePngEntry(url);
         case FileAnalysisType.HTML:
             return dpdtSendToBrowser(url, serDef?.serDefParams);
         case FileAnalysisType.Unknown:
@@ -332,29 +357,4 @@ function getImmediateResponse(fileFormat,request,url,serDef,parts,menuKey) {
             }
             break;
     }
-}
-
-
-
-/*
- * Determine which entry should be the default
- * @param {Array.<DataProductsDisplayType>} menu
- * @param {String} dataTypeHint
- * @return {Number|undefined} the index of the default
- */
-function chooseDefaultEntry(menu,dataTypeHint) {
-    if (!menu?.length) return undefined;
-    let defIndex= menu.findIndex( (m) => m.requestDefault);
-    if (defIndex > -1) return defIndex;
-    const dth= dataTypeHint?.toLowerCase();
-
-    switch (dth) {
-        case DataProductTypes.timeseries:
-            defIndex= menu.find( (m) => m.displayType===DPtypes.CHART);
-            break;
-        case DataProductTypes.spectrum:
-            defIndex= menu.find( (m) => m.displayType===DPtypes.CHART);
-            break;
-    }
-    return defIndex > -1 ? defIndex : 0;
 }

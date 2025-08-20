@@ -12,7 +12,6 @@ import edu.caltech.ipac.firefly.visualize.WebFitsData;
 import edu.caltech.ipac.firefly.visualize.WebPlotRequest;
 import edu.caltech.ipac.util.download.FailedRequestException;
 import edu.caltech.ipac.visualize.plot.ActiveFitsReadGroup;
-import edu.caltech.ipac.visualize.plot.Histogram;
 import edu.caltech.ipac.visualize.plot.RangeValues;
 import edu.caltech.ipac.visualize.plot.plotdata.FitsRead;
 import edu.caltech.ipac.visualize.plot.plotdata.GeomException;
@@ -21,6 +20,7 @@ import nom.tam.fits.FitsException;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -81,7 +81,7 @@ public class ImagePlotCreator {
         Map<Band,WebFitsData> wfDataMap= new LinkedHashMap<>();
         Map<Band,ModFileWriter> fileWriterMap= new LinkedHashMap<>();
         ActiveFitsReadGroup frGroup= new ActiveFitsReadGroup();
-        List<RelatedData> relatedData= null;
+        Map<Band,List<RelatedData>> relatedDataMap= new HashMap<>();
         FileInfo fileInfo= null;
 
         for(var entry : readInfoMap.entrySet()) {
@@ -102,20 +102,20 @@ public class ImagePlotCreator {
                 frGroup.setThreeColorBandIn(readInfo.fitsRead(),band);
                 stretchBand(band,state);
                 first= false;
-                relatedData= readInfo.relatedData();
             }
             else {
                 ModFileWriter mfw= createBand(state,readInfo,frGroup);
                 stretchBand(band,state);
                 if (mfw!=null) fileWriterMap.put(band,mfw);
             }
+            relatedDataMap.put(band,readInfo.relatedData());
             WebFitsData wfData= makeWebFitsData(frGroup, readInfo.band(), readInfo.originalFile());
             wfDataMap.put(band, wfData);
         }
         String desc= make3ColorDataDesc(readInfoMap);
 
         if (first) _log.error("something is wrong, plot not setup correctly - no color bands specified");
-        return PlotInfo.make3C(state,fileInfo, frGroup, desc, relatedData, wfDataMap, fileWriterMap);
+        return PlotInfo.make3C(state,fileInfo, frGroup, desc, relatedDataMap, wfDataMap, fileWriterMap);
      }
 
      private static void confirmRVinState(PlotState state) {
@@ -168,29 +168,21 @@ public class ImagePlotCreator {
         long fileLength= (f!=null && f.canRead()) ? f.length() : 0;
         FitsRead fr=  frGroup.getFitsReadAry()[band.getIdx()];
         if (fr==null) return null;
-        double dataMin= Double.NaN;
-        double dataMax= Double.NaN;
-        double largeBinPercent= 0;
-        if (!fr.isDeferredRead()) {
-            Histogram hist= fr.getHistogram();
-            dataMin= hist.getDNMin() * fr.getBscale() + fr.getBzero();
-            dataMax= hist.getDNMax() * fr.getBscale() + fr.getBzero();
-            largeBinPercent= hist.getLargeBinPercent();
-        }
-        return new WebFitsData( dataMin, dataMax, largeBinPercent, fileLength, fr.getFluxUnits());
+        return new WebFitsData( fileLength);
     }
 
     private static Map<Band,WebFitsData> noBandMap(WebFitsData wfd) { return Collections.singletonMap(NO_BAND,wfd);}
 
     public record PlotInfo(PlotState state, FileInfo fileInfo,
-                           ActiveFitsReadGroup fitsReadGroup, String dataDesc, List<RelatedData> relatedData,
+                           ActiveFitsReadGroup fitsReadGroup, String dataDesc, Map<Band,List<RelatedData>> relatedDataMap,
                            Map<Band, WebFitsData> webFitsDataMap, Map<Band, ModFileWriter> fileWriterMap) {
 
         public static PlotInfo makeStandard(PlotState state,
                                             WebPlotReader.FileReadInfo readInfo,
                                             ActiveFitsReadGroup fitsReadGroup,
                                             WebFitsData webFitsData) {
-            return new PlotInfo(state,readInfo.fileInfo(), fitsReadGroup, readInfo.dataDesc(), readInfo.relatedData(),
+            return new PlotInfo(state,readInfo.fileInfo(), fitsReadGroup, readInfo.dataDesc(),
+                    Collections.singletonMap(Band.NO_BAND, readInfo.relatedData()),
                     noBandMap(webFitsData), emptyMap());
         }
 
@@ -198,10 +190,10 @@ public class ImagePlotCreator {
                                       FileInfo fileInfo,
                                       ActiveFitsReadGroup fitsReadGroup,
                                       String dataDesc,
-                                      List<RelatedData> relatedData,
+                                      Map<Band,List<RelatedData>> relatedDataMap,
                                       Map<Band, WebFitsData> webFitsDataMap,
                                       Map<Band, ModFileWriter> fileWriterMap) {
-            return new PlotInfo(state,fileInfo, fitsReadGroup, dataDesc, relatedData, webFitsDataMap, fileWriterMap);
+            return new PlotInfo(state,fileInfo, fitsReadGroup, dataDesc, relatedDataMap, webFitsDataMap, fileWriterMap);
         }
     }
 }

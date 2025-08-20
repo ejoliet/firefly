@@ -33,8 +33,8 @@ import static edu.caltech.ipac.visualize.plot.plotdata.FitsReadFactory.BAD_FORMA
  */
 public class FitsCacher {
 
-    private static final Cache memCache= CacheManager.getCache(Cache.TYPE_VIS_SHARED_MEM);
-    private static final Cache fileInfoCache= CacheManager.getCache(Cache.TYPE_PERM_SMALL);
+    private static final Cache memCache= CacheManager.getVisMemCache();
+    private static final Cache fileInfoCache= CacheManager.getLocal();
     private static final Map<CacheKey, Object> activeRequest = new ConcurrentHashMap<>(61);
     private static final Logger.LoggerImpl _log = Logger.getLogger();
 
@@ -120,7 +120,7 @@ public class FitsCacher {
 
     private static void prepareCacheSpace(FileInfo fitsFileInfo) {
         memCache.put(fitsFileInfo, (HasSizeOf) () -> fitsFileInfo.getFile().length()); //force the cache to make space
-        memCache.put(fitsFileInfo, null);
+        memCache.remove(fitsFileInfo);
     }
 
     private static void logTime(FileInfo fitsFileInfo, long time) {
@@ -151,7 +151,7 @@ public class FitsCacher {
             return fitsDataInfo;
         }
         else {
-            memCache.put(key,null);
+            memCache.remove(key);
             return null;
         }
     }

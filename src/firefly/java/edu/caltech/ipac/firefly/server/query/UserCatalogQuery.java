@@ -8,7 +8,6 @@ import edu.caltech.ipac.firefly.data.ServerRequest;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.data.table.MetaConst;
 import edu.caltech.ipac.firefly.server.ServerContext;
-import edu.caltech.ipac.firefly.server.cache.UserCache;
 import edu.caltech.ipac.firefly.server.util.multipart.UploadFileInfo;
 import edu.caltech.ipac.firefly.server.ws.WsServerUtils;
 import edu.caltech.ipac.table.DataGroup;
@@ -16,6 +15,7 @@ import edu.caltech.ipac.table.DataType;
 import edu.caltech.ipac.table.TableMeta;
 import edu.caltech.ipac.table.TableUtil;
 import edu.caltech.ipac.util.StringUtils;
+import edu.caltech.ipac.util.cache.CacheManager;
 import edu.caltech.ipac.util.cache.StringKey;
 
 import java.io.File;
@@ -57,7 +57,7 @@ public class UserCatalogQuery extends IpacTablePartProcessor {
     public void prepareTableMeta(TableMeta meta, List<DataType> columns, ServerRequest request) {
         String filePath= request.getParam("filePath");
         if (filePath!=null) {
-            UploadFileInfo uFi=(UploadFileInfo)UserCache.getInstance().get(new StringKey(filePath));
+            UploadFileInfo uFi=(UploadFileInfo) CacheManager.getUserCache().get(new StringKey(filePath));
             if (uFi!=null) {
                 meta.setAttribute("title", uFi.getFileName());
             }

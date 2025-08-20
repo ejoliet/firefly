@@ -1,5 +1,5 @@
-import {dispatchActiveTarget, dispatchAppOptions, getMenu} from '../../core/AppDataCntlr.js';
-import {dispatchHideDropDown, dispatchShowDropDown, dispatchUpdateMenu} from '../../core/LayoutCntlr.js';
+import {dispatchActiveTarget, dispatchAppOptions, dispatchSetMenu, getMenu} from '../../core/AppDataCntlr.js';
+import {dispatchHideDropDown, dispatchShowDropDown} from '../../core/LayoutCntlr.js';
 import {ServerParams} from '../../data/ServerParams.js';
 import {makeTblRequest, MAX_ROW} from '../../tables/TableRequestUtil.js';
 import {doFetchTable} from '../../tables/TableUtil.js';
@@ -17,7 +17,7 @@ import {makeExamples, ReservedParams} from '../WebApi';
 
 const imageOverview= {
     overview: [
-        'Load and image to firefly either from URL or from a service'
+        'Load an image to firefly either from URL or from a service'
     ],
     allowAdditionalParameters: true,
     parameters: {
@@ -248,7 +248,7 @@ async function showHiPSPanelAsync(cmd, inParams) {
             const newMenuItems= [...menuItems];
             const hipsPanel= {label:'HiPS Search', action: 'HiPSSearchPanel', primary: false, category:'extra'};
             newMenuItems.splice(1,0,hipsPanel);
-            dispatchUpdateMenu({selected,showBgMonitor,menuItems:newMenuItems});
+            dispatchSetMenu({selected,showBgMonitor,menuItems:newMenuItems});
         }
         dispatchShowDropDown({view:'HiPSSearchPanel', initArgs:{urlApi}});
     }

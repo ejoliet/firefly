@@ -39,7 +39,10 @@
 /**
  * @typedef DlAnalysisData
  * @prop {boolean} isThis
+ * @prop {boolean} isCounterpart
+ * @prop {boolean} isCalibration
  * @prop {boolean} isImage
+ * @prop {boolean} maybeImage - the file is probably a fits file with an image
  * @prop {boolean} isGrid
  * @prop {boolean} isAux
  * @prop {boolean} isSpectrum
@@ -49,29 +52,50 @@
  * @prop {boolean} bBand
  * @prop {boolean} cisxPrimaryQuery
  * @prop {boolean} cisxConcurrentQuery
- * @prop {boolean} isTar
- * @prop {boolean} isGzip
  * @prop {boolean} isSimpleImage
  * @prop {boolean} isDownloadOnly
+ * @prop {boolean} cutoutFullPair
+ * @prop {boolean} usableEntry
  */
 
 
 /**
  * @typedef DatalinkData
- * @prop {String} description
- * @prop {String} url
- * @prop {String} contentType
- * @prop {String} contentQualifier
- * @prop {String} semantics
- * @prop {String} localSemantics
- * @prop {number} size
+ * @prop {String} description - from description column
+ * @prop {String} url - from access_url column
+ * @prop {String} contentType - from content_type column
+ * @prop {String} contentQualifier - from content_qualifier column
+ * @prop {String} semantics - from semantics column
+ * @prop {String} localSemantics - from local_semantics column
+ * @prop {number} size - from content_length column
  * @prop {number} rowIdx
- * @prop {String} serviceDefRef
+ * @prop {String} serviceDefRef - from service_def  column
+ * @prop {String} labelDLExt - the label, this is an extension to the standard, from label column, only used if defined
+ * @prop {String} bandpassNameDLExt- the bandpassName, this is an extension to the standard, from bandpass_name column, only used if defined
  * @prop {ServiceDescriptorDef} serDef
  * @prop {DlAnalysisData} dlAnalysis
+ * @prop {Object} relatedDLEntries
+ * @prop {object} relatedRows
+ * @prop {ObsCoreData} sourceObsCoreData
+ * @prop {WorldPt} positionWP if there is a MetaConst.SEARCH_TARGET in datalink table it is propagated here
+ * @prop {WorldPt} rowWP if there is a MetaConst.ROW_TARGET in datalink table it is propagated here
+ * @prop {String} sRegion if there is a MetaConst.S_REGION in datalink table it is propagated here
  */
 
 
+/**
+ * @typedef ObsCoreData
+ *
+ * @prop {string} access_format
+ * @prop {string} access_url
+ * @prop {string} dataproduct_subtype
+ * @prop {string} dataproduct_type
+ * @prop {string} obs_collection
+ * @prop {string} obs_title
+ * @prop {string} s_ra
+ * @prop {string} s_dec
+ * @prop {string} s_region
+ */
 
 
 
@@ -127,6 +151,7 @@
  * @prop {string} title
  * @prop {string} accessURL
  * @prop {string} standardID
+ * @prop {string} internalServiceDescriptorID
  * @prop {string} ID
  * @prop {TableModel} sdSourceTable - the table where this service descriptor cambe from
  * @prop {string} utype
@@ -136,6 +161,8 @@
  * @prop {CISXui} [cisxUI] - names should be one of: HiPS, FOV, hips_initial_ra, hips_initial_dec, moc, examples, hipsCtype1, hipsCtype2
  * @prop {Array.<ServiceDescriptorInputParam>} [cisxTokenSub]
  * @prop {Array.<ServiceDescriptorInputParam>} serDefParams
+ * @prop {WorldPt} positionWP if there is a MetaConst.SEARCH_TARGET in datalink table it is propagated here
+ * @prop {WorldPt} rowWP if there is a MetaConst.ROW_TARGET in datalink table it is propagated here
  */
 
 /**

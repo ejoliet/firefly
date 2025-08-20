@@ -9,9 +9,10 @@ import {
 } from '../../tables/TableUtil.js';
 import {Logger} from '../../util/Logger.js';
 import {getProp, hashCode} from '../../util/WebUtil.js';
+import {getTAPServicesByName} from './TapKnownServices';
 
 const logger = Logger('TapUtil');
-const qFragment = '/sync?REQUEST=doQuery&LANG=ADQL&';
+const qFragment = '/sync?REQUEST=doQuery&LANG=ADQL&RUNID=TAP_SCHEMA&';
 
 export const ADQL_LINE_LENGTH = 100;
 export const ADQL_UPLOAD_TABLE_NAME= 'upload_table';
@@ -335,8 +336,8 @@ async function doLoadObsCoreMetadata(serviceUrl, obscoreTable) {
     }
 }
 
-function makeTapRequest(serviceUrl, QUERY, title) {
-    const url = serviceUrl + qFragment + 'QUERY=' + encodeURIComponent(QUERY);
+function makeTapSchemaRequest(serviceUrl, QUERY, title) {
+    const url = serviceUrl + qFragment +  'QUERY=' + encodeURIComponent(QUERY);
     return makeFileRequest(title, url, undefined, {pageSize: MAX_ROW});
 
 }
@@ -347,7 +348,7 @@ async function loadSchemaDefJoin(serviceUrl) {
                     INNER JOIN tap_schema.tables ON  tap_schema.tables.schema_name = tap_schema.schemas.schema_name
                 `.replace(/\s+/g, ' ').trim();
 
-    const tableModel= await doFetchTable(makeTapRequest(serviceUrl, QUERY, 'loadSchemaDefJoin'));
+    const tableModel= await doFetchTable(makeTapSchemaRequest(serviceUrl, QUERY, 'loadSchemaDefJoin'));
 
     // manually fix duplicate 'description' column because cannot select individual column to rename
     const schemaDesc = tableModel.tableData.columns.find((col) => col.name.toLowerCase().startsWith('description'));
@@ -389,8 +390,8 @@ async function loadSchemaDefNoJoin(serviceUrl) {
     const schemasQuery = 'SELECT * FROM tap_schema.schemas';
     const tablesQuery  = 'SELECT * FROM tap_schema.tables';
 
-    const schemas = await doFetchTable(makeTapRequest(serviceUrl, schemasQuery, 'loadSchemaDefNoJoin-schemas'));
-    const tables  = await doFetchTable(makeTapRequest(serviceUrl, tablesQuery, 'loadSchemaDefNoJoin-tables'));
+    const schemas = await doFetchTable(makeTapSchemaRequest(serviceUrl, schemasQuery, 'loadSchemaDefNoJoin-schemas'));
+    const tables  = await doFetchTable(makeTapSchemaRequest(serviceUrl, tablesQuery, 'loadSchemaDefNoJoin-tables'));
 
     const schemaIdx = getColumnIdx(schemas, 'schema_index');
     const schemaNameIdx = getColumnIdx(schemas, 'schema_name');
@@ -539,31 +540,34 @@ const hasElements= (a) => Boolean(isArray(a) && a?.length);
 
 export const getAsEntryForTableName= (tableName) => tableName?.[0] ?? 'x';
 
-export function mergeAdditionalServices(inServices, additional) {
-    if (!hasElements(additional)) return inServices;
+export function mergeServices(startingServices, additional) {
+    if (!hasElements(additional)) return startingServices;
 
     const mergeAdditional= additional.map( (a) => {
         if (a.hide) return false;
-        const originalEntry= inServices.find( (t) => a.label===t.label);
+        const originalEntry= startingServices.find( (t) => a.label===t.label);
         return originalEntry ? {...originalEntry, ...a} : a;
     }).filter( (s) => s);
 
-    const unmodifiedOriginal= inServices
+    const unmodifiedOriginal= startingServices
         .map( (t) => {
             const match= additional.find( (a) => a.label===t.label);
             return !match && t;
         })
         .filter( (s) => s);
 
-    return [...mergeAdditional,...unmodifiedOriginal];
+    return [...mergeAdditional,...unmodifiedOriginal].filter( (s) => s.value);
 }
+
+
+
 
 // let userServices;
 
 export function getTapServices() {
     const {tap} = getAppOptions();
-    const startingTapServices= hasElements(tap?.services) ? [...tap.services] : [...TAP_SERVICES_FALLBACK];
-    const mergedServices= mergeAdditionalServices(startingTapServices,tap?.additional?.services);
+    const startingTapServices= hasElements(tap?.services) ? [...tap.services] : getTAPServicesByName();
+    const mergedServices= mergeServices(startingTapServices,tap?.additional?.services);
     mergedServices.push(...getUserServiceAry());
     return mergedServices;
 }
@@ -588,7 +592,7 @@ export function addUserService(serviceUrl) {
 
     const maxNum = usedNumAry?.length ? Math.max(...usedNumAry) : 0;
     const label= userServices.every( (s) => s.label!==baseName) ? baseName : baseName + ` - ${maxNum + 1}`;
-    userServices.push({ label, value: serviceUrl, userAdded: true});
+    userServices.push({ label, serviceId:label.replaceAll(/\s/g,''), value: serviceUrl, userAdded: true});
     dispatchAddPreference(USER_SERVICE_PREFS, userServices);
 }
 
@@ -644,72 +648,6 @@ WHERE CONTAINS(POINT('ICRS', ra, dec), BOX('ICRS', 210.80225, 54.34894, 1.0, 1.0
             `SELECT designation, ra, dec, w2mpro 
 FROM allwise_p3as_psd 
 WHERE CONTAINS (POINT('J2000' , ra , dec), POLYGON('J2000' , 209.80225 , 54.34894 , 209.80225 , 55.34894 , 210.80225 , 54.34894))=1`,
-    }
-];
-
-
-
-// --- keep for reference //todo delete after 2022.2 release
-// export const maybeQuoteByService= (serviceURL, item, isTable) =>
-//           (serviceURL && serviceURL.includes('VizieR')) ? maybeQuote(item,isTable) : item;
-
-export const TAP_SERVICES_FALLBACK = [
-    {
-        label: 'https://irsa.ipac.caltech.edu/TAP',
-        value: 'https://irsa.ipac.caltech.edu/TAP',
-        labelOnly: 'IRSA',
-        query: 'SELECT * FROM fp_psc WHERE CONTAINS(POINT(\'ICRS\',ra,dec),CIRCLE(\'ICRS\',210.80225,54.34894,1.0))=1'
-    },
-    {
-        label: 'https://ned.ipac.caltech.edu/tap',
-        value: 'https://ned.ipac.caltech.edu/tap/',
-        labelOnly: '',
-        query: 'SELECT * FROM public.ned_objdir WHERE CONTAINS(POINT(\'ICRS\',ra,dec),CIRCLE(\'ICRS\',210.80225,54.34894,0.01))=1'
-    },
-    {
-        label: 'NASA Exoplanet Archive https://exoplanetarchive.ipac.caltech.edu/TAP/',
-        value: 'https://exoplanetarchive.ipac.caltech.edu/TAP/',
-        labelOnly: 'NED',
-    },
-    {
-        label: 'https://www.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/tap',
-        value: 'https://www.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/tap',
-        labelOnly: 'CADC',
-        query: 'SELECT TOP 10000 * FROM ivoa.ObsCore WHERE CONTAINS(POINT(\'ICRS\', s_ra, s_dec),CIRCLE(\'ICRS\', 10.68479, 41.26906, 0.028))=1'
-    },
-    {
-        label: 'https://gea.esac.esa.int/tap-server/tap',
-        value: 'https://gea.esac.esa.int/tap-server/tap',
-        labelOnly: 'GAIA',
-        query: 'SELECT TOP 5000 * FROM gaiadr2.gaia_source'
-    },
-    {
-        label: 'https://vao.stsci.edu/CAOMTAP/TapService.aspx',
-        value: 'https://vao.stsci.edu/CAOMTAP/TapService.aspx',
-        labelOnly: 'MAST',
-        query: 'SELECT * FROM ivoa.obscore WHERE CONTAINS(POINT(\'ICRS\',s_ra,s_dec),CIRCLE(\'ICRS\',32.69,-51.01,1.0))=1'
-    },
-    {
-        label: 'http://atoavo.atnf.csiro.au/tap',
-        value: 'http://atoavo.atnf.csiro.au/tap',
-        labelOnly: 'CASDA',
-        query: 'SELECT * FROM ivoa.obscore WHERE CONTAINS(POINT(\'ICRS\',s_ra,s_dec),CIRCLE(\'ICRS\',32.69,-51.01,1.0))=1'
-    },
-    {
-        label: 'lsp-stable https://lsst-lsp-stable.ncsa.illinois.edu/api/tap',
-        value: 'https://lsst-lsp-stable.ncsa.illinois.edu/api/tap',
-        labelOnly: 'LSST',
-        query: 'SELECT * FROM wise_00.allwise_p3as_psd '+
-            'WHERE CONTAINS(POINT(\'ICRS\', ra, decl),'+
-            'POLYGON(\'ICRS\', 9.4999, -1.18268, 9.4361, -1.18269, 9.4361, -1.11891, 9.4999, -1.1189))=1'
-    },
-    {
-        label: 'lsp-int https://lsst-lsp-int.ncsa.illinois.edu/api/tap',
-        value: 'https://lsst-lsp-int.ncsa.illinois.edu/api/tap',
-        labelOnly: 'LSST',
-        query: 'SELECT * FROM wise_00.allwise_p3as_psd '+
-            'WHERE CONTAINS(POINT(\'ICRS\', ra, decl),'+
-            'POLYGON(\'ICRS\', 9.4999, -1.18268, 9.4361, -1.18269, 9.4361, -1.11891, 9.4999, -1.1189))=1'
     }
 ];
 
@@ -778,6 +716,13 @@ export function getAvailableColumns(columnsModel){
 export function getServiceLabel(serviceUrl) {
     const tapOps= getTapServiceOptions();
     return (serviceUrl && (tapOps.find( (e) => e.value===serviceUrl)?.labelOnly)) || '';
+}
+
+export function getServiceId(serviceUrl) {
+    const tapOps= getTapServices();
+    const id= (serviceUrl && (tapOps.find( (e) => e.value===serviceUrl)?.serviceId));
+    if (id) return id;
+    return getServiceLabel(serviceUrl).replaceAll(/\s/g,'');
 }
 
 export function getServiceHiPS(serviceUrl) {

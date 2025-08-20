@@ -5,18 +5,17 @@ import {CheckboxGroupInputField} from 'firefly/ui/CheckboxGroupInputField';
 import {ListBoxInputField} from 'firefly/ui/ListBoxInputField';
 import {
     makeFieldErrorList, getPanelPrefix, LableSaptail, makePanelStatusUpdater,
-    Width_Column, DebugObsCore, makeCollapsibleCheckHeader, getTapObsCoreOptions, SpatialWidth
+    Width_Column, DebugObsCore, makeCollapsibleCheckHeader, SpatialWidth
 } from 'firefly/ui/tap/TableSearchHelpers';
 import {tapHelpId} from 'firefly/ui/tap/TapUtil';
 import {ValidationField} from 'firefly/ui/ValidationField';
-import {bool, string, object, shape, func, elementType} from 'prop-types';
-import {ColsShape} from '../../charts/ui/ColumnOrExpression';
+import PropTypes, {bool, string, object, shape, arrayOf} from 'prop-types';
 import {FieldGroupCtx, ForceFieldGroupValid} from '../FieldGroup.jsx';
-import {FormPanel} from '../FormPanel';
 import {useFieldGroupRerender, useFieldGroupValue, useFieldGroupWatch} from '../SimpleComponent.jsx';
 import {ConstraintContext} from './Constraints.js';
 import {AutoCompleteInput} from 'firefly/ui/AutoCompleteInput';
 import {omit} from 'lodash';
+import {getDataServiceOption} from './DataServicesOptions';
 
 const panelTitle = 'Observation Type and Source';
 const panelValue = 'ObsCore';
@@ -60,14 +59,14 @@ const makeConstraints = function(hasSubType, fldObj) {
 
     // const {obsCoreCollection, obsCoreCalibrationLevel, obsCoreTypeSelection, obsCoreSubType, obsCoreInstrumentName} = fields;
     errList.checkForError(obsCoreCollection);
-    if (obsCoreCollection.value?.length > 0) {
+    if (obsCoreCollection?.value?.length > 0) {
         const mcResult = multiConstraint(obsCoreCollection.value, 'obs_collection', 'COLLECTION', '\'');
         adqlConstraintsAry.push(mcResult.adqlConstraint);
         siaConstraints.push(...mcResult.siaConstraints);
     }
 
     errList.checkForError(obsCoreCalibrationLevel);
-    if (obsCoreCalibrationLevel.value) {
+    if (obsCoreCalibrationLevel?.value) {
         const mcResult = multiConstraint(obsCoreCalibrationLevel.value, 'calib_level', 'CALIB', '');
         adqlConstraintsAry.push(mcResult.adqlConstraint);
         siaConstraints.push(...mcResult.siaConstraints);
@@ -76,7 +75,7 @@ const makeConstraints = function(hasSubType, fldObj) {
 
     if (siaFacility) {
         errList.checkForError(siaFacility);
-        if (siaFacility.value) {
+        if (siaFacility?.value) {
             const mcResult = multiConstraint(siaFacility.value, 'facility', 'FACILITY', '');
             adqlConstraintsAry.push(mcResult.adqlConstraint);
             siaConstraints.push(...mcResult.siaConstraints);
@@ -84,7 +83,7 @@ const makeConstraints = function(hasSubType, fldObj) {
     }
 
     errList.checkForError(obsCoreTypeSelection);
-    if (obsCoreTypeSelection.value) {
+    if (obsCoreTypeSelection?.value) {
         const mcResult = multiConstraint(obsCoreTypeSelection.value, 'dataproduct_type', 'DPTYPE', '\'', true);
         adqlConstraintsAry.push(mcResult.adqlConstraint);
 
@@ -95,7 +94,7 @@ const makeConstraints = function(hasSubType, fldObj) {
     }
 
     errList.checkForError(obsCoreInstrumentName);
-    if (obsCoreInstrumentName.value?.length) {
+    if (obsCoreInstrumentName?.value?.length) {
         const mcResult = multiConstraint(obsCoreInstrumentName.value, 'instrument_name', 'INSTRUMENT', '\'', true);
         adqlConstraintsAry.push(mcResult.adqlConstraint);
         siaHasErrors(obsCoreInstrumentName.value, ['null'])
@@ -105,10 +104,10 @@ const makeConstraints = function(hasSubType, fldObj) {
 
     if (hasSubType){
         errList.checkForError(obsCoreSubType);
-        if (obsCoreSubType.value?.length > 0) {
-            const mcResult = multiConstraint(obsCoreSubType.value, 'dataproduct_subtype', '', '\'');
+        if (obsCoreSubType?.value?.length > 0) {
+            const mcResult = multiConstraint(obsCoreSubType.value, 'dataproduct_subtype', 'DPSUBTYPE', '\'');
             adqlConstraintsAry.push(mcResult.adqlConstraint);
-            siaConstraintErrors.push('Not able to translate dataproduct_subtype to SIAV2 query');
+            siaConstraints.push(...mcResult.siaConstraints);
         }
     }
 
@@ -161,15 +160,18 @@ const {CollapsibleCheckHeader, collapsibleCheckHeaderKeys}= checkHeaderCtl;
 const fldListAry= ['obsCoreCalibrationLevel', 'obsCoreTypeSelection', 'obsCoreSubType', 'obsCoreInstrumentName', 'obsCoreCollection', 'siaFacility'];
 
 
-export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, initArgs={}, useSIAv2, slotProps={}}) {
+export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceId,
+                                  useCalibrationLevel=true, useProductType=true, useFacility=true,
+                                  useSubtype= true,
+                                  useInstrumentName=true, useCollection=true,
+                                  initArgs={}, useSIAv2, slotProps={}}) {
     const {urlApi={}}= initArgs;
     const {setConstraintFragment}= useContext(ConstraintContext);
-    const tapObsCoreOps= getTapObsCoreOptions(serviceLabel);
     const {makeFldObj}= useContext(FieldGroupCtx);
-    const obsCoreCollectionOptions =  tapObsCoreOps.obsCoreCollection ?? {};
-    const obsCoreCalibrationLevelOptions =  tapObsCoreOps.obsCoreCalibrationLevel ?? {};
-    const obsCoreSubTypeOptions =  tapObsCoreOps.obsCoreSubType ?? {};
-    const obsCoreInstrumentNameOptions =  tapObsCoreOps.obsCoreInstrumentName ?? {};
+    const obsCoreCollectionOptions =  getDataServiceOption('obsCoreCollection',serviceId,{});
+    const obsCoreCalibrationLevelOptions =  getDataServiceOption('obsCoreCalibrationLevel',serviceId,{});
+    const obsCoreSubTypeOptions =  getDataServiceOption('obsCoreSubType',serviceId,{});
+    const obsCoreInstrumentNameOptions =  getDataServiceOption('obsCoreInstrumentName',serviceId,{});
 
     const [constraintResult, setConstraintResult] = useState({});
     useFieldGroupRerender([...fldListAry, ...collapsibleCheckHeaderKeys]); // force rerender on any change
@@ -193,15 +195,21 @@ export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, ini
         }, []);
     };
 
-    const hasSubType = Boolean(cols && cols.findIndex((v) => v.name === 'dataproduct_subtype') !== -1);
+    let hasSubType= false;
+    if (useSubtype) {
+        hasSubType= useSIAv2
+            ? obsCoreMetadataModel?.tableData?.data?.some( (row) => row[0]==='DPSUBTYPE')
+            : Boolean(cols && cols.findIndex((v) => v.name === 'dataproduct_subtype') !== -1);
+    }
+
 
     useEffect(() => {
         updatePanelStatus(makeConstraints(hasSubType,makeFldObj(fldListAry)), constraintResult, setConstraintResult,useSIAv2);
     });
 
     useEffect(() => {
-        setConstraintFragment(panelPrefix, constraintResult);
-        return () => setConstraintFragment(panelPrefix, '');
+        setConstraintFragment?.(panelPrefix, constraintResult);
+        return () => setConstraintFragment?.(panelPrefix, '');
     }, [constraintResult]);
 
     const hasFacility= obsCoreMetadataModel?.tableData?.data?.some( (row) => row[0]==='facility');
@@ -213,14 +221,16 @@ export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, ini
             <Stack {...{width: SpatialWidth, mt: 1, ...slotProps?.innerStack }}>
                 <ForceFieldGroupValid forceValid={!checkHeaderCtl.isPanelActive()}>
                     <Stack {...{direction:'column', sx:{'& .ff-Input':{width: 300}}, spacing:1}}>
-                        <CheckboxGroupInputField fieldKey='obsCoreCalibrationLevel'
-                                                 options={calibrationOptions}
-                                                 tooltip={obsCoreCalibrationLevelOptions.tooltip || 'Select ObsCore Calibration Level (calibration_level)'}
-                                                 label='Calibration Level'
-                                                 multiple={true}
-                                                 initialState={{value: urlApi.obsCoreCalibrationLevel || ''}}
-                        />
-                        {obsCoreCalibrationLevelOptions.helptext &&
+                        {useCalibrationLevel &&
+                            <CheckboxGroupInputField fieldKey='obsCoreCalibrationLevel'
+                                                     options={calibrationOptions}
+                                                     tooltip={obsCoreCalibrationLevelOptions.tooltip || 'Select ObsCore Calibration Level (calibration_level)'}
+                                                     label='Calibration Level'
+                                                     multiple={true}
+                                                     initialState={{value: urlApi.obsCoreCalibrationLevel || ''}}
+                            />
+                        }
+                        {useCalibrationLevel && obsCoreCalibrationLevelOptions.helptext &&
                             <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
                                 <i>{obsCoreCalibrationLevelOptions.helptext}</i>
                             </div>
@@ -228,7 +238,7 @@ export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, ini
                         <Stack direction='row' flexWrap='wrap'>
                             <Box pr={2} pt={1}>
                                 {useSIAv2 ?
-                                    <ObsCoreInputField fieldKey='obsCoreTypeSelection'
+                                    useProductType && <ObsCoreInputField fieldKey='obsCoreTypeSelection'
                                                        tooltip='Select ObsCore Data Product Type'
                                                        placeholder={'Any'}
                                                        label='Data Product Type'
@@ -249,7 +259,7 @@ export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, ini
                                 }
                             </Box>
 
-                            {hasFacility &&
+                            {hasFacility && useFacility &&
                                 <Box pt={1}>
                                     <ObsCoreInputField fieldKey='siaFacility'
                                                        tooltip={'Select Facility'}
@@ -264,53 +274,57 @@ export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, ini
                             }
                         </Stack>
                             <Stack direction='row' flexWrap='wrap'>
-                                <Stack pt={1} pr={2}>
-                                    <ObsCoreInputField fieldKey='obsCoreInstrumentName'
-                                                       tooltip={obsCoreInstrumentNameOptions.tooltip || 'Select ObsCore Instrument Name'}
-                                                       label='Instrument Name'
-                                                       initialState={{ value: urlApi.obsCoreInstrumentName || '' }}
-                                                       placeholder={obsCoreInstrumentNameOptions.placeholder ?? 'Any'}
-                                                       columnName='instrument_name'
-                                                       obsCoreMetadataModel={obsCoreMetadataModel}
-                                    />
-                                    {obsCoreInstrumentNameOptions.helptext &&
-                                        <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
-                                            <i>{obsCoreInstrumentNameOptions.helptext}</i>
-                                        </div>
-                                    }
-                                </Stack>
-                                <Stack pt={1} >
-                                    <ObsCoreInputField fieldKey='obsCoreCollection'
-                                                       tooltip={obsCoreCollectionOptions.tooltip || 'Select ObsCore Collection Name'}
-                                                       placeholder={obsCoreCollectionOptions.placeholder ?? 'Any'}
-                                                       label='Collection'
-                                                       initialState={{value: urlApi.obsCoreCollection || ''}}
-                                                       columnName='obs_collection'
-                                                       obsCoreMetadataModel={obsCoreMetadataModel}
-                                    />
-                                    {obsCoreCollectionOptions.helptext &&
-                                        <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
-                                            <i>{obsCoreCollectionOptions.helptext}</i>
-                                        </div>
-                                    }
-                                </Stack>
+                                {useInstrumentName &&
+                                    <Stack pt={1} pr={2}>
+                                        <ObsCoreInputField fieldKey='obsCoreInstrumentName'
+                                                           tooltip={obsCoreInstrumentNameOptions.tooltip || 'Select ObsCore Instrument Name'}
+                                                           label='Instrument Name'
+                                                           initialState={{ value: urlApi.obsCoreInstrumentName || '' }}
+                                                           placeholder={obsCoreInstrumentNameOptions.placeholder ?? 'Any'}
+                                                           columnName='instrument_name'
+                                                           obsCoreMetadataModel={obsCoreMetadataModel}
+                                        />
+                                        {obsCoreInstrumentNameOptions.helptext &&
+                                            <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
+                                                <i>{obsCoreInstrumentNameOptions.helptext}</i>
+                                            </div>
+                                        }
+                                    </Stack>
+                                }
+                                {useCollection &&
+                                    <Stack pt={1} >
+                                        <ObsCoreInputField fieldKey='obsCoreCollection'
+                                                           tooltip={obsCoreCollectionOptions.tooltip || 'Select ObsCore Collection Name'}
+                                                           placeholder={obsCoreCollectionOptions.placeholder ?? 'Any'}
+                                                           label='Collection'
+                                                           initialState={{value: urlApi.obsCoreCollection || ''}}
+                                                           columnName='obs_collection'
+                                                           obsCoreMetadataModel={obsCoreMetadataModel}
+                                        />
+                                        {obsCoreCollectionOptions.helptext &&
+                                            <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
+                                                <i>{obsCoreCollectionOptions.helptext}</i>
+                                            </div>
+                                        }
+                                    </Stack>
+                                }
                             </Stack>
+                        {hasSubType && <Stack>
+                            <ObsCoreInputField fieldKey='obsCoreSubType'
+                                               tooltip={obsCoreSubTypeOptions.tooltip || 'Select ObsCore Dataproduct Subtype Name'}
+                                               placeholder={obsCoreSubTypeOptions.placeholder}
+                                               label='Data Product Subtype'
+                                               initialState={{ value: urlApi.obsCoreSubType || '' }}
+                                               columnName={useSIAv2 ? 'DPSUBTYPE' : 'dataproduct_subtype'}
+                                               obsCoreMetadataModel={obsCoreMetadataModel}
+                            />
+                            {obsCoreSubTypeOptions.helptext &&
+                                <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
+                                    <i>{obsCoreSubTypeOptions.helptext}</i>
+                                </div>
+                            }
+                        </Stack>}
                     </Stack>
-                    {hasSubType && <div style={{marginTop: 5}}>
-                        <ObsCoreInputField fieldKey='obsCoreSubType'
-                                           tooltip={obsCoreSubTypeOptions.tooltip || 'Select ObsCore Dataproduct Subtype Name'}
-                                           placeholder={obsCoreSubTypeOptions.placeholder}
-                                           label='Data Product Subtype:'
-                                           initialState={{ value: urlApi.obsCoreSubType || '' }}
-                                           columnName='dataproduct_subtype'
-                                           obsCoreMetadataModel={obsCoreMetadataModel}
-                        />
-                        {obsCoreSubTypeOptions.helptext &&
-                            <div style={{marginLeft: LableSaptail, marginTop: 5, padding: 2}}>
-                                <i>{obsCoreSubTypeOptions.helptext}</i>
-                            </div>
-                        }
-                    </div>}
                     <DebugObsCore {...{constraintResult, includeSia: true}}/>
                 </ForceFieldGroupValid>
             </Stack>
@@ -319,13 +333,18 @@ export function ObsCoreSearch({sx, cols, obsCoreMetadataModel, serviceLabel, ini
 }
 
 ObsCoreSearch.propTypes = {
-    cols: ColsShape,
+    cols: arrayOf(PropTypes.shape({ name: string, units: string, type: string, desc: string })),
     useSIAv2: bool,
     initArgs: object,
     fields: object,
     sx: object,
+    useCalibrationLevel: bool,
+    useProductType: bool,
+    useFacility: bool,
+    useInstrumentName: bool,
+    useCollection: bool,
     obsCoreMetadataModel: object,
-    serviceLabel: string,
+    serviceId: string,
     slotProps: shape({
         innerStack: shape({
             sx: object

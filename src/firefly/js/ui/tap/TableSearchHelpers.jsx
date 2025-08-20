@@ -1,27 +1,26 @@
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import KeyboardDoubleArrowDown from '@mui/icons-material/KeyboardDoubleArrowDown';
 
 import KeyboardDoubleArrowUp from '@mui/icons-material/KeyboardDoubleArrowUp';
-import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
-import {Box, Button, IconButton, Stack, Typography} from '@mui/joy';
+import {Box, IconButton, Stack, Typography} from '@mui/joy';
 import HelpIcon from 'firefly/ui/HelpIcon';
 import {SwitchInputFieldView} from 'firefly/ui/SwitchInputField';
-import {isEqual, isObject} from 'lodash';
+import {isEqual, isNil} from 'lodash';
 import Prism from 'prismjs';
 import PropTypes from 'prop-types';
-import React, {useEffect, useRef} from 'react';
-import {getAppOptions} from '../../api/ApiUtil.js';
+import React, {useContext, useEffect, useRef} from 'react';
 import {CheckboxGroupInputField} from '../CheckboxGroupInputField.jsx';
 import {FieldGroupAccordionPanel} from '../panel/AccordionPanel.jsx';
 import {RadioGroupInputFieldView} from '../RadioGroupInputFieldView.jsx';
 import {useFieldGroupValue} from '../SimpleComponent.jsx';
+import {getDataServiceOption} from './DataServicesOptions';
 import {showResultTitleDialog} from './ResultTitleDialog';
 import {ADQL_QUERY_KEY, makeTapSearchTitle, USER_ENTERED_TITLE} from './TapUtil';
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import {InitArgsCtx} from 'firefly/templates/common/InitArgsCtx';
 
 export const HeaderFont = {fontSize: 12, fontWeight: 'bold', alignItems: 'center'};
 
 // Style Helpers
-export const LeftInSearch = 24;
 export const LabelWidth = 110;
 export const LableSaptail = 65;
 export const SpatialWidth = 520;
@@ -31,30 +30,6 @@ export const Width_Time_Wrapper = Width_Column + 30;
 export const SpatialPanelWidth = Math.max(Width_Time_Wrapper * 2, SpatialWidth) + LabelWidth + 10;
 
 const DEF_ERR_MSG= 'Constraints Error';
-
-
-export const getTapObsCoreOptions= (serviceLabel) =>
-    getAppOptions().tapObsCore?.[serviceLabel] ?? getAppOptions().tapObsCore ?? {};
-
-/**
- * @param key
- * @param [serviceLabel]
- * @return {*}
- */
-export function getObsCoreOption(key,serviceLabel=undefined) {
-    const slOps= serviceLabel ? getAppOptions().tapObsCore?.[serviceLabel] ?? {} : {};
-    const ops= getAppOptions().tapObsCore ?? {};
-    return slOps[key] ?? ops[key];
-}
-
-
-export function getTapObsCoreOptionsGuess(serviceLabelGuess) {
-    const {tapObsCore={}}=  getAppOptions();
-    if (!serviceLabelGuess) return tapObsCore;
-    const guessKey= Object.entries(tapObsCore)
-        .find( ([key,value]) => isObject(value) && serviceLabelGuess.includes(key))?.[0];
-    return getTapObsCoreOptions(guessKey);
-}
 
 
 /**
@@ -101,18 +76,18 @@ export function makePanelStatusUpdater(panelActive,panelTitle,defErrorMessage) {
      * @param {InputConstraints} constraints
      * @param {ConstraintResult} lastConstraintResult
      * @param {Function} setConstraintResult - a function to set the constraint result setConstraintResult(ConstraintResult)
+     * @param {boolean} useSIAv2
      * @String string - panel message
      */
     return (constraints, lastConstraintResult, setConstraintResult, useSIAv2= false) => {
-        const {valid:constraintsValid,errAry, adqlConstraintsAry,
+        const {valid:constraintsValid,errAry, adqlConstraintsAry, cutoutType= undefined,
             uploadFile, TAP_UPLOAD}= constraints;
 
         const simpleError= constraintsValid ? '' : (errAry[0]|| defErrorMessage || '');
 
         const {adqlConstraint, constraintErrors, siaConstraints}=
             getPanelAdqlConstraint(panelActive,panelTitle, constraintsValid,adqlConstraintsAry,constraints.siaConstraints, errAry[0], defErrorMessage, useSIAv2);
-        const cr = { adqlConstraint, constraintErrors, siaConstraints, simpleError,
-            uploadFile, TAP_UPLOAD};
+        const cr = { adqlConstraint, constraintErrors, siaConstraints, simpleError, uploadFile, TAP_UPLOAD, cutoutType};
         if (constraintResultDiffer(cr, lastConstraintResult)) setConstraintResult(cr);
 
         return simpleError;
@@ -178,7 +153,8 @@ function InternalCollapsibleCheckHeader({sx, title, helpID, children, fieldKey, 
     );
 }
 
-
+// maps the base (or panelId) to a key that can be used in the url api for the initial active state of the panel
+export const isPanelActiveInitArg = (base) => `${base}-isPanelActiveInitArg`;
 
 export function makeCollapsibleCheckHeader(base) {
     const panelKey= base+'-panelKey';
@@ -194,6 +170,17 @@ export function makeCollapsibleCheckHeader(base) {
     retObj.CollapsibleCheckHeader= ({sx, title,helpID,message,initialStateOpen, initialStateChecked,children}) => {
         const [getPanelActive, setPanelActive] = useFieldGroupValue(panelCheckKey);// eslint-disable-line react-hooks/rules-of-hooks
         const [getPanelOpenStatus, setPanelOpenStatus] = useFieldGroupValue(panelKey);// eslint-disable-line react-hooks/rules-of-hooks
+
+        // handle the case when url api controls the active state of the panel
+        const {initArgs} = useContext(InitArgsCtx); // eslint-disable-line react-hooks/rules-of-hooks
+        const isInitPanelActive = initArgs?.urlApi?.[isPanelActiveInitArg(base)];
+        useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
+            if (!isNil(isInitPanelActive)) {
+                setPanelActive(isInitPanelActive ? panelValue : '');
+                setPanelOpenStatus(isInitPanelActive);
+            }
+        }, [isInitPanelActive]);
+
         const isActive= getPanelActive() === panelValue;
         retObj.isPanelActive= () => getPanelActive() === panelValue;
         retObj.setPanelActive= (active) => setPanelActive(active ? panelValue : '');
@@ -290,7 +277,7 @@ export function DebugObsCore({constraintResult, includeSia=true}) {
     useEffect(() => {
         divElementRef.divElement&& Prism.highlightAllUnder(divElementRef.divElement);// highlight help text/code snippets
     });
-    if (!getAppOptions().tapObsCore?.debug) return false;
+    if (!getDataServiceOption('debug')) return false;
 
     const siaFrag= (
         <>

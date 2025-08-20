@@ -1,27 +1,26 @@
-import {isEmpty} from 'lodash';
-import {getAppOptions} from '../../core/AppDataCntlr.js';
-import {getCellValue, getColumns, hasRowAccess} from '../../tables/TableUtil.js';
+import {isEmpty, isUndefined} from 'lodash';
+import { getCellValue, getMetaEntry, hasRowAccess } from '../../tables/TableUtil.js';
+import {logger} from '../../util/Logger';
 import {
-    getObsCoreAccessURL, getObsCoreProdTypeCol, getObsReleaseDate, getObsTitle, getProdTypeGuess, getSearchTarget,
-    isFormatDataLink,
-    isFormatPng,
-    isFormatVoTable, makeWorldPtUsingCenterColumns
+    getObsCoreAccessURL, getObsReleaseDate, getProdTypeGuess, getSearchTarget, isFormatDataLink,
+    isFormatPng, isFormatVoTable, makeWorldPtUsingCenterColumns, obsCoreTableHasOnlyImages
 } from '../../voAnalyzer/TableAnalysis.js';
 import {getServiceDescriptors, isDataLinkServiceDesc} from '../../voAnalyzer/VoDataLinkServDef.js';
-import {tokenSub} from '../../util/WebUtil.js';
-import {uploadAndAnalyze} from '../AnalysisUtils.js';
+import {createObsCoreImageTitle, makePngEntry, uploadAndAnalyze} from '../AnalysisUtils.js';
+import {GROUP_BY_DATALINK_RESULT, GROUP_BY_RELATED_COLUMNS, IMAGE_ONLY} from '../DataProductConst';
 import {dispatchUpdateActiveKey} from '../DataProductsCntlr.js';
-import {dpdtFromMenu, dpdtMessageWithDownload, dpdtPNG, dpdtSimpleMsg,} from '../DataProductsType.js';
+import { dpdtFromMenu, dpdtMessageWithDownload, dpdtSimpleMsg, } from '../DataProductsType.js';
 import {createGuessDataType} from './DataLinkProcessor.js';
 import {
-    createGridResult, datalinkDescribeThreeColor, getDatalinkRelatedGridProduct, getDatalinkSingleDataProduct, makeDlUrl
+    createGridResult, datalinkDescribeThreeColor, getDatalinkRelatedImageGridProduct,
+    getDatalinkSingleDataProduct, getObsCoreRelatedDataProductByFilter, makeDlUrl
 } from './DatalinkProducts.js';
 
 import {createServDescMenuRet} from './ServDescProducts.js';
 import {makeObsCoreRequest} from './VORequest.js';
 
 const GIG= 1048576 * 1024;
-const DEF_MAX_PLOTS= 8;
+export const OBSCORE_DEF_MAX_PLOTS= 8;
 
 
 /**
@@ -33,42 +32,41 @@ const DEF_MAX_PLOTS= 8;
  */
 export function makeObsCoreConverter(table,converterTemplate,options={}) {
     if (!table) return converterTemplate;
-    const canRelatedGrid= options.allowImageRelatedGrid?? false;
-    const threeColor= converterTemplate.threeColor && options?.allowImageRelatedGrid;
-    const baseRetOb= {...converterTemplate,
-        initialLayout: options.dataLinkInitialLayout ?? 'single',
-        describeThreeColor: (threeColor) ? describeObsThreeColor : undefined,
+
+    const {maxPlots, initialLayout='single', relatedGridImageOrder}= converterTemplate;
+    const onlyImagesInTable= ensureOnlyImageInTable(table,options);
+    const hasRelatedBands= converterTemplate.hasRelatedBands && confirmHasRelatedBands(table,onlyImagesInTable, options);
+    const canGrid= hasRelatedBands || (converterTemplate.canGrid && onlyImagesInTable);
+    const threeColor= isUndefined(converterTemplate.threeColor) ? hasRelatedBands : converterTemplate.threeColor;
+    return {
+        ...converterTemplate,
+        initialLayout,
+        describeThreeColor: threeColor ? describeObsThreeColor : undefined,
         threeColor,
-        canGrid: false,
-        maxPlots:canRelatedGrid?DEF_MAX_PLOTS:1,
-        hasRelatedBands:canRelatedGrid,
-        converterId: `ObsCore-${table.tbl_id}`};
+        canGrid,
+        maxPlots: canGrid ? maxPlots : 1,
+        hasRelatedBands,
+        converterId: `ObsCore-${table.tbl_id}`,
+        relatedGridImageOrder,
+    };
+}
 
+function ensureOnlyImageInTable(table, options) {
+    const {guaranteeOnlyImages=false, limitViewerDisplay}= options;
+    return guaranteeOnlyImages || obsCoreTableHasOnlyImages(table) || limitViewerDisplay!==IMAGE_ONLY;
+}
 
-    const propTypeCol= getObsCoreProdTypeCol(table);
-    if (propTypeCol?.enumVals) {
-        const pTypes= propTypeCol.enumVals.split(',');
-        if (pTypes.every( (s) => s.toLowerCase()==='image' || s.toLowerCase()==='cube')) {
-            return {...baseRetOb, canGrid:true,maxPlots:DEF_MAX_PLOTS};
-        }
-    }
-
-    if (table?.request?.filters) {
-        const fList= table.request.filters.split(';');
-        const pTFilter= fList.find( (f) => f.includes(propTypeCol.name) && f.includes('IN'));
-        if (pTFilter) {
-            const inList=  pTFilter.substring( pTFilter.indexOf('(')+1, pTFilter.indexOf(')')).split(',');
-            if (inList.every( (s) => s.toLocaleLowerCase()==='\'image\'' || s.toLocaleLowerCase()==='\'cube\'')) {
-                return {...baseRetOb, canGrid:true,maxPlots:DEF_MAX_PLOTS};
-            }
-        }
-    }
-    return baseRetOb;
+function confirmHasRelatedBands(table,onlyImagesInTable, options) {
+    const {relatedBandMethod=GROUP_BY_DATALINK_RESULT}= options;
+    const {prodType,dataSource}= getObsCoreRowMetaInfo(table,table.highlightedRow);
+    const anyError= Boolean(doErrorChecks(table,table.highlightedRow,prodType,dataSource));
+    const methodSet= relatedBandMethod===GROUP_BY_DATALINK_RESULT || relatedBandMethod===GROUP_BY_RELATED_COLUMNS;
+    return methodSet && prodType==='image' && onlyImagesInTable && !anyError;
 }
 
 function describeObsThreeColor(table, row, options) {
-    const {dataSource:dlTableUrl,prodType,isVoTable,isDataLinkRow, isPng}= getObsCoreRowMetaInfo(table,row);
-    const errMsg= doErrorChecks(table,row,prodType,dlTableUrl,isDataLinkRow,isVoTable);
+    const {dataSource:dlTableUrl,prodType,isDataLinkRow, isPng}= getObsCoreRowMetaInfo(table,row);
+    const errMsg= doErrorChecks(table,row,prodType,dlTableUrl);
     if (errMsg || prodType!=='image' || isPng || !isDataLinkRow) return;
     return datalinkDescribeThreeColor(dlTableUrl, table,row, options);
 }
@@ -83,8 +81,8 @@ function describeObsThreeColor(table, row, options) {
  */
 export function getObsCoreGridDataProduct(table, plotRows, activateParams, options) {
         const pAry= plotRows.map( (pR) => getObsCoreSingleDataProduct(
-            { table ,row:pR.row,activateParams,doFileAnalysis:false,options} ));
-    return createGridResult(pAry,activateParams,table,plotRows);
+            { table ,row:pR.row,activateParams,doFileAnalysis:false,options, useForTableGrid:true} ));
+    return createGridResult(pAry,activateParams,table,plotRows,options);
 }
 
 
@@ -100,16 +98,26 @@ export function getObsCoreGridDataProduct(table, plotRows, activateParams, optio
  */
 export async function getObsCoreRelatedDataProduct(table, row, threeColorOps, highlightPlotId, activateParams, options) {
 
-    const canGrid= options?.allowImageRelatedGrid ?? false;
+    const {hasRelatedBands:canGrid=false, relatedBandMethod=GROUP_BY_DATALINK_RESULT }= options ?? {};
     if (!canGrid) return Promise.reject('related data products not supported');
-    const {titleStr,dataSource,prodType,isVoTable,isDataLinkRow, isPng}= getObsCoreRowMetaInfo(table,row);
-    const errMsg= doErrorChecks(table,row,prodType,dataSource,isDataLinkRow,isVoTable);
+    if (relatedBandMethod!==GROUP_BY_DATALINK_RESULT && relatedBandMethod!==GROUP_BY_RELATED_COLUMNS) {
+        return dpdtSimpleMsg(`related data products not supported (related band method no supported: ${relatedBandMethod})`);
+    }
+    const {titleStr,dataSource,prodType,isDataLinkRow, isPng}= getObsCoreRowMetaInfo(table,row);
+    const errMsg= doErrorChecks(table,row,prodType,dataSource);
     if (errMsg) return errMsg;
     if (prodType!=='image') return dpdtSimpleMsg(`${prodType} is not supported for grid`);
     if (isPng) return dpdtSimpleMsg(`${prodType} must be fits for related grid support`);
     if (!isDataLinkRow) return dpdtSimpleMsg('datalink required for supported for related grid');
 
-    return getDatalinkRelatedGridProduct({dlTableUrl:dataSource, activateParams,table,row,threeColorOps, titleStr,options});
+    if (relatedBandMethod===GROUP_BY_DATALINK_RESULT) {
+        return getDatalinkRelatedImageGridProduct({dlTableUrl:dataSource, activateParams,table,row,threeColorOps, titleStr,options});
+    }
+    else {
+        const s= getMetaEntry(table,'tbl.relatedCols');
+        if (!s) dpdtSimpleMsg('meta data tbl.relatedCols is not configured');
+        return getObsCoreRelatedDataProductByFilter(table, row, threeColorOps, highlightPlotId, activateParams, options);
+    }
 }
 
 
@@ -119,7 +127,6 @@ export function getObsCoreDataProduct(table, row, activateParams, options) {
     const descriptorsInFile= getServiceDescriptors(table);
     const descriptors= descriptorsInFile && descriptorsInFile?.filter( (dDesc) => !isDataLinkServiceDesc(dDesc));
     const dlDescriptors= descriptorsInFile && descriptorsInFile?.filter( (dDesc) => isDataLinkServiceDesc(dDesc));
-
 
     if (isEmpty(descriptors)) {
         return getObsCoreSingleDataProduct({table, row, activateParams, options});
@@ -139,10 +146,8 @@ export function getObsCoreDataProduct(table, row, activateParams, options) {
     return getObsCoreSingleDataProduct({table, row, activateParams, serviceDescMenuList, dlDescriptors, options});
 }
 
-
-function doErrorChecks(table, row, prodType, dataSource, isDataLink, isVoTable) {
+function doErrorChecks(table, row, prodType, dataSource) {
     if (!dataSource) return dpdtSimpleMsg(`${prodType} is not supported`);
-    if (isDataLink && !isVoTable) return dpdtSimpleMsg(`${prodType} is not supported`);
     if (!hasRowAccess(table, row)) {
         const rDateStr= getObsReleaseDate(table,row);
         const msg= rDateStr ?
@@ -163,21 +168,23 @@ function doErrorChecks(table, row, prodType, dataSource, isDataLink, isVoTable) 
  * @param {Array.<DataProductsDisplayType>} [obj.serviceDescMenuList]
  * @param {ServiceDescriptorDef} [obj.dlDescriptors]
  * @param {boolean} [obj.doFileAnalysis] - if true the build a menu if possible
+ * @param {boolean} [obj.useForTableGrid] - this result is part of a table grid Result
  * @param {DataProductsFactoryOptions} obj.options
  * @return {Promise.<DataProductsDisplayType>}
  */
-async function getObsCoreSingleDataProduct({table, row, activateParams, serviceDescMenuList, dlDescriptors, doFileAnalysis= true, options}) {
+async function getObsCoreSingleDataProduct({table, row, activateParams, serviceDescMenuList, dlDescriptors,
+                                               doFileAnalysis= true, options, useForTableGrid=false}) {
 
-    const {size,titleStr,dataSource,prodType,isVoTable,isDataLinkRow, isPng}= getObsCoreRowMetaInfo(table,row);
-    const errMsg= doErrorChecks(table,row,prodType,dataSource,isDataLinkRow,isVoTable);
+    const {size,titleStr,dataSource,prodType,isDataLinkRow, isPng}= getObsCoreRowMetaInfo(table,row);
+    const errMsg= doErrorChecks(table,row,prodType,dataSource);
     if (errMsg) return errMsg;
 
     if (isDataLinkRow) {
         return getDatalinkSingleDataProduct({dlTableUrl:dataSource, options, sourceTable:table, row,
-            activateParams,titleStr, additionalServiceDescMenuList:serviceDescMenuList, doFileAnalysis});
+            activateParams,titleStr, additionalServiceDescMenuList:serviceDescMenuList, doFileAnalysis, useForTableGrid});
     }
     else if (isPng) {
-        return dpdtPNG('PNG image',dataSource);
+        return makePngEntry(dataSource);
     }
     else if (size>GIG) {
         return dpdtMessageWithDownload('Data is too large to load', 'Download File: '+titleStr, dataSource);
@@ -196,7 +203,7 @@ async function getObsCoreSingleDataProduct({table, row, activateParams, serviceD
         const positionWP= getSearchTarget(table.request,table) ?? makeWorldPtUsingCenterColumns(table,row);
         const request= makeObsCoreRequest(dataSource, positionWP, titleStr,table,row);
         const primDPType= doFileAnalysis ?
-            await uploadAndAnalyze({request,table,row,activateParams,serviceDescMenuList}) :
+            await uploadAndAnalyze({request,table,row,activateParams,serviceDescMenuList,originalTitle:request.getTitle()}) :
             createGuessDataType(titleStr,'guess-0',dataSource,prodType,undefined,activateParams, positionWP,table,row,size);
         return makeSingleDataProductWithMenu(activateParams.dpId, primDPType,size, serviceDescMenuList);
     }
@@ -218,7 +225,7 @@ export function makeSingleDataProductWithMenu(dpId, primDPType, size, serviceDes
 
 export function getObsCoreRowMetaInfo(table,row) {
     if (!table || row<0) return {};
-    const titleStr= createObsCoreTitle(table,row);
+    const titleStr= createObsCoreImageTitle(table,row);
     const dataSource= getObsCoreAccessURL(table,row);
     const prodType= getProdTypeGuess(table,row);
     const isVoTable= isFormatVoTable(table, row);
@@ -230,40 +237,8 @@ export function getObsCoreRowMetaInfo(table,row) {
     return {iName,obsId,size,titleStr,dataSource,prodType,isVoTable,isDataLinkRow,isPng:isFormatPng(table,row)};
 }
 
-function createObsCoreTitle(table,row) {
- // 1. try a template
-    const template= getAppOptions().tapObsCore?.productTitleTemplate;
-    if (template?.trim()==='') return ''; // setting template to empty string disables all title guessing
-    if (!template) {
-        const templateColNames= template && getColNameFromTemplate(template);
-        const columns= getColumns(table);
-        if (templateColNames?.length && columns?.length) {
-            const cNames= columns.map( ({name}) => name);
-            const colObj= templateColNames.reduce((obj, v) => {
-                if (cNames.includes(v)) {
-                    obj[v]= getCellValue(table,row,v);
-                }
-                return obj;
-            },{});
-            if (Object.keys(colObj).length===templateColNames.length) {
-                const titleStr= tokenSub(colObj,template);
-                if (titleStr) return titleStr;
-            }
-        }
-    }
- // 2. try obs_title
-    if (getObsTitle(table,row)) return getObsTitle(table,row);
-
- // 3. compute a name
-    let obsCollect= getCellValue(table,row,'obs_collection') || '';
-    const obsId= getCellValue(table,row,'obs_id') || '';
-    const iName= getCellValue(table,row,'instrument_name') || '';
-    if (obsCollect===iName) obsCollect= '';
-    return `${obsCollect?obsCollect+', ':''}${iName?iName+', ':''}${obsId}`;
+function relatedBandWarning() {
+    logger.warn('ObsCoreConverter: Warning: unable to show related bands for this table');
+    logger.warn('ObsCoreConverter: hasRelatedBands is set to true, this table must have only images or options.limitViewerDisplay must be IMAGE_ONLY');
 }
-
-function getColNameFromTemplate(template) {
-    return template.match(/\${[\w -.]+}/g)?.map( (s) => s.substring(2,s.length-1));
-}
-
 

@@ -23,14 +23,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public class ServerEventManager {
 
-    private static final boolean USE_CACHE_EVENT_WORKER = true;
-    private static final EventWorker eventWorker = USE_CACHE_EVENT_WORKER ?
-                                                    new CacheEventWorker() : new SimpleEventWorker();
-    private static final List<ServerEventQueue> evQueueList= new CopyOnWriteArrayList<ServerEventQueue>();
+    private static final boolean USE_MESSAGE_EVENT_WORKER = true;
+    private static final EventWorker eventWorker = USE_MESSAGE_EVENT_WORKER ?
+                                                    new MessageEventWorker() : new LocalEventWorker();
+    private static final List<ServerEventQueue> localEventQueues = new CopyOnWriteArrayList<>();
+    private static final ReplicatedQueueList allEventQueues = new ReplicatedQueueList();
     private static final Logger.LoggerImpl LOG = Logger.getLogger();
     private static long totalEventCnt;
     private static long deliveredEventCnt;
-    private static ReplicatedQueueList repQueueList= new ReplicatedQueueList();
 
 
     /**
@@ -46,7 +46,7 @@ public class ServerEventManager {
      * @param action
      */
     public static void fireAction(FluxAction action, ServerEvent.Scope scope) {
-        fireJsonAction(action.toString(), scope);
+        fireAction(action, makeTarget(scope));
     }
 
     /**
@@ -59,16 +59,6 @@ public class ServerEventManager {
     }
 
     /**
-     * Send this JSON string action to the client based on the given scope
-     * @param actionStr
-     * @param scope
-     */
-    public static void fireJsonAction(String actionStr, ServerEvent.Scope scope) {
-        ServerEvent sev = new ServerEvent(Name.ACTION, scope, ServerEvent.DataType.JSON, actionStr);
-        ServerEventManager.fireEvent(sev);
-    }
-
-    /**
      * Send this JSON string action to a specific client based on the given target.
      * @param actionStr
      * @param target
@@ -78,43 +68,65 @@ public class ServerEventManager {
         ServerEventManager.fireEvent(sev);
     }
 
-
+    public static ServerEvent convertTo(FluxAction action, ServerEvent.Scope scope) {
+        return new ServerEvent(Name.ACTION, makeTarget(scope), action.toString());
+    }
 
     public static void fireEvent(ServerEvent sev) {
         if (sev == null || sev.getTarget() == null || !sev.getTarget().hasDestination()) {
             LOG.warn("Something is wrong with this ServerEvent: " + String.valueOf(sev));
         } else {
-            ServerEvent.Scope scope = sev.getTarget().getScope();
-            // if target is missing key information, get it from RequestOwner
-            if (scope == ServerEvent.Scope.CHANNEL && sev.getTarget().getChannel() == null) {
-                sev.getTarget().setChannel(ServerContext.getRequestOwner().getEventChannel());
-            } else if (scope == ServerEvent.Scope.USER && sev.getTarget().getUserKey() == null) {
-                sev.getTarget().setUserKey(ServerContext.getRequestOwner().getUserKey());
-            } else if (scope == ServerEvent.Scope.SELF && sev.getTarget().getConnID() == null) {
-                sev.getTarget().setConnID(ServerContext.getRequestOwner().getEventConnID());
-            }
+            autoFillTarget(sev.getTarget());
             eventWorker.deliver(sev);
+        }
+    }
+
+    public static ServerEvent.EventTarget makeTarget(ServerEvent.Scope scope) {
+        var target = new ServerEvent.EventTarget(scope);
+        autoFillTarget(target);
+        return target;
+    }
+
+    private static void autoFillTarget(ServerEvent.EventTarget target) {
+        if (target == null) return;
+        ServerEvent.Scope scope = target.getScope();
+        // if target is missing key information, get it from RequestOwner
+        if (scope == ServerEvent.Scope.CHANNEL && target.getChannel() == null) {
+            target.setChannel(ServerContext.getRequestOwner().getEventChannel());
+        } else if (scope == ServerEvent.Scope.USER && target.getUserKey() == null) {
+            target.setUserKey(ServerContext.getRequestOwner().getUserKey());
+        } else if (scope == ServerEvent.Scope.SELF && target.getConnID() == null) {
+            target.setConnID(ServerContext.getRequestOwner().getEventConnID());
         }
     }
 
     public static void addEventQueue(ServerEventQueue queue) {
         Logger.briefInfo("Channel: create new Queue for: "+ queue.getQueueID() );
-        evQueueList.add(queue);
-        repQueueList.setQueueListForNode(evQueueList);
+        localEventQueues.add(queue);
+        allEventQueues.setQueueListForNode(localEventQueues);
     }
 
-    static List<ServerEventQueue> getEvQueueList() {
-        return evQueueList;
+    /**
+     * Get the list of ServerEventQueue that are local to this node.
+     * @return list of ServerEventQueue
+     */
+    static List<ServerEventQueue> getLocalEventQueues() {
+        return localEventQueues;
     }
 
-    static List<ServerEventQueue> getAllServerEvQueueList() {
-        return repQueueList.getCombinedNodeList();
+    /**
+     * Get the list of all ServerEventQueue across all nodes(multiple instances of Firefly).
+     * @return list of ServerEventQueue
+     */
+    static List<ServerEventQueue> getAllEventQueue() {
+        return  allEventQueues.getCombinedNodeList();
     }
 
-    static void processEvent(ServerEvent ev) {
+    // bypass distributed event messaging.  should not be call directly unless you know exactly why it's needed.
+    public static void processEvent(ServerEvent ev) {
         totalEventCnt++;
         boolean delivered = false;
-        for(ServerEventQueue queue : evQueueList) {
+        for(ServerEventQueue queue : localEventQueues) {
             try {
                 if (queue.matches(ev)) {
                     try {
@@ -137,8 +149,8 @@ public class ServerEventManager {
     }
 
     public static void removeEventQueue(ServerEventQueue queue) {
-        evQueueList.remove(queue);
-        repQueueList.setQueueListForNode(evQueueList);
+        localEventQueues.remove(queue);
+        allEventQueues.setQueueListForNode(localEventQueues);
     }
 
 //====================================================================
@@ -147,7 +159,7 @@ public class ServerEventManager {
 
     public static int getActiveQueueCnt() {
         int cnt = 0;
-        for(ServerEventQueue queue : evQueueList) {
+        for(ServerEventQueue queue : localEventQueues) {
             if (queue.getEventConnector().isOpen()) {
                 cnt++;
             }
@@ -156,7 +168,7 @@ public class ServerEventManager {
     }
 
     public static List<ServerEventQueue.QueueDescription> getQueueDescriptionList(int limit) {
-        return evQueueList.stream()
+        return localEventQueues.stream()
                 .map(ServerEventQueue::convertToDescription)
                 .sorted((d1,d2) -> (int)(d2.lastPutTime()-d1.lastPutTime()))
                 .limit(limit)
@@ -173,7 +185,7 @@ public class ServerEventManager {
     public static int getActiveQueueChannelCnt(String channel) {
         int cnt = 0;
         if (StringUtils.isEmpty(channel)) return 0;
-        for(ServerEventQueue queue : evQueueList) {
+        for(ServerEventQueue queue : localEventQueues) {
             if (channel.equals(queue.getChannel()) && queue.getEventConnector().isOpen()) {
                 cnt++;
             } else {
@@ -198,10 +210,10 @@ public class ServerEventManager {
 //====================================================================
 
     public interface EventWorker {
-        public void deliver(ServerEvent sev);
+        void deliver(ServerEvent sev);
     }
 
-    private static class SimpleEventWorker implements EventWorker {
+    private static class LocalEventWorker implements EventWorker {
         public void deliver(ServerEvent sev) {
             ServerEventManager.processEvent(sev);
         }

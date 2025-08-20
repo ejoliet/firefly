@@ -5,9 +5,9 @@
 import {chunk, cloneDeep, get, has, isArray, isEmpty, isNil, isObject, isPlainObject, isString, isUndefined, omitBy,
     padEnd, set, uniqueId, omit, uniq} from 'lodash';
 import Enum from 'enum';
+import DOMPurify from 'dompurify';
 
 import {getWsConnId} from '../core/AppDataCntlr.js';
-import {doJsonRequest} from '../core/JsonUtils';
 import {sprintf} from '../externalSource/sprintf.js';
 import {fetchUrl} from '../util/fetch';
 import {makeFileRequest, MAX_ROW} from './TableRequestUtil.js';
@@ -24,9 +24,12 @@ import {MetaConst} from '../data/MetaConst';
 import {getCmdSrvSyncURL, toBoolean, strictParseInt} from '../util/WebUtil';
 import {upload} from '../rpc/CoreServices.js';
 import {dd2sex} from '../visualize/CoordUtil.js';
+import {Logger} from '../util/Logger';
 
 export const SYS_COLUMNS = ['ROW_IDX', 'ROW_NUM'];
 export const DOC_FUNCTIONS_URL = 'https://duckdb.org/docs/sql/functions/overview.html';
+const HtmlRegex = /<\/?[a-z][\s\S]*>|&[a-zA-Z]+;/i;     // this will detect HTML Entities as well
+const logger = Logger('Tables').tag('TableUtil');
 
 // this is so test can mock the function when used within it's module
 const local = {
@@ -47,9 +50,10 @@ const BOOL  = ['boolean','bool'];
 const DATE  = ['date'];
 const NUMBER= [...INT, ...FLOAT];
 const USE_STRING = [...TEXT, ...DATE];
+const ENUM_TYPES = [...TEXT, ...INT, ...BOOL];
 
 // export const COL_TYPE = new Enum(['ALL', 'NUMBER', 'TEXT', 'INT', 'FLOAT']);
-export const COL_TYPE = new Enum({ANY:[],TEXT, INT, FLOAT, BOOL, DATE, NUMBER, USE_STRING});
+export const COL_TYPE = new Enum({ANY:[],TEXT, INT, FLOAT, BOOL, DATE, NUMBER, USE_STRING, ENUM_TYPES});
 export const TBL_STATE = new Enum(['ERROR', 'LOADING', 'NO_DATA', 'NO_MATCH', 'OK']);
 
 /**
@@ -613,7 +617,7 @@ export function getTypeLabel(col={}) {
  */
 export function getSelectedData(tbl_id, columnNames=[]) {
     const {tableModel, totalRows, selectInfo, request} = local.getTblInfoById(tbl_id);
-    const selectedRows = [...SelectInfo.newInstance(selectInfo).getSelected()];  // get selected row idx as an array
+    const selectedRows = Array.from(SelectInfo.newInstance(selectInfo).getSelected());  // get selected row idx as an array
 
     if (selectedRows.length === 0 || isTblDataAvail(0, totalRows -1, tableModel)) {
         return Promise.resolve(getSelectedDataSync(tbl_id, columnNames));
@@ -631,7 +635,7 @@ export function getSelectedData(tbl_id, columnNames=[]) {
  */
 export function getSelectedDataSync(tbl_id, columnNames=[]) {
     const {tableModel, tableMeta, selectInfo} = local.getTblInfoById(tbl_id);
-    const selectedRows = [...SelectInfo.newInstance(selectInfo).getSelected()];  // get selected row idx as an array
+    const selectedRows = Array.from(SelectInfo.newInstance(selectInfo).getSelected());  // get selected row idx as an array
 
     if (columnNames.length === 0) {
         columnNames = getAllColumns(tableModel).map( (c) => c.name);       // return all columns
@@ -1462,7 +1466,7 @@ function getTM(tableOrId) {
  * @return {String|undefined|*} value or the meta data or the defVal
  */
 export function getMetaEntry(tableOrId,metaKey,defVal= undefined) {
-    const tableMeta= get(getTM(tableOrId),'tableMeta');
+    const tableMeta= getTM(tableOrId)?.tableMeta;
     if (!tableMeta || !isString(metaKey)) return defVal;
     const keyUp = metaKey.toUpperCase();
     const [foundKey,value]= Object.entries(tableMeta).find( ([k]) => k.toUpperCase()===keyUp) || [];
@@ -1470,7 +1474,7 @@ export function getMetaEntry(tableOrId,metaKey,defVal= undefined) {
 }
 
 /**
- * case insensitive search of meta data for boolean a entry, if not found return the defVal
+ * Case insensitive search of meta data for a boolean entry, if not found return the defVal
  * @param {TableModel|String} tableOrId - parameters accepts the table model or tha table id
  * @param {String} metaKey - the metadata key
  * @param {boolean} [defVal= false] - the defVal to return if not found, defaults to false
@@ -1478,6 +1482,35 @@ export function getMetaEntry(tableOrId,metaKey,defVal= undefined) {
  */
 export function getBooleanMetaEntry(tableOrId,metaKey,defVal= false) {
     return toBoolean(getMetaEntry(tableOrId,metaKey,undefined),Boolean(defVal),['true','t','yes','y']);
+}
+
+/**
+ * Case-insensitive search of metadata for an object entry, if not found return the defVal.
+ * Metadata of the form metaKey_??? is also supported and will be combined into the object
+ * @param {TableModel|String} tableOrId - parameters accepts the table model or tha table id
+ * @param {String} metaKey - the metadata key
+ * @param {Object} [defVal= undefined] - the defVal to return if not found, defaults to undefined
+ * @return {Object} value of the metadata or the defVal
+ */
+export function getObjectMetaEntry(tableOrId,metaKey,defVal= undefined) {
+    const tableMeta= getTM(tableOrId)?.tableMeta;
+    if (!tableMeta || !isString(metaKey)) return defVal;
+    const keyUp = metaKey.toUpperCase()+'_';
+    const matchAry= Object.entries(tableMeta).filter( ([k]) => k.toUpperCase().startsWith(keyUp));
+    const matchObj= matchAry.reduce((obj,[k,v]) => {
+        const newKey= k.substring(keyUp.length);
+        set(obj,newKey.split('_'),v);
+        return obj;
+    }, {});
+    try {
+        const obj= getMetaEntry(tableOrId,metaKey);
+        if (isUndefined(obj)) return defVal;
+        const retVal= JSON.parse(obj);
+        return {...retVal, ...matchObj};
+    }
+    catch {
+        return isEmpty(matchObj) ? defVal : matchObj;
+    }
 }
 
 /**
@@ -1536,12 +1569,26 @@ export function splitVals(values='') {
 
 export function parseError(error) {
     const message = error?.message ?? error;
+    const colonRegex = /^((?:\S+\s*){1,3}?):(.+)/s; // colon appears at most 3 words after the beginning of the string
+
     if (error?.cause) {
-        const [_, type, cause] = error?.cause.match(/(.+?):(.+)/) || [];
+        const [_, type, cause] = error.cause.match(colonRegex) || [];
         return {message, type, cause};
     } else {
-        const [_, error, cause] = message?.match(/(.+?):(.+)/) || [];     // formatted error messages; 'error:cause'
-        return {message: error || message, cause};
+        // Check if message contains URLs or JSON - if so, don't split
+        const hasUrl = /https?:\/\//.test(message);
+        const hasJson = /[{[]/.test(message) && /[}\]]/.test(message);
+        if (hasUrl || hasJson) {
+            return {message: 'Table Error', cause: message};
+        }
+
+        // Safe to split on colon for simple error messages
+        const [_, errorTitle, cause] = message.match(colonRegex) || [];
+        if (errorTitle) {
+            return {message: errorTitle, cause};
+        } else {
+            return {message: 'Table Error', cause: message};
+        }
     }
 }
 
@@ -1553,6 +1600,34 @@ export function isOverflow(tbl_id) {
     const results = resources?.find((r) => r.type === 'results');
     return results?.infos?.QUERY_STATUS === 'OVERFLOW';
 }
+
+export function isHtml(text) {
+    return HtmlRegex.test(text);
+}
+
+export function isExternalSource(tableOrId) {
+    return getMetaEntry(tableOrId, 'data_origin', '') === 'external';
+}
+
+export function cleanHtml(text) {
+    const clean = DOMPurify.sanitize(text);
+    if (DOMPurify.removed) logger.debug(`cleanHtml removed: ${DOMPurify.removed}`);
+    return clean;
+}
+
+export function ensureEnumVals(tableModel) {
+    const {data=[], columns=[]} = tableModel?.tableData || {};
+    columns.forEach((col, idx) => {
+        if (!col.enumVals && isOfType(col.type, COL_TYPE.ENUM_TYPES)) {
+            const vals = data.map((rowData) => rowData[idx]);
+            const uniqVals = uniq(vals.filter((d) => d));
+            if (uniqVals.length && uniqVals.length <= 32) {         // 32 is the default(MAX_COL_ENUM_COUNT) for server-backed tables
+                col.enumVals = uniqVals.join(',');
+            }
+        }
+    });
+}
+
 
 /*-------------------------------------private------------------------------------------------*/
 

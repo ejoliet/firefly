@@ -3,7 +3,10 @@
  */
 package edu.caltech.ipac.firefly.server.query;
 
+import edu.caltech.ipac.firefly.core.Util;
+import edu.caltech.ipac.firefly.core.background.JobManager;
 import edu.caltech.ipac.firefly.server.ServCommand;
+import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.db.DuckDbReadable;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.table.TableUtil;
@@ -26,6 +29,7 @@ import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.util.CollectionUtil;
 import edu.caltech.ipac.table.DataGroup;
 import edu.caltech.ipac.table.DataType;
+import edu.caltech.ipac.util.FormatUtil;
 import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.firefly.core.background.Job;
 import edu.caltech.ipac.firefly.core.background.JobInfo;
@@ -44,15 +48,17 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
+import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_INDEX;
 import static edu.caltech.ipac.firefly.data.table.MetaConst.HIGHLIGHTED_ROW;
 import static edu.caltech.ipac.firefly.data.table.MetaConst.HIGHLIGHTED_ROW_BY_ROWIDX;
+import static edu.caltech.ipac.firefly.server.ServerContext.convertToFile;
 import static edu.caltech.ipac.firefly.server.db.DbAdapter.*;
 import static edu.caltech.ipac.firefly.server.db.EmbeddedDbUtil.*;
-import static edu.caltech.ipac.table.DataGroup.ROW_IDX;
-import static edu.caltech.ipac.table.DataGroup.ROW_NUM;
+import static edu.caltech.ipac.table.DataGroup.*;
 import static edu.caltech.ipac.util.StringUtils.*;
+import static edu.caltech.ipac.firefly.core.Util.Try;
 
 /**
  * NOTE: We're using spring jdbc v2.x.  API changes dramatically in later versions.
@@ -84,7 +90,7 @@ import static edu.caltech.ipac.util.StringUtils.*;
 abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPart>, SearchProcessor.CanGetDataFile,
                                                      SearchProcessor.CanFetchDataGroup, Job.Worker {
     private static final Logger.LoggerImpl logger = Logger.getLogger();
-    private static final SynchronizedAccess GET_DATA_CHECKER = new SynchronizedAccess();
+    private static final Util.SynchronizedAccess GET_DATA_CHECKER = new Util.SynchronizedAccess();
     private Job job;
 
     public void setJob(Job job) {
@@ -96,6 +102,11 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
     }
 
     public String getLabel() { return getJob().getParams().getTableServerRequest().getTblTitle(); }
+
+    public String getSvcId() {
+        String svcId = getJob().getParams().getTableServerRequest().getSvcId();
+        return isEmpty(svcId) ? Job.Worker.super.getSvcId() : svcId;
+    }
 
     /**
      * Fetches the data for the given search request.  This method should perform a fetch for fresh
@@ -115,7 +126,7 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
     public DbAdapter getDbAdapter(TableServerRequest treq) {
         String reqId = treq.getRequestId();
         String hash = DigestUtils.md5Hex(getUniqueID(treq));
-        DbFileCreator dbFileCreator = (ext) -> new File(QueryUtil.getTempDir(treq), "%s_%s.%s".formatted(reqId, hash, ext));
+        DbFileCreator dbFileCreator = (ext) -> new File(QueryUtil.getSessDir(treq), "%s_%s.%s".formatted(reqId, hash, ext));
         return DbAdapter.getAdapter(treq, dbFileCreator);
     }
 
@@ -124,48 +135,52 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
 
         // make sure multiple requests for the same data waits for the first one to create before accessing.
         String uniqueID = this.getUniqueID(request);
-        var release = GET_DATA_CHECKER.lock(uniqueID);
+        var locked = GET_DATA_CHECKER.lock(uniqueID);
         try {
             var dbAdapter = getDbAdapter(treq);
-            jobExecIf(v -> v.progress(10, "fetching data..."));
-            if (!dbAdapter.hasTable(dbAdapter.getDataTable())) {
-                StopWatch.getInstance().start("createDbFile: " + treq.getRequestId());
-                createDbFromRequest(treq, dbAdapter);
-                StopWatch.getInstance().stop("createDbFile: " + treq.getRequestId()).printLog("createDbFile: " + treq.getRequestId());
-            }
+            sendJobUpdate(ji -> ji.getMeta().setProgress(10, "fetching data..."));
 
-            StopWatch.getInstance().start("getDataset: " + request.getRequestId());
             DataGroupPart results;
             try {
+                if (!dbAdapter.hasTable(dbAdapter.getDataTable())) {
+                    StopWatch.getInstance().start("createDbFile: " + treq.getRequestId());
+                    createDbFromRequest(treq, dbAdapter);
+                    StopWatch.getInstance().stop("createDbFile: " + treq.getRequestId()).printLog("createDbFile: " + treq.getRequestId());
+                }
+
+                StopWatch.getInstance().start("getDataset: " + request.getRequestId());
                 results = getResultSet(treq, dbAdapter);
-                jobExecIf(v -> v.progress(90, "generating results..."));
+                int totalRows = results.getRowCount();
+                sendJobUpdate(v -> {
+                    v.getMeta().setProgress(90, "generating results...");
+                    sendJobUpdate(ji -> ji.getMeta().setSummary(String.format("%,d rows found", totalRows)));
+                });
             } catch (Exception e) {
                 // table data exists; but, bad grammar when querying for the resultset.
                 // should return table meta info + error message
                 // limit 0 does not work with oracle-like syntax
-                DataGroup dg = dbAdapter.getHeaders(dbAdapter.getDataTable());
-                results = EmbeddedDbUtil.toDataGroupPart(dg, treq);
-                String error = dbAdapter.handleSqlExp("", e).getCause().getMessage(); // get the message describing the cause of the exception.
-                results.setErrorMsg(error);
-                jobExecIf(v -> v.setError(500, error));
+                if (dbAdapter.hasTable(dbAdapter.getDataTable())) {
+                    DataGroup dg = dbAdapter.getHeaders(dbAdapter.getDataTable());
+                    results = EmbeddedDbUtil.toDataGroupPart(dg, treq);
+                    String error = dbAdapter.handleSqlExp("", e).getCause().getMessage(); // get the message describing the cause of the exception.
+                    results.setErrorMsg(error);
+                    sendJobUpdate(ji -> ji.setError( new JobInfo.Error(500, error)));      // because an error table is returned
+                } else {
+                    throw e;
+                }
             }
             StopWatch.getInstance().stop("getDataset: " + request.getRequestId()).printLog("getDataset: " + request.getRequestId());
 
             // ensure all meta are collected and set accordingly
             TableUtil.consumeColumnMeta(results.getData(), treq);
-
-            int totalRows = results.getRowCount();
-
             results.getData().getTableMeta().setAttribute(DataGroupPart.LOADING_STATUS, DataGroupPart.State.COMPLETED.name());
 
-            jobExecIf(v -> v.getJobInfo().setSummary(String.format("%,d rows found", totalRows)));
-
             return results;
-        }catch (Exception e) {
+        } catch (Exception e) {
             logger.error(e);
             throw e;
         } finally {
-            release.run();
+            locked.unlock();
         }
     }
 
@@ -178,15 +193,11 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
                 if (doLogging()) {
                     SearchProcessor.logStats(treq.getRequestId(), totalRows, 0, false, getDescResolver().getDesc(treq));
                 }
-
                 // check for values that can be enumerated
-                if (totalRows < 5000) {
-                    enumeratedValuesCheck(dbAdapter, new DataGroupPart(headers, 0, totalRows), treq);
-                } else {
-                    enumeratedValuesCheckBG(dbAdapter, new DataGroupPart(headers, 0, totalRows), treq);        // when it's more than 5000 rows, send it by background so it doesn't slow down response time.
-                }
+                enumeratedValuesCheck(dbAdapter, new DataGroupPart(headers, 0, totalRows), treq);
             }
         } catch (Exception e) {
+            logger.error(e);
             dbAdapter.close(true);
             throw dbAdapter.handleSqlExp("", e);
         }
@@ -211,7 +222,7 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
             StopWatch.getInstance().start("ingestDataIntoDb: " + req.getRequestId());
 
             // dataSupplier is passed in.  the adapter decides if fetch is needed.
-            FileInfo finfo = dbAdapter.ingestData(makeDgSupplier(req, () -> fetchDataGroup(req)), dbAdapter.getDataTable());
+            FileInfo finfo = dbAdapter.ingestData(makeDgSupplier(req, () -> getOrFetchDataGroup(req)), dbAdapter.getDataTable());
 
             StopWatch.getInstance().stop("ingestDataIntoDb: " + req.getRequestId()).printLog("ingestDataIntoDb: " + req.getRequestId());
             return finfo;
@@ -221,6 +232,34 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
         }
     }
 
+    /**
+     * This allows the processor to fetch data from a previously submitted job.
+     * @param req  the request to fetch data from
+     * @return the DataGroup containing the data
+     */
+    protected DataGroup getOrFetchDataGroup(TableServerRequest req) throws DataAccessException {
+        DataGroup retval = null;
+        if (!isEmpty(req.getJobId())) {
+            // a previously submitted job; try to get from cache
+            List<JobInfo.Result> results = ifNotNull(JobManager.getJobInfo(req.getJobId()))
+                                           .get(JobInfo::getResults);
+            if (results != null && !results.isEmpty()) {
+                String href = results.getFirst().href();
+                if (!isEmpty(href)) {
+                    File file = convertToFile(href);
+                    if (file.exists()) {        // if the result is a file cached on the server, use it.
+                        int tblIdx = req.getIntParam(TBL_INDEX, 0);
+                        retval = Try.it(() -> TableUtil.readAnyFormat(file, tblIdx, req)).get();  // ignore exception
+                    }
+                }
+            }
+        }
+        if (retval == null) {       // if not found in cache, fetch from source
+            retval = fetchDataGroup(req);
+        }
+        return retval;
+    }
+
     protected DataGroupSupplier makeDgSupplier(TableServerRequest req, DataGroupSupplier getter) throws DataAccessException {
         return () -> {
             StopWatch.getInstance().start("fetchDataGroup: " + req.getRequestId());
@@ -228,22 +267,16 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
             StopWatch.getInstance().stop("fetchDataGroup: " + req.getRequestId()).printLog("fetchDataGroup: " + req.getRequestId());
             if (dg == null) throw new DataAccessException("Failed to retrieve data");
 
-            jobExecIf(v -> v.progress(70, dg.size() + " rows of data found"));
+            sendJobUpdate(v -> v.getMeta().setProgress(70, dg.size() + " rows of data found"));
 
-            dg.addMetaFrom(collectMeta(req));
-            prepareTableMeta(dg.getTableMeta(), Arrays.asList(dg.getDataDefinitions()), req);
-            TableUtil.consumeColumnMeta(dg, null);      // META-INFO in the request should only be pass-along and not persist.
-
+            applyExtraMeta(dg, req);
             return dg;
         };
     }
 
-    /**
-     * @param request   the table request
-     * @return  Additional meta info to add to the DataGroup before it's being ingested into the database
-     */
-    protected DataGroup collectMeta(TableServerRequest request) {
-        return null;
+    protected void applyExtraMeta(DataGroup dg, TableServerRequest req) {
+        prepareTableMeta(dg.getTableMeta(), Arrays.asList(dg.getDataDefinitions()), req);
+        TableUtil.consumeColumnMeta(dg, null);      // META-INFO in the request should only be pass-along and not persist.
     }
 
     public File getDataFile(TableServerRequest request) throws IpacTableException, IOException, DataAccessException {
@@ -255,7 +288,7 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
         return ipacTable;
     }
 
-    public FileInfo writeData(OutputStream out, ServerRequest request, TableUtil.Format format, TableUtil.Mode mode) throws DataAccessException {
+    public FileInfo writeData(OutputStream out, ServerRequest request, FormatUtil.Format format, TableUtil.Mode mode) throws DataAccessException {
         try {
             TableServerRequest treq = (TableServerRequest) request;
             var dbAdapter =  getDbAdapter(treq);
@@ -265,7 +298,7 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
                 DataGroup table = dbAdapter.getHeaders(dbAdapter.getDataTable());  // just the headers.
                 String[] cols = Arrays.stream(table.getDataDefinitions())
                                 .filter(c -> c.getDerivedFrom() == null                                     // remove derived columns
-                                             && !CollectionUtil.exists(c.getKeyName(), ROW_IDX, ROW_NUM))   // remove system added columns
+                                             && !CollectionUtil.exists(c.getKeyName(), ROW_IDX, ROW_NUM, HEALPIX_IDX))   // remove system added columns
                                 .map(dt -> "\"" + dt.getKeyName() + "\"")
                                 .toArray(String[]::new);
                 treq.setInclColumns(cols);
@@ -503,6 +536,15 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
         return selectInfo;
     }
 
+    protected void setJobResults(File... files) {
+        if (files == null || files.length == 0) return;
+        updateJob(ji -> {
+            Arrays.stream(files)
+                    .filter(f -> f != null && f.isFile() && f.canRead())
+                    .forEach(file -> ji.addResult(new JobInfo.Result("result", ServerContext.replaceWithPrefix(file), null, String.valueOf(file.length()))));
+        });
+    }
+
     private static String retrieveMsgFromError(Exception e, TableServerRequest treq, DbAdapter dbAdapter) {
 
         if (e.getCause() instanceof SQLException) {
@@ -553,17 +595,5 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
         // I will use the format 'error:cause' as a way to transport these messages.
     }
 
-    /**
-     * execute the given task if job is still in executing phase.  if job is aborted, throw exception to stop the process.
-     * @param f
-     */
-    protected void jobExecIf(Consumer<Job> f) throws DataAccessException {
-        Job job = getJob();
-        if (job != null) {
-            JobInfo.Phase phase = job.getJobInfo().getPhase();
-            if (phase == JobInfo.Phase.EXECUTING) f.accept(job);
-            if (phase == JobInfo.Phase.ABORTED) throw new DataAccessException.Aborted();
-        }
-    }
 }
 

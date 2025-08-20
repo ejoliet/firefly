@@ -70,7 +70,7 @@ public class DownloadRequest extends ServerRequest implements Serializable {
 
     public boolean isSelectAll () { return _selectInfo.isSelectAll(); }
 
-    public String getBaseFileName() { return getParam(BASE_FILE_NAME); }
+    public String getBaseFileName() { return getParam(TITLE); } //use Title as the file name also
 
     public String getDataSource() { return getParam(DATA_SOURCE); }
 

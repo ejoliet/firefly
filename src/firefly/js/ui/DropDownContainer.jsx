@@ -7,9 +7,10 @@ import PropTypes from 'prop-types';
 import {Alert, Stack} from '@mui/joy';
 
 import {getDropDownInfo} from '../core/LayoutCntlr.js';
+import {GatorProtocolRootPanel} from '../visualize/ui/GatorProtocolRootPanel';
 import {SearchPanel} from './SearchPanel';
 import {HiPSSearchPanel} from '../visualize/ui/HiPSSearchPanel.jsx';
-import {IrsaCatalogSearch} from '../visualize/ui/IrsaCatalogSearch.jsx';
+import {IrsaCatalogSearchDefault} from '../visualize/ui/IrsaCatalogSearch.jsx';
 import {ClassicNedSearchPanel, ClassicVOCatalogPanel} from '../visualize/ui/ExtraIpacSearches.jsx';
 import {ImageSearchDropDown} from '../visualize/ui/ImageSearchPanelV2.jsx';
 import {SIAv2SearchPanel} from './tap/SIASearchRootPanel';
@@ -23,6 +24,7 @@ import {MultiSearchPanel} from 'firefly/ui/MultiSearchPanel.jsx';
 import {TapSearchPanel} from 'firefly/ui/tap/TapSearchRootPanel.jsx';
 import {DLGeneratedDropDown} from './dynamic/DLGeneratedDropDown.js';
 import {useStoreConnector} from 'firefly/ui/SimpleComponent.jsx';
+import {JobMonitor} from '../core/background/JobMonitor';
 
 
 export const flexGrowWithMax = {width: '100%', maxWidth: 1400};
@@ -44,9 +46,11 @@ export const dropDownMap = {
     SIAv2Search: {view: <SIAv2SearchPanel/>, layout: {width: '100%'}},
     MultiTableSearchCmd: {view: <MultiSearchPanel/>,  layout: {width: '100%'}},
     FileUploadDropDownCmd: {view: <FileUploadDropdown />, layout: {width: '100%'}},
+    BackgroundMonitorCmd: {view: <JobMonitor />, layout: {width: '100%'}},
     WorkspaceDropDownCmd: {view: <WorkspaceDropdown />},
     DLGeneratedDropDownCmd: {view: <DLGeneratedDropDown name='DLGeneratedDropDownCmd' loadRegistry={false}/>, layout: {width: '100%'}},
-    IrsaCatalog: {view: <IrsaCatalogSearch/>, layout: {width: '100%'}},
+    IrsaCatalog: {view: <IrsaCatalogSearchDefault/>, layout: {width: '100%'}},
+    GatorProtocolRootPanel: {view:<GatorProtocolRootPanel name='GatorProtocol' title={'LSDB'}/>, layout: {width: '100%'}},
     ClassicVOCatalogPanelCmd : {view: <ClassicVOCatalogPanel/>, layout: {width: '100%'}},
     ClassicNedSearchCmd : {view: <ClassicNedSearchPanel/>, layout: {width: '100%'}},
     // --- testing

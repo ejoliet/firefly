@@ -5,11 +5,10 @@ package edu.caltech.ipac.firefly.server.query;
 
 import edu.caltech.ipac.firefly.ConfigTest;
 import edu.caltech.ipac.firefly.core.background.JobInfo;
-import edu.caltech.ipac.firefly.core.background.JobManager;
+import edu.caltech.ipac.firefly.core.background.JobUtil;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.messaging.JsonHelper;
 import edu.caltech.ipac.table.DataGroup;
-import org.json.simple.JSONObject;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -70,7 +69,7 @@ public class AsyncTapQueryTest extends ConfigTest {
 		try {
 			String query = "SELECT * FROM fp_psc WHERE CONTAINS(POINT('J2000',ra,dec),CIRCLE('J2000',210.80225,54.34894,1.0))=1";
 			TableServerRequest req = new TableServerRequest(AsyncTapQuery.ID);
-			req.setParam(AsyncTapQuery.SVC_URL, "https://irsadev.ipac.caltech.edu/TAP");
+			req.setParam(AsyncTapQuery.SVC_URL, "https://irsa.ipac.caltech.edu/TAP");
 			req.setParam(AsyncTapQuery.QUERY, query);
 
 			String jobUrl = new AsyncTapQuery().submitJob(req);
@@ -78,7 +77,7 @@ public class AsyncTapQueryTest extends ConfigTest {
 			Assert.assertNotNull(jobUrl);
 
 			JobInfo jobInfo = AsyncTapQuery.getUwsJobInfo(jobUrl);
-			JsonHelper json = JsonHelper.parse(JobManager.toJsonObject(jobInfo).toJSONString());
+			JsonHelper json = JsonHelper.parse(JobUtil.toJsonObject(jobInfo).toJSONString());
 
 			Assert.assertNotNull("has jobInfo", jobInfo);
 			Assert.assertNotNull("has jobId", json.getValue(null, "jobId"));

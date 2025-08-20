@@ -18,7 +18,7 @@ import { trackBackgroundJob, isSuccess, isDone, getErrMsg} from '../core/backgro
 import {REINIT_APP, getAppOptions} from '../core/AppDataCntlr.js';
 import {dispatchComponentStateChange} from '../core/ComponentCntlr.js';
 import {dispatchJobAdd} from '../core/background/BackgroundCntlr.js';
-import {fixPageSize} from './TableUtil.js';
+import {ensureEnumVals, fixPageSize} from './TableUtil.js';
 import {SelectInfo} from 'firefly/tables/SelectInfo';
 
 
@@ -243,9 +243,10 @@ export function dispatchTableHighlight(tbl_id, highlightedRow, request) {
  * update the selectInfo of the given table by tbl_id.
  * @param tbl_id
  * @param selectInfo
+ * @param {{row:number,hpxSelectList}} context - can object that may include additional relevant data related to the update, row is a single row change
  */
-export function dispatchTableSelect(tbl_id, selectInfo) {
-    flux.process( {type: TABLE_SELECT, payload: {tbl_id, selectInfo} });
+export function dispatchTableSelect(tbl_id, selectInfo, context={}) {
+    flux.process( {type: TABLE_SELECT, payload: {tbl_id, selectInfo, context} });
 }
 
 /**
@@ -326,7 +327,6 @@ export function dispatchActiveTableChanged(tbl_id, tbl_group='main') {
 
 function tableSearch(action) {
     return (dispatch) => {
-        //dispatch(validate(FETCH_TABLE, action));
         if (!action.err) {
             dispatch(action);
             var {request={}, options={}} = action.payload;
@@ -382,6 +382,7 @@ function fixClientTable(tableModel) {
     }
 
     set(tableModel, 'request.pageSize', fixPageSize(tableModel.request?.pageSize));
+    ensureEnumVals(tableModel);         // apply enum values to the client tableModel using server-side logic
 
     return tableModel;
 }
@@ -510,8 +511,9 @@ function tableSort(action) {
             const [nreq, tableStub, tableModel] = setupTableOps(tbl_id, request);
             if (!tableStub) return;
 
-            // rollback changes to keep current highlighted row.  instead set highlighted to 0.
+            // rollback changes from IRSA-2421(keep current highlighted row on sort).
             // TblUtil.setHlRowByRowIdx(nreq, tableModel);
+            // set highlighted to 0 on sort. (FIREFLY-360 based on CCB FIREFLY-267)
             nreq.startIdx = 0;
 
             dispatch({type:TABLE_FETCH, payload: tableStub});
@@ -663,29 +665,32 @@ function syncFetch(request, hlRowIdx, dispatch, tbl_id) {
 
 function asyncFetch(request, hlRowIdx, dispatch, tbl_id) {
     unset(request, 'META_INFO.backgroundable');
+
     const onComplete = (jobInfo) => {
         if (isSuccess(jobInfo)) {
-            syncFetch(getRequestFromJob(jobInfo.jobId), hlRowIdx, dispatch, tbl_id);
+            syncFetch(getRequestFromJob(jobInfo?.meta?.jobId), hlRowIdx, dispatch, tbl_id);
         } else {
             dispatch({type: TABLE_UPDATE, payload: TblUtil.createErrorTbl(tbl_id, getErrMsg(jobInfo))});
         }
     };
 
-    const sentToBg = (jobInfo) => {
+    const hide = (jobInfo) => {
         dispatchTblResultsRemove(tbl_id);
-        dispatchJobAdd(jobInfo);
+        dispatchComponentStateChange(bgKey, {inProgress:false});
     };
 
     const bgKey = TblUtil.makeBgKey(tbl_id);
-    dispatchComponentStateChange(bgKey, {inProgress:true});
+    dispatchComponentStateChange(bgKey, {inProgress:true, hide:false});
     asyncFetchTable(request)
         .then ( (jobInfo) => {
-            const jobId = jobInfo?.jobId;
+            const jobId = jobInfo?.meta?.jobId;
+            dispatchJobAdd(jobInfo);
+
             const inProgress = !isDone(jobInfo);
             dispatchComponentStateChange(bgKey, {inProgress, jobId});
             if (inProgress) {
                 // not done; track progress
-                trackBackgroundJob({jobId, key: bgKey, onComplete, sentToBg});
+                trackBackgroundJob({jobId, key: bgKey, onComplete, hide});
             } else {
                 onComplete(jobInfo);
             }

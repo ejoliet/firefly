@@ -32,7 +32,7 @@ import java.util.zip.GZIPInputStream;
  *  @author G. Turek
  *  @version $Id: FileUtil.java,v 1.61 2012/12/10 19:01:01 roby Exp $
  */
-public class FileUtil 
+public class FileUtil
 {
     public final static String jpeg = "jpeg";
     public final static String jpg  = "jpg";
@@ -51,6 +51,7 @@ public class FileUtil
     public final static String PS   = "ps";
     public final static String PDF  = "pdf";
     public final static String HTML = "html";
+    public final static String XML = "xml";
     public final static String AOR  = "aor";
     public final static String TXT  = "txt";
     public final static String TGT  = "tgt";
@@ -58,11 +59,15 @@ public class FileUtil
     public final static String TBL  = "tbl";
     public final static String NL   = "nl";
     public final static String JAR   = "jar";
+    public final static String TAR   = "tar";
     public final static String CSH   = "csh";
     public final static String SH   = "sh";
     public final static String PL   = "pl";
     public final static String SO   = "so";
     public final static String REG  = "reg";
+    public final static String CSV  = "csv";
+    public final static String TSV  = "tsv";
+    public final static String VOT  = "vot";
 
     public static final long MEG          = 1048576;
     public static final long GIG          = 1048576 * 1024;
@@ -83,14 +88,14 @@ public class FileUtil
      * Get the extension of a filename.
      * @param  s a file name such as <code>a.dat</code>
      * @return String the extension of the file.
-     *                A null is returned if there is no extension; 
-     *                
+     *                A null is returned if there is no extension;
+     *
      */
-  public static String getExtension(String s) 
+  public static String getExtension(String s)
   {
     String ext = "";
     int i = s.lastIndexOf('.');
-    if (i > 0 &&  i < s.length() - 1) 
+    if (i > 0 &&  i < s.length() - 1)
     {
       ext = s.substring(i+1).toLowerCase();
     }
@@ -102,9 +107,9 @@ public class FileUtil
      * @param  f a file such as <code>a.dat</code>
      * @return String the extension of the file.
      *                A null is returned if there is no extension
-     *                
+     *
      */
-  public static String getExtension(File f) 
+  public static String getExtension(File f)
   {
     return getExtension(f.getName());
   }
@@ -127,7 +132,7 @@ public class FileUtil
      * @return String the base name of the file. i.e. if "abc.dat" is
      *                passed to this method it will return "abc"
      *                A null is returned if there is no base;
-     *                
+     *
      */
   public static String getBase(String s) {
     String base;
@@ -142,12 +147,12 @@ public class FileUtil
   }
 
     /**
-     * Get the name of of a filename without the extension. 
+     * Get the name of of a filename without the extension.
      * @param  f a file name such as <code>a.dat</code>
      * @return String the base name of the file. i.e. if "abc.dat" is
      *                passed to this method it will return "abc"
      *                A null is returned if there is no base;
-     *                
+     *
      */
   public static String getBase(File f) {
     return getBase(f.getName());
@@ -163,7 +168,7 @@ public class FileUtil
                        just add the extension to the filename.
      * @return String The file with the specified extension.
      */
-    public static String setExtension (String  extensionName, 
+    public static String setExtension (String  extensionName,
                                        String  fileName,
                                        boolean replace){
         int dotPosition = fileName.lastIndexOf(".");
@@ -202,7 +207,7 @@ public class FileUtil
      * @param  fileName the extension to be replaced or added.
      * @return String The file with the specified extension.
      */
-    public static String setExtension (String  extensionName, 
+    public static String setExtension (String  extensionName,
                                        String  fileName){
        return setExtension (extensionName,fileName,true);
     }
@@ -234,7 +239,7 @@ public class FileUtil
     }
 
 
-    public static File createUniqueFileFromFile(File    f, 
+    public static File createUniqueFileFromFile(File    f,
                                                 boolean alreadyModified) {
        File    dir    = f.getParentFile();
        String  base   = getBase(f);
@@ -456,24 +461,35 @@ public class FileUtil
     }
 
 
+    public static boolean isGZipFile(InputStream is) {
+        if (!is.markSupported()) {
+            //to ensure mark and reset works
+            is = new BufferedInputStream(is);
+        }
+        try {
+            is.mark(2);
+            int b0 = is.read();
+            int b1 = is.read();
+            is.reset();
+
+            if (b0 == -1 || b1 == -1) {
+                return false; // too short
+            }
+            int value = (b1 << 8) | b0;
+            return (value == GZIPInputStream.GZIP_MAGIC); //0x8b1f
+        } catch (IOException e) {
+            return false;
+        }
+    }
 
     public static boolean isGZipFile(File f) {
-        boolean retval;
-        DataInputStream in=null;
-        try {
-            in=new DataInputStream( new FileInputStream(f));
-            int b0 = in.read();
-            int b1 = in.read();
-            if (b0 == -1 || b1==-1) throw new EOFException();
-            int value=  (b1 << 8) | b0;
-            retval= (value == GZIPInputStream.GZIP_MAGIC);
+        try (InputStream in = new BufferedInputStream(new FileInputStream(f))) {
+            return isGZipFile(in);
         } catch (IOException e) {
-            retval= false;
-        } finally {
-            FileUtil.silentClose(in);
+            return false;
         }
-        return retval;
     }
+
 
     /**
      * Write a file to an output stream
@@ -844,6 +860,20 @@ public class FileUtil
             }
         }
         return retHost;
+    }
+
+    public static String appendSuffixBeforeExtension(String fName, String suffix) {
+        if (fName == null || suffix == null) return fName;
+
+        int lastDotIndex = fName.lastIndexOf('.');
+        if (lastDotIndex == -1) {
+            return fName + suffix; //no extension found, just append suffix
+        }
+
+        String name = FileUtil.getBase(fName);
+        String extension = FileUtil.getExtension(fName);
+
+        return name + "-" + suffix + "." + extension;
     }
 
     //============================================================================

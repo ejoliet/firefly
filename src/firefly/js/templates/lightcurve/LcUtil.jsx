@@ -46,7 +46,7 @@ ReadOnlyText.propTypes = {
  * @param   {object} layoutInfo - the layout of the UI
  * @returns {{converterData: *, missionEntries: (*|{})}}
  */
-export function makeMissionEntries(tableMeta, layoutInfo={}) {
+export function makeMissionEntries(tableMeta, layoutInfo={}, uploadFileName) {
     var converterData = getConverter(get(tableMeta, LC.META_MISSION)) || getConverter();
     var missionEntries = layoutInfo.missionEntries || {};
     Object.assign(missionEntries, {
@@ -57,7 +57,10 @@ export function makeMissionEntries(tableMeta, layoutInfo={}) {
         [LC.META_TIME_NAMES]: get(tableMeta, LC.META_TIME_NAMES, converterData.timeNames),
         [LC.META_FLUX_NAMES]: get(tableMeta, LC.META_FLUX_NAMES, converterData.yNames),
         [LC.META_ERR_NAMES]: get(tableMeta, LC.META_ERR_NAMES, converterData.yErrNames),
-        [LC.META_FLUX_BAND]: get(tableMeta, LC.META_FLUX_BAND, converterData.bandName)
+        [LC.META_FLUX_BAND]: get(tableMeta, LC.META_FLUX_BAND, converterData.bandName),
+        [LC.UPLOAD_FILENAME]: uploadFileName,
+        [LC.SLIDER_RANGE_MIN]: converterData.sliderRangeMin,
+        [LC.SLIDER_RANGE_MAX]: converterData.sliderRangeMax
     });
     return {converterData, missionEntries};
 }
@@ -121,8 +124,11 @@ export function getInitialDefaultValues(labelWidth, missionName) {
             'Cutout Size (arcmin)', 100)),
         [LC.META_URL_CNAME]: Object.assign(getTypeData(LC.META_URL_CNAME, '',
             'Image url column name',
-            'Source Column', labelWidth))
-
+            'Source Column', labelWidth)),
+        [LC.UPLOAD_FILENAME]: Object.assign(getTypeData(LC.UPLOAD_FILENAME, '')),
+        [LC.SLIDER_RANGE_MIN]: Object.assign(getTypeData(LC.SLIDER_RANGE_MIN, '')),
+        [LC.SLIDER_RANGE_MAX]: Object.assign(getTypeData(LC.SLIDER_RANGE_MAX, ''))
+        
     };
 
     switch (missionName){
@@ -150,7 +156,7 @@ export function getInitialDefaultValues(labelWidth, missionName) {
                 [LC.META_FLUX_BAND]: Object.assign(getTypeData(LC.META_FLUX_BAND, '',        '' +
                     'Select WISE band for images to be displayed',        'Image display:', 70)),
                 [LC.META_ERR_CNAME]: Object.assign(getTypeData(LC.META_ERR_CNAME, '',
-                    'value error column name',       'Error Column:', labelWidth))
+                    'value error column name',       'Error Column:', labelWidth)),
             };
             return Object.assign ({},commonDefault, wiseDefault );
         case 'ptf':
@@ -206,14 +212,14 @@ export function getMissionEntries(generalEntries, missionEntries,tblColumns){
  */
 export function getMissionInfo(missionEntries, tblModel){
     const converterId = get(missionEntries, LC.META_MISSION);
-    const missionName = getMissionName(converterId) || 'Mission';
+    const missionName = getMissionName(converterId) || 'Unspecified';
 
     const layoutInfo = getLayouInfo();
     const period =  get(layoutInfo, ['periodRange','period'], '');
-    const title = get(tblModel, 'request.uploadFileName','');
+    //const title = get(tblModel, 'request.uploadFileName','');   // this would return empty string for unspecified mission case
+    const title =  get(layoutInfo, 'missionEntries.uploadFileName');
     //if the name is too long, truncates it and displays it as a tip
     const uploadedFileName =( title && title.length>20)?title.substring(0, 20)+'...':title;
-
     return {missionName, period, title, uploadedFileName};
 }
 

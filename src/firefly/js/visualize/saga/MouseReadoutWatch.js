@@ -11,17 +11,18 @@ import {
     TYPE_EMPTY
 } from '../MouseReadoutCntlr.js';
 import {callGetFileFlux} from '../../rpc/PlotServicesJson.js';
-import {Band} from '../Band.js';
+import {allBandAry, Band} from '../Band.js';
 import {MouseState} from '../VisMouseSync.js';
 import CsysConverter, {CysConverter} from '../CsysConverter.js';
 import {getPixScale, getScreenPixScale, getScreenPixScaleArcSec, isImage, isHiPS, getFluxUnits} from '../WebPlot.js';
 import {getPlotTilePixelAngSize} from '../HiPSUtil.js';
 import {mouseUpdatePromise, fireMouseReadoutChange} from '../VisMouseSync';
 import {
-    primePlot, getPlotStateAry, getPlotViewById, getImageCubeIdx, getPtWavelength,
+    primePlot, getPlotStateAry, getPlotViewById, getImageCubeIdx,
     getWavelengthParseFailReason, getWaveLengthUnits, hasPixelLevelWLInfo, hasPlaneOnlyWLInfo,
-    isImageCube, wavelengthInfoParsedSuccessfully, } from '../PlotViewUtil';
-import {getBixPix} from '../FitsHeaderUtil.js';
+    isImageCube, wavelengthInfoParsedSuccessfully, getPtSpectralCoords, getBandWidthUnits, isThreeColor,
+} from '../PlotViewUtil';
+import {getFluxRadix} from 'firefly/visualize/ui/MouseReadoutUIUtil';
 
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -105,7 +106,7 @@ function* processAsyncDataImmediate(plotView, worldPt, screenPt, imagePt, threeC
             return mouseCtx;
         }
     }
-    catch(error) {
+    catch {
         const mouseCtx = yield call(mouseUpdatePromise);
         return mouseCtx;
     }
@@ -133,7 +134,7 @@ function* processAsyncDataDelayed(plotView, worldPt, screenPt, imagePt, threeCol
             return mouseCtx;
         }
     }
-    catch(error) {
+    catch {
         console.log('flux error= just ignore');
         const mouseCtx = yield call(mouseUpdatePromise);
         return mouseCtx;
@@ -251,7 +252,7 @@ function makeImagePlotAsyncReadout(plotView, worldPt, screenPt, imagePt, threeCo
     const plot= primePlot(plotView);
     const readoutItems= makeImmediateReadout(plot, worldPt, screenPt, imagePt, threeColor, healpixPixel, norder);
     const {readoutPref}= readoutRoot();
-    const radix= Number(getBixPix(plot)>0 ? readoutPref.intFluxValueRadix : readoutPref.floatFluxValueRadix);
+    const radix= getFluxRadix(readoutPref, plot);
     return doFluxCall(plotView,imagePt).then( (fluxResult) => {
         return makeReadoutWithFlux(readoutItems,primePlot(plotView), fluxResult, radix, threeColor);
     });
@@ -314,7 +315,7 @@ function doFluxCall(plotView,iPt) {
 function getFlux(result, plot) {
     const fluxArray = [];
     if (result.NO_BAND) {
-        fluxArray[0]= {...result.NO_BAND, unit: getFluxUnits(plot,Band.NO_BAND)};
+        fluxArray[0]= {...result.NO_BAND, unit: getFluxUnits(plot)};
     }
     else {
         const bands = plot.plotState.getBands();
@@ -388,23 +389,42 @@ function showSingleBandFluxLabel(plot, band) {
 
 }
 
+/**
+ * do wavelength readout if it has pixel level wl or if it is a not a cube image with plane wl info
+ * @param plot
+ * @param imagePt
+ * @return {Object}
+ */
 function makeWLResult(plot,imagePt= undefined) {
-               // do wavelength readout if it has pixel level wl or if it is a not a cube image with plane wl info
     if ((hasPixelLevelWLInfo(plot) || (hasPlaneOnlyWLInfo(plot) && !isImageCube(plot)))) {
         if (wavelengthInfoParsedSuccessfully(plot)) {
-            if (!imagePt) return;
+            if (!imagePt) return {};
             const cubeIdx= (isImageCube(plot) && getImageCubeIdx(plot)) || 0;
-            const wlValue= getPtWavelength(plot, imagePt, cubeIdx);
-            return makeValueReadoutItem('Wavelength', wlValue, getWaveLengthUnits(plot), 4);
+            const specCoords= getPtSpectralCoords(plot, imagePt, cubeIdx);
+            const result= {
+                wl: makeValueReadoutItem('Wavelength', specCoords[0] ?? 0, getWaveLengthUnits(plot), 4),
+                bandWidth: makeValueReadoutItem('Wavelength', specCoords[1] ?? 0, getBandWidthUnits(plot), 4),
+            };
+            if (isThreeColor(plot)) {
+                allBandAry.forEach( (b) => {
+                    if (plot.plotState.isBandUsed(b)) {
+                        const bStr= b.toString();
+                        const [wl,bw]= getPtSpectralCoords(plot, imagePt, cubeIdx, b);
+                        result[`wl${bStr}`]= makeValueReadoutItem(`Wavelength ${bStr}`, wl, getWaveLengthUnits(plot,b), 4);
+                        result[`bandWidth${bStr}`]= makeValueReadoutItem(`Wavelength ${bStr}`, bw, getBandWidthUnits(plot,b), 4);
+                    }
+                });
+            }
+            return result;
         }
         else {
             const item=  makeValueReadoutItem('Wavelength', 'Failed', '', 4);
             item.failReason= getWavelengthParseFailReason(plot);
-            return item;
+            return {wl:item, bandWidth:item};
         }
     }
     else {
-        return undefined;
+        return {};
     }
 }
 
@@ -433,12 +453,12 @@ function makeReadout(plot, worldPt, screenPt, imagePt) {
             title: makeDescriptionItem(plot.title),
             pixel: makeValueReadoutItem('Pixel Size', pixScale.value, pixScale.unit, 3),
             screenPixel:makeValueReadoutItem('Screen Pixel Size', screenPixScale.value, screenPixScale.unit, 3),
-            wl: makeWLResult(plot,imagePt)
+            ...makeWLResult(plot,imagePt)
         };
     }
     else {
         return {
-            wl: makeWLResult(plot)
+            ...makeWLResult(plot)
         };
     }
 

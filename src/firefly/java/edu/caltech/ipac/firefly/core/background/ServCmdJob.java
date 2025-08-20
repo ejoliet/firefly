@@ -9,6 +9,10 @@ import edu.caltech.ipac.firefly.server.ServCommand;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.SrvParam;
 
+import java.util.Map;
+
+import static edu.caltech.ipac.firefly.core.background.JobManager.*;
+
 /**
  * A base class which extends ServCommand function into a Job/Worker async processing
  *
@@ -46,7 +50,11 @@ public abstract class ServCmdJob extends ServCommand implements Job {
 
     public void setJobId(String jobId) {
         this.jobId = jobId;
-        getJobInfo().setParams(params.flatten());
+        updateJobInfo(jobId, ji -> {
+            Map<String, String> p = params.flatten();
+            ji.getMeta().setParams(p);
+            ji.setParams(p);    // for non-uws searches.
+        });
     }
 
     public Worker getWorker() {
@@ -61,9 +69,11 @@ public abstract class ServCmdJob extends ServCommand implements Job {
         if (jobId != null) {
             this.worker = worker;
             worker.setJob(this);
-            JobInfo info = getJobInfo();
-            info.setType(worker.getType());
-            info.setLabel(worker.getLabel());
+            sendUpdate(getJobId(), ji -> {      // needs to update clients, because these values may change after the job has submitted
+                ji.getMeta().setType(worker.getType());
+                ji.getAux().setTitle(worker.getLabel());
+                ji.getMeta().setSvcId(worker.getSvcId());
+            });
         }
     }
 
@@ -71,7 +81,7 @@ public abstract class ServCmdJob extends ServCommand implements Job {
         try {
             this.reqOwner = (RequestOwner) reqOwner.clone();
         } catch (CloneNotSupportedException e) {
-            // ignore.. should not happen
+            // ignore. should not happen
         }
     }
 }

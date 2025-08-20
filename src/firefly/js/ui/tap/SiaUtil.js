@@ -4,7 +4,7 @@ import {makeFileRequest, setNoCache} from '../../tables/TableRequestUtil';
 import {doFetchTable} from '../../tables/TableUtil';
 import {Logger, logger} from '../../util/Logger';
 import {getServiceSelfDescription} from '../../voAnalyzer/VoCoreUtils';
-import {mergeAdditionalServices} from './TapUtil';
+import {mergeServices} from './TapUtil';
 
 
 /** * @type SiaBrowserState */
@@ -34,7 +34,6 @@ function getMetaFromTable(table) {
     return inputParams;
 }
 
-
 export async function loadSiaV2Meta(serviceUrl) {
     if (serviceMetaCache[serviceUrl]) return serviceMetaCache[serviceUrl];
     serviceMetaCache[serviceUrl]= await doLoadSiaV2Meta(serviceUrl);
@@ -58,7 +57,14 @@ async function doLoadSiaV2Meta(serviceUrl) {
 }
 export function getSiaServiceLabel(serviceUrl) {
     const siaOps= getSiaServiceOptions();
-    return (serviceUrl && (siaOps.find( (e) => e.value===serviceUrl)?.label)) || '';
+    return (serviceUrl && (siaOps.find( (e) => e.value===serviceUrl)?.labelOnly)) || '';
+}
+
+export function getSiaServiceId(serviceUrl) {
+    const siaOps= getSiaServices();
+    const id= (serviceUrl && (siaOps.find( (e) => e.value===serviceUrl)?.serviceId));
+    if (id) return id;
+    return getSiaServiceLabel(serviceUrl).replaceAll(/\s/g,'');
 }
 
 export const getServiceNamesAsKey= () => getSiaServiceOptions().map(({label}) => label).join('-');
@@ -81,7 +87,7 @@ export function getServiceHiPS(serviceUrl) {
 export function getSiaServices() {
     const {SIAv2} = getAppOptions();
     const startingSiaServices= hasElements(SIAv2?.services) ? [...SIAv2.services] : [...SIA_SERVICES_FALLBACK];
-    const mergedServices= mergeAdditionalServices(startingSiaServices,SIAv2?.additional?.services);
+    const mergedServices= mergeServices(startingSiaServices,SIAv2?.additional?.services);
     mergedServices.push(...getUserServiceAry());
     return mergedServices;
 }
@@ -120,13 +126,13 @@ export function deleteUserService(serviceUrl) {
 
 
 
-export function getSIAv2Services(nameList) {
+export function getSIAv2ServicesByName(nameList) {
     const services= makeServices();
     if (!nameList) return services;
 
     return nameList.map( (name) => {
             const foundService= services.find( (s) => s.label===name);
-            if (!foundService) Logger('TapKnownServices').warn(`TAP Service: '${name}' was not found`);
+            if (!foundService) Logger('sigKnownServices').warn(`SIA Service: '${name}' was not found`);
             return foundService;
         })
         .filter( (v) => v);
@@ -134,8 +140,8 @@ export function getSIAv2Services(nameList) {
 
 function makeServices() {
     return [
-        siaEntry('IRSA', 'https://irsa.ipac.caltech.edu/SIA'),
-        siaEntry('CADC', 'https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/sia/v2query', cadcMetaOptionsFallback),
+        siaEntry('IRSA', 'IRSA', 'https://irsa.ipac.caltech.edu/SIA'),
+        siaEntry('CADC', 'CADC', 'https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/sia/v2query', cadcMetaOptionsFallback),
     ];
 }
 
@@ -194,6 +200,81 @@ export const ALL_FALLBACK_META_OPTIONS= [
 
 
 
-const siaEntry= (label,url, metaOptions) =>
-    ({ label, value: url, metaOptions});
+const siaEntry= (serviceId, label,url, metaOptions) =>
+    ({ serviceId, label, value: url, metaOptions});
 
+const metaNameMap = {
+    BAND: 'band',
+    CALIB: 'calib',
+    COLLECTION: 'obs_collection',
+    DPTYPE: 'dataproduct_type',
+    EXPTIME: 'exptime',
+    FACILITY: 'facility',
+    FORMAT: 'format',
+    FOV: 'fov',
+    ID: 'ID',
+    INSTRUMENT: 'instrument_name',
+    POL: 'POL',
+    POS: 'POS',
+    SPATRES: 'spatres',
+    SPECRP: 'specrp',
+    TARGET: 'target',
+    TIME: 'time',
+    TIMERE: 'timere'
+};
+const toColName = (name) => metaNameMap[name] ?? name;
+
+export function makeObsCoreMetadataModel(siaMeta, fallbackMetaOptions = []) {
+
+    const rows = siaMeta?.params
+        ?.map(({name, options}) => {
+            if (!options) return [];
+            return options.split(',').filter(Boolean).map((v) => [toColName(name), v]);
+        })
+        .flat() ?? [];
+
+    fallbackMetaOptions.forEach((entry) => {
+        const name = toColName(entry.name);
+        if (rows.some((row) => row[0] === name)) return;
+        const values = entry.options.split(',').map((s) => s.trim());
+        values.forEach((v) => rows.push([name, v]));
+    });
+
+    ALL_FALLBACK_META_OPTIONS.forEach((entry) => {
+        const name = toColName(entry.name);
+        if (rows.some((row) => row[0] === name)) return;
+        const values = entry.options.split(',').map((s) => s.trim());
+        values.forEach((v) => rows.push([name, v]));
+    });
+
+    ALL_FALLBACK_META_OPTIONS.forEach((entry) => {
+        const name = toColName(entry.name);
+        if (!entry.optionNames && !entry.values) return;
+        const optionValueAry = entry.options.split(',').map((s) => s.trim());
+        const optionNameAry = entry.optionNames.split(',').map((s) => s.trim());
+        if (optionNameAry.length !== optionValueAry.length) return;
+
+        const optionRowsWithoutNames = rows.filter((r) => r[0] === name && r[1] && !r[2]);
+
+        optionRowsWithoutNames.forEach((r) => {
+            const idx = optionValueAry.findIndex((v) => v === r[1]);
+            if (idx === -1) return;
+            r[2] = optionNameAry[idx];
+        });
+    });
+
+    return {
+        tableMeta: siaMeta.params.reduce((obj, {name, desc}) => ({...obj, [name]: desc}), {}),
+        tableData: {
+            columns: [
+                {name: 'column_name', type: 'char'},
+                {name: 'column_options', type: 'char'},
+                {name: 'column_labels', type: 'char'}
+            ],
+            data: rows,
+        },
+        title: 'loadObsCoreMetadata',
+        type: 'table',
+        totalRows: rows.length
+    };
+}

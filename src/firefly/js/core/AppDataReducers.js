@@ -2,7 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {MENU_UPDATE, SHOW_DROPDOWN} from './LayoutCntlr.js';
+import {SHOW_DROPDOWN} from './LayoutCntlr.js';
 import * as AppDataCntlr from './AppDataCntlr.js';
 import {mergeObjectOnly, updateSet} from '../util/WebUtil.js';
 import BrowserCache from '../util/BrowserCache.js';
@@ -57,7 +57,7 @@ export function menuReducer(state={}, action={}) {
             const {visible, view=''} = action.payload;
             const selected = visible ? view : '';
             return updateSet(state, ['menu', 'selected'], selected);
-        case MENU_UPDATE:
+        case AppDataCntlr.MENU_UPDATE:
             const {menu} = action.payload;
             return updateSet(state, ['menu'], menu);
         default:
@@ -144,6 +144,7 @@ function getInitState() {
      * @summary Information about the core of the application
      *
      * @prop {boolean} isReady : false,
+     * @prop {Object} connectionStatus :  {lost, reason}, Status of the client connection to the server. e.g. WebSocket, Redis.
      * @prop {Object.<String,Array>} connections  channel:[] ... keyed by channel, contains an array of connId(s).
      * @prop {WorldPt} activeTarget
      * @prop {string} rootUrlPath

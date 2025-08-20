@@ -35,6 +35,21 @@ export const MetaConst = {
     FITS_EXTRACTION_TYPE: 'FitsExtractionType',
 
     /**
+     * Search Target - the search target associated with this table, used with extracting datalink
+     */
+    SEARCH_TARGET: 'SearchTarget',
+
+    /**
+     * S_REGION the would defined the whole table, used with extracting datalink
+     */
+    S_REGION: 'S_REGION',
+
+    /**
+     * the center point for a row from the source table, used with extracting datalink
+     */
+    ROW_TARGET: 'ROW_TARGET',
+
+    /**
      * An world point in a fits FILE that is associated with this table
      */
     FITS_WORLD_PT: 'FitsWorldPoint',
@@ -170,9 +185,9 @@ export const MetaConst = {
     SIMULATED_TABLE: 'SIMULATED_TABLE',
 
     /**
-     * if true, Show the coverage display even it this table does not have coverage information
-     * if false, treat this table as it has no coverage
-     * value must be true or false, it not defined or has some other value then evaluate the table for coverage as normal.
+     * If true, Show the coverage display even it this table does not have coverage information.
+     * If false, treat this table as it has no coverage.
+     * Value must be true or false, if not defined or has some other value then evaluate the table for coverage as normal.
      */
     COVERAGE_SHOWING : 'CoverageShowing',
 
@@ -181,6 +196,21 @@ export const MetaConst = {
 
     /** the column name with public release date info;  null is considered not public */
     RELEASE_DATE_COL : 'RELEASE_DATE_COL',
+
+    /**
+     * any ID can be added to a table search to identify the source for the purpose of getting source specific obscore preferences
+     */
+    DATA_SERVICE_ID: 'DATA_SERVICE_ID',
+
+    /**
+     * object that can override config
+     */
+    DATA_SERVICE_OPTIONS: 'dataServiceOptions',
+
+    /**
+     * If we are doing cutout, this is the default type, either: ROW_POSITION or SEARCH_POSITION
+     */
+    OBSCORE_CUTOUT_TYPE: 'OBSCORE_CUTOUT_TYPE',
 
     /**
      * if defined this table container a moving object, setting this will override any catalog evaluation
@@ -220,14 +250,18 @@ export const MetaConst = {
     LOAD_TO_DATALINK_UI : 'LoadToServiceDescriptorUI',
 
     /**
-     * determine how a datalink obscore table trys to show the data layout, must be 'single', 'gridRelated', 'gridFull';
-     */
-    DATALINK_INITIAL_LAYOUT : 'DatalinkInitialLayout',
-
-    /**
      * If defined and true, dispatchTableSearch will be called but prevent going to results view directly
      */
     UPLOAD_TABLE: 'UploadTable',
+
+    /** boolean - if true then use with FITS_FILE_PATH to determine if a PlotView exist that is exclusive*/
+    EXCLUSIVE_TO_PLOT: 'ExclusiveToPlot',
+
+    /**
+     * if defined and an object, Then this will be table specific DataProductsFactory options
+     * @see DataProductsFactoryOptions
+     */
+    DATA_PRODUCTS_FACTORY_OPTIONS: 'DataProductFactoryOptions',
 
     /** @deprecated use CENTER_COLUMN */
     CATALOG_COORD_COLS : 'CatalogCoordColumns',

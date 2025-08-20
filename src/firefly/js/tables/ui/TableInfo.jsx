@@ -13,6 +13,7 @@ import {JobInfo} from '../../core/background/JobInfo.jsx';
 import {getJobIdFromTblId} from '../TableRequestUtil.js';
 import {CopyToClipboard} from '../../visualize/ui/MouseReadout.jsx';
 import {HelpIcon} from '../../ui/HelpIcon.jsx';
+import {Slot} from '../../ui/SimpleComponent';
 
 
 export function TableInfo({tbl_id, tabsProps, ...props}) {
@@ -157,22 +158,23 @@ const ShowObjectTreeBtn = ({data, title}) => {
     );
 };
 
-export function KeywordBlock({sx={}, label, value, title, asLink}) {
+export function KeywordBlock({label, value, title, asLink, href, ...props}) {
     return (
-        <Stack direction='row' whiteSpace='nowrap' alignItems='baseline' sx={sx}>
-            <Keyword {...{label, value, title, asLink}}/>
-        </Stack>
+        <Slot component={Stack} direction='row' whiteSpace='nowrap' alignItems='baseline' slotProps={props}>
+            <Keyword {...{label, value, title, href, asLink}}/>
+        </Slot>
     );
 }
 
-export function Keyword({label, value, title, asLink}) {
-    label = label && label + ':';
-    if (label || value) {
-        value = String(value);
+export function Keyword({label=null, value, title, asLink, href}) {
+    if ((label !== null) || value) {
+        label = label ? label + ':' : '\u00A0';
+        value = value ? String(value) : '\u00A0';
+        href ??= value;
         return (
             <>
                 {label && <Typography level='title-sm' title={title} mr={1/2}>{label}</Typography>}
-                { asLink ? <LinkTag title={value} href={value} /> :
+                { asLink ? <LinkTag title={value} href={href} /> :
                     <ContentEllipsis text={value} sx={{p: '1px', margin: 'unset'}}><Typography level='body-sm' title={value} noWrap mr={1/2}>{value}</Typography></ContentEllipsis>
                 }
             </>
@@ -189,7 +191,7 @@ export function LinkTag({href, title}) {
             <Stack overflow='hidden' direction='row' spacing={.75} alignItems='baseline'>
                 <CopyToClipboard value={href} size={16} buttonStyle={{backgroundColor: 'unset'}} style={{alignSelf: 'end'}}/>
                 <Link level='body-sm' href={href} title={title} target='Links'
-                      sx={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                      sx={{overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap'}}>
                     {title}
                 </Link>
             </Stack>

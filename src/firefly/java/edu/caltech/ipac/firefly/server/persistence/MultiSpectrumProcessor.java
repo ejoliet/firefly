@@ -10,6 +10,7 @@ package edu.caltech.ipac.firefly.server.persistence;
 
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
+import edu.caltech.ipac.firefly.server.RequestOwner;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.db.DbAdapter;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
@@ -24,6 +25,7 @@ import edu.caltech.ipac.table.DataType;
 import edu.caltech.ipac.table.GroupInfo;
 import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.table.ParamInfo;
+import edu.caltech.ipac.table.ResourceInfo;
 import edu.caltech.ipac.table.TableMeta;
 import edu.caltech.ipac.table.TableUtil;
 
@@ -33,6 +35,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotEmpty;
+import static edu.caltech.ipac.firefly.data.sofia.VOSpectraModel.SPECTRADM_UTYPE;
 import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
@@ -48,8 +52,11 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
     public static final String MODE = "mode";
     public static final String SEL_ROW_IDX = "sel_row_idx";
     public static final String SPECTR_IDX = "spectr_idx";
+    public static final String MULTI_SPECTRUM_UTYPE = "ipac:MultiSpectrum";  // utype for the MultiSpectrum table
+    public static final String MULTI_SPECTRUM_SERVICE_UTYPE = MULTI_SPECTRUM_UTYPE + "-service";
+    public static final String SPECTRUM_DATA_UTYPE = SPECTRADM_UTYPE + ".Data";   // utype for the spectrum data table
 
-    private enum Mode { fetch,          // retrieve the MultiSpectrum table, return data product table
+    public enum Mode { fetch,          // retrieve the MultiSpectrum table, return data product table
                         links,          // return links table to the spectrums
                         extract         // extract the spectrum from array data, then return a SpectralDM table.
     };
@@ -58,8 +65,13 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
     public DataGroup fetchDataGroup(TableServerRequest treq) throws DataAccessException {
         try {
             String source = treq.getParam(SOURCE);
+            ifNotEmpty(treq.getParam(RequestOwner.USER_KEY)).apply((uk) -> ServerContext.getRequestOwner().setUserKey(uk));
+            updateJob(ji -> ji.getAux().setJobUrl(source));
+
             File inFile = QueryUtil.resolveFileFromSource(source, treq);
             DataGroup table = TableUtil.readAnyFormat(inFile);
+
+            setJobResults(inFile);
 
             return table;
         } catch (Exception e) {
@@ -90,21 +102,24 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
 //====================================================================
 
 
-    record MultiSpecInfo(DataGroup table, List<DataType> metaCols, List<GroupInfo> spectrums){}
+    record MultiSpecInfo(DataGroup table, List<DataType> metaCols, List<GroupInfo> spectrums, List<ResourceInfo> services){}
 
 
     private static MultiSpecInfo findSpectrums(TableServerRequest treq, DbAdapter dbAdapter) throws DataAccessException {
         DataGroup table = dbAdapter.getHeaders(dbAdapter.getDataTable());
 
-        if (!table.getAttribute(TableMeta.UTYPE, "").equalsIgnoreCase("ipac:MultiSpectrum")) return null;
+        if (!table.getAttribute(TableMeta.UTYPE, "").equalsIgnoreCase(MULTI_SPECTRUM_UTYPE)) return null;
 
         List<GroupInfo> spectrums = table.getGroupInfos().stream()
                                     .filter(g -> String.valueOf(g.getUtype()).toLowerCase().matches("(?i)ipac:(Spectrum\\.)?ArrayData"))
                                     .collect(Collectors.toList());
         List<DataType> metaCols = Arrays.stream(table.getDataDefinitions())
                                     .filter(dt -> !dt.isArrayType()).collect(Collectors.toList());
+        List<ResourceInfo> services = table.getResourceInfos().stream()
+                                    .filter(ri -> MULTI_SPECTRUM_SERVICE_UTYPE.equalsIgnoreCase(String.valueOf(ri.getUtype())))
+                                    .collect(Collectors.toList());
 
-        return new MultiSpecInfo(table, metaCols, spectrums);
+        return new MultiSpecInfo(table, metaCols, spectrums, services);
     }
 
     private DataGroupPart createSpectrumTable(TableServerRequest treq, DbAdapter dbAdapter, MultiSpecInfo specs) throws DataAccessException {
@@ -126,19 +141,23 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
                         .map(this::quote)
                         .collect(Collectors.joining(","));
         String sql = String.format("SELECT %s FROM %s WHERE ROW_IDX = %d", cnames, dbAdapter.getDataTable(), selRow);
+        DataGroup arrayData = dbAdapter.execQuery(sql, dbAdapter.getDataTable());
 
-        DataGroup table = dbAdapter.execQuery(sql, dbAdapter.getDataTable());
-
-        table = transformArrayToRows(table, getAllParamRef(selSpec));
-        if (table == null) {
-            return null;
-        }
+        DataGroup table = transformArrayToRows(arrayData, getAllParamRef(selSpec));
 
         // add SpectralDM meta
-        table.addAttribute(TableMeta.UTYPE, "spec:Spectrum");
-        selSpec.setUtype("spec:Spectrum.Data");
-        table.setGroupInfos(Arrays.asList(selSpec));
+        table.getTableMeta().setAttribute(TableMeta.UTYPE, SPECTRADM_UTYPE);
+        selSpec.setUtype(SPECTRUM_DATA_UTYPE);
+        table.setGroupInfos(List.of(selSpec));
 
+        // copy service descriptors if any
+        if (!specs.services.isEmpty()) {
+            specs.services.stream()
+                    .filter(ri -> ri.getUtype().equalsIgnoreCase(MULTI_SPECTRUM_SERVICE_UTYPE))
+                    .map(ResourceInfo::copyOf)
+                    .peek(ri -> ri.setUtype("adhoc:service"))
+                    .forEach(ri -> table.getResourceInfos().add(ri));
+        }
         // therefore, convert all paramRefs to columnRefs
         table.getGroupInfos().forEach(gInfo -> {
             gInfo.getParamRefs().forEach(pRef -> {
@@ -146,8 +165,6 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
             });
             gInfo.setParamRefs(null);
         });
-
-
 
         return new DataGroupPart(table, 0, table.size());
     }
@@ -200,15 +217,20 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
                 .filter(gi -> !"ipac:Spectrum.ArrayData".equalsIgnoreCase(String.valueOf(gi.getUtype())))
                 .collect(Collectors.toList()));     // remove all Spectrum.ArrayData groups;
         table.setResourceInfos(table.getResourceInfos().stream()
-                .filter(ri -> !"ipac:MultiSpectrum".equalsIgnoreCase(String.valueOf(ri.getUtype())))
+                .filter(ri -> !MULTI_SPECTRUM_UTYPE.equalsIgnoreCase(String.valueOf(ri.getUtype())))
                 .collect(Collectors.toList()));     // remove all ipac:MultiSpectrum resources;
 
         for (int i = 0; i < table.size(); i++) {
             table.setData("dataproduct_type", i, "spectrum");
             table.setData("access_format", i, "application/x-votable+xml;content=datalink");
-            table.setData("access_url", i, createLinksUrl(treq, (int) table.getData(DataGroup.ROW_IDX, i)));
+            table.setData("access_url", i, createLinksUrl(treq, getRowIdx(table, i)));
         }
         return dgp;
+    }
+
+    private int getRowIdx(DataGroup table, int rowNum) {
+        if (table.getDataDefintion(DataGroup.ROW_IDX) == null)  return rowNum;
+        return (int) table.getData(DataGroup.ROW_IDX, rowNum);
     }
 
     private String quote(String s) {
@@ -281,16 +303,16 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
             Logger.getLogger().warn("MultiSpectrumProcessor:transformArrayToRows is expecting only 1 row but received: " + table.size());
         }
         Object[] cary = table.get(0).getData();
-        if (!cary[0].getClass().isArray()) {
-            Logger.getLogger().error("MultiSpectrumProcessor:transformArrayToRows: table cell is not an array");
-            return null;
-        }
         int nrows = Array.getLength(cary[cary.length-1]);       // assuming the added data has the right values.  need to find a better way to handle this.
         for (int i = 0; i < nrows; i++) {
             Object[] rowData = new Object[cols.size()];
             int csize = (cols.size() - params.size());
             for (int c = 0; c < csize; c++) {
-                rowData[c] = getAryVal(cary, c, i);;
+                if (cary[c].getClass().isArray()) {
+                    rowData[c] = getAryVal(cary, c, i);;
+                } else {
+                    rowData[c] = cary[c]; // not an array, use same value for all rows.
+                }
             }
             for (int c = 0; c < params.size(); c++) {
                 ParamInfo pinfo = table.getParam(toCname(params.get(c).getRef(), table));
@@ -300,6 +322,7 @@ public class MultiSpectrumProcessor extends EmbeddedDbProcessor {
         }
         return ntable;
     }
+
     private Object getAryVal(Object[] aryOfAry, int oIdx, int idx) {
         try {
             return getAryVal(aryOfAry[oIdx], idx);

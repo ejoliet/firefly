@@ -9,9 +9,11 @@ import {
     getRotationAngle, isCsysDirMatching, isEastLeftOfNorth, isPlotNorth
 } from '../WebPlotAnalysis';
 import {RotateType} from '../PlotState';
-import {replacePlotView, replacePrimaryPlot, changePrimePlot, updatePlotViewScrollXY,
-        findScrollPtToCenterImagePt, findScrollPtToPlaceOnDevPt,
-        updateScrollToWcsMatch, updatePlotGroupScrollXY} from './PlotView.js';
+import {
+    replacePlotView, replacePrimaryPlot, changePrimePlot, updatePlotViewScrollXY,
+    findScrollPtToCenterImagePt, findScrollPtToPlaceOnDevPt,
+    updateScrollToWcsMatch, updatePlotGroupScrollXY, getNextStaticPlotCount
+} from './PlotView.js';
 import {
     WebPlot, clonePlotWithZoom, isHiPS, isImage,
     replaceHiPSProjectionUsingProperties, getHiPsTitleFromProperties, DEFAULT_BLANK_HIPS_TITLE,
@@ -304,7 +306,7 @@ function updateDisplayData(state, action) {
  * @return {VisRoot}
  */
 function processProjectionChange(state,action) {
-    const {plotId,centerProjPt,fullSky= undefined}= action.payload;
+    const {plotId,centerProjPt,fullSky= undefined, doWcsImageMatching=true}= action.payload;
 
     const {plotViewAry,wcsMatchType}= state;
     const newPlotViewAry= applyToOnePvOrAll(state.positionLock, plotViewAry, plotId, false,
@@ -315,7 +317,7 @@ function processProjectionChange(state,action) {
          } );
     const matchingByWcs= wcsMatchType===WcsMatchType.Standard || wcsMatchType===WcsMatchType.Target;
     let newState= {...state, plotViewAry :newPlotViewAry};
-    if (matchingByWcs && centerProjPt)  {
+    if (matchingByWcs && centerProjPt && doWcsImageMatching)  {
         const imagePv= newPlotViewAry.find( (aPv) => isImage(primePlot(aPv)));
         if (imagePv) {
             const finalPvAry= recenterUsingWcsMatch(newState,imagePv,centerProjPt, false,true);
@@ -369,7 +371,7 @@ function changeHiPS(state,action) {
     if (!isUndefined(blankColor)) plot.blankColor= blankColor;
 
     if (hipsProperties || hipsUrlRoot || !isUndefined(cubeIdx)) {
-        plot.plotImageId= `${pv.plotId}--${pv.plotViewCtx.plotCounter}`;
+        plot.plotImageId= `${pv.plotId}--${pv.plotViewCtx.plotCounter}--${getNextStaticPlotCount()}`;
         const hipsImageConversion=(hipsUrlRoot && plotViewCtx.hipsImageConversion) ?
             {...plotViewCtx.hipsImageConversion,
                 hipsRequestRoot: plotViewCtx.hipsImageConversion.hipsRequestRoot?.makeCopy({[WPConst.HIPS_ROOT_URL]:hipsUrlRoot})} :

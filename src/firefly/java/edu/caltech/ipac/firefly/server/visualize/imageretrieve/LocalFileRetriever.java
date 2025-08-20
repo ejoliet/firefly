@@ -8,12 +8,12 @@
 package edu.caltech.ipac.firefly.server.visualize.imageretrieve;
 
 import edu.caltech.ipac.firefly.server.ServerContext;
-import edu.caltech.ipac.firefly.server.cache.UserCache;
 import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.server.util.multipart.UploadFileInfo;
 import edu.caltech.ipac.firefly.visualize.WebPlotRequest;
 import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.util.cache.Cache;
+import edu.caltech.ipac.util.cache.CacheManager;
 import edu.caltech.ipac.util.cache.StringKey;
 import edu.caltech.ipac.util.download.FailedRequestException;
 import edu.caltech.ipac.visualize.plot.plotdata.GeomException;
@@ -39,7 +39,7 @@ public class LocalFileRetriever implements FileRetriever {
     public FileInfo getFileByName(String fileName) throws FailedRequestException, GeomException, SecurityException {
         String fStr= StringUtils.crunch(fileName);
         if (fStr!=null) {
-            Cache sessionCache= UserCache.getInstance();
+            Cache sessionCache= CacheManager.getUserCache();
             UploadFileInfo uFI= (UploadFileInfo)(sessionCache.get(new StringKey(fStr)));
             File f= ServerContext.convertToFile(fStr);
             if (f==null || !f.canRead()) {

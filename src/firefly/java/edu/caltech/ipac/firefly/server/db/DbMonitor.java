@@ -5,13 +5,19 @@
 package edu.caltech.ipac.firefly.server.db;
 
 import edu.caltech.ipac.firefly.server.util.Logger;
+import edu.caltech.ipac.firefly.util.Ref;
 import edu.caltech.ipac.util.AppProperties;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import static edu.caltech.ipac.firefly.core.Util.Try;
 
 /**
  * Date: 5/3/24
@@ -66,13 +72,10 @@ class DbMonitor {
     private static final ConcurrentHashMap<String, DbAdapter.EmbeddedDbInstance> dbInstances = new ConcurrentHashMap<>();
     private static final DbAdapter.EmbeddedDbStats dbStats = new DbAdapter.EmbeddedDbStats();
     private static final Logger.LoggerImpl LOGGER = Logger.getLogger();
+    private static final ExecutorService DB_STATS_THREADS = Executors.newFixedThreadPool(5);    // up to 5 threads for gathering DB stats
 
     public static ConcurrentHashMap<String, DbAdapter.EmbeddedDbInstance> getDbInstances() {
         return dbInstances;
-    }
-
-    public static DbAdapter.EmbeddedDbStats getDbStats() {
-        return dbStats;
     }
 
     public static DbAdapter.EmbeddedDbStats getRuntimeStats() {
@@ -96,9 +99,11 @@ class DbMonitor {
 
     public static void updateDbStats() {
         LOGGER.trace("DbAdapter -> updateDbStats");
+        Ref<Future<?>> t = new Ref<>();
         for (DbAdapter.EmbeddedDbInstance db : dbInstances.values()) {
-            db.updateStats();
+            t.set(DB_STATS_THREADS.submit(db::updateStats));
         }
+        Try.it(() -> t.get().get(10, TimeUnit.SECONDS));      // run all in parallel, but wait for up to 5 seconds
     }
 
 //====================================================================

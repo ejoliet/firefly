@@ -7,7 +7,7 @@ import {take} from 'redux-saga/effects';
 import {get, isEqual, isEmpty, filter, pick, uniqBy, flatten} from 'lodash';
 import Enum from 'enum';
 import {DATA_PRODUCT_ID_PREFIX, dataProductRoot} from '../metaConvert/DataProductsCntlr.js';
-import {getBackgroundInfo} from './background/BackgroundUtil.js';
+import {getBackgroundInfo, isMonitored, isSearchJob} from './background/BackgroundUtil.js';
 import {flux} from './ReduxFlux';
 import {clone} from '../util/WebUtil.js';
 import {
@@ -64,7 +64,6 @@ export const SHOW_DROPDOWN      = `${LAYOUT_PATH}.showDropDown`;
 export const ADD_CELL           = `${LAYOUT_PATH}.addCell`;
 export const REMOVE_CELL        = `${LAYOUT_PATH}.removeCell`;
 export const ENABLE_SPECIAL_VIEWER= `${LAYOUT_PATH}.enableSpecialViewer`;
-export const MENU_UPDATE      = `${LAYOUT_PATH}.menuUpdate`;
 
 
 export const TRIVIEW_ICov_Ch_T= 'TRIVIEW_ICov_Ch_T'; //top left: image/cov, top right: charts, bottom: tables
@@ -268,14 +267,6 @@ export function dispatchShowDropDown({view, menuItem, initArgs}) {
 }
 
 /**
- * update menu with the new one
- * @param menu the new menu object
- */
-export function dispatchUpdateMenu(menu) {
-    flux.process({ type : MENU_UPDATE, payload: {menu} });
-}
-
-/**
  * hide the drop down container
  */
 export function dispatchHideDropDown() {
@@ -361,7 +352,7 @@ export function getLayouInfo() {
     // keep plot area in place if any table has a related chart
 
     const mainChartCnt= Object.values(state[CHART_SPACE_PATH]?.data ?? {})
-        ?.filter( (c) => !c.groupId.startsWith(DATA_PRODUCT_ID_PREFIX))?.length ?? 0;
+        ?.filter( (c) => !c.groupId?.startsWith(DATA_PRODUCT_ID_PREFIX))?.length ?? 0;
     const hasXyPlots =  mainChartCnt || (hasTables && !isEmpty(getDefaultChartProps(getActiveTableId())));
     const initLoadCompleted= layout.initLoadCompleted||hasImages||hasTables||hasXyPlots;
 
@@ -398,11 +389,13 @@ function getSelView(state, dropDown) {
  */
 export function getResultCounts() {
     const layoutInfo= getLayouInfo();
-    const haveResults = filter(pick(layoutInfo, ['showTables', 'showXyPlots', 'showImages'])).length>0 ||
-            !isEmpty(layoutInfo.gridViewsData) ;
+    const haveResultsFromShowing = filter(pick(layoutInfo, ['showTables', 'showXyPlots', 'showImages'])).length>0 ||
+            !isEmpty(layoutInfo.gridViewsData);
     const tblIds= getTblIdsByGroup('main') ?? [];
     const tableCnt= tblIds?.length;
     const tableLoadingCnt= tblIds.filter( (id) => getTblById(id)?.isFetching).length;
+
+    const haveResults= haveResultsFromShowing || tableCnt>0;
 
     const imViewAry= dataProductRoot()
         .map( (entry) => entry.activateParams?.imageViewerId)
@@ -418,7 +411,7 @@ export function getResultCounts() {
     const pinChartCnt= getViewer(getMultiViewRoot(), PINNED_CHART_VIEWER_ID)?.itemIdAry?.length ?? 0;
     const {jobs={}}= getBackgroundInfo() ?? {};
     const bgTableCnt= Object.values(jobs)
-        .filter((job) => job.jobInfo?.monitored && job.jobInfo?.type !== 'PACKAGE')?.length ?? 0;
+        .filter((job) => isMonitored(job) && isSearchJob(job))?.length ?? 0;
     return {haveResults,tableCnt,tableLoadingCnt,imageCnt,imageLoadingCnt,pinChartCnt,bgTableCnt};
 }
 
@@ -565,4 +558,7 @@ function getColFitIdx(gridView, row, testIdx, gridColumns, testWidth) {
 
 }
 
-
+// getter/setters for the DOM nodes of Menu Tabs, stored in the layout info
+export const MENU_TAB_NODES = 'menuTabNodes';
+export const getMenuTabNodes = () => getLayouInfo()?.[MENU_TAB_NODES] ?? {};
+export const dispatchUpdateMenuTabNodes = (menuTabNodes) => dispatchUpdateLayoutInfo({[MENU_TAB_NODES]: menuTabNodes});

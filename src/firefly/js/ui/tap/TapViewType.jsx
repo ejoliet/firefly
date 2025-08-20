@@ -11,16 +11,17 @@ import {ListBoxInputFieldView} from '../ListBoxInputField.jsx';
 import {SplitContent} from '../panel/DockLayoutPanel';
 import {useFieldGroupMetaState} from '../SimpleComponent.jsx';
 import {AdvancedADQL} from './AdvancedADQL.jsx';
+import {getDataServiceOption} from './DataServicesOptions';
 import {showTableSelectPopup} from './TableChooser.jsx';
 
 import {TableColumnsConstraints, TableColumnsConstraintsToolbar} from './TableColumnsConstraints.jsx';
 import {
-    ADQL, SINGLE, SpatialPanelWidth, NavButtons, TableTypeButton, getTapObsCoreOptions
+    ADQL, SINGLE, SpatialPanelWidth, NavButtons, TableTypeButton
 } from './TableSearchHelpers.jsx';
 import {TableSearchMethods} from './TableSearchMethods.jsx';
 import {
     defTapBrowserState, getLoadedCapability, getTapServices, isCapabilityLoaded, loadTapCapabilities, loadTapColumns,
-    loadTapSchemas, loadTapTables, tapHelpId, loadObsCoreMetadata, ADQL_QUERY_KEY, SERVICE_EXIST_ERROR
+    loadTapSchemas, loadTapTables, tapHelpId, loadObsCoreMetadata, ADQL_QUERY_KEY, SERVICE_EXIST_ERROR, getServiceId
 } from './TapUtil.js';
 
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded';
@@ -47,7 +48,7 @@ function matchesObsCoreHeuristic(schemaName, tableName, columnsModel) {
 
 
 export function TapViewType({serviceUrl, servicesShowing, setServicesShowing, lockService, setSelectBy,
-                                serviceLabel, selectBy, initArgs, lockObsCore, lockedSchemaName,
+                                serviceLabel, selectBy, initArgs, lockObsCore, lockedSchemaName, lockedTableName,
                                 obsCoreLockTitle, obsCoreTableModel, hasObsCoreTable, setError}) {
 
     return (
@@ -55,7 +56,7 @@ export function TapViewType({serviceUrl, servicesShowing, setServicesShowing, lo
             {selectBy==='adql' ?
                 <AdqlUI {...{serviceUrl, serviceLabel, servicesShowing, setServicesShowing, lockService, setSelectBy, setError}}/> :
                 <BasicUI  {...{serviceUrl, serviceLabel, selectBy, initArgs, lockService,
-                    lockObsCore, obsCoreLockTitle, lockedSchemaName, obsCoreTableModel,
+                    lockObsCore, obsCoreLockTitle, lockedSchemaName, obsCoreTableModel, lockedTableName,
                     servicesShowing, setServicesShowing, hasObsCoreTable, setSelectBy, setError}}/>
             }
         </Stack>
@@ -71,6 +72,7 @@ TapViewType.propTypes= {
     setError: func,
     serviceLabel: string,
     lockedSchemaName: string,
+    lockedTableName: string,
     obsCoreLockTitle: string,
     selectBy: string,
     initArgs: shape({
@@ -142,7 +144,7 @@ function useStateRef(initialState){
 
 function BasicUI(props) {
     const {initArgs={}, setSelectBy, obsCoreTableModel, servicesShowing, obsCoreLockTitle,
-        setServicesShowing, lockedSchemaName, hasObsCoreTable, lockService, lockObsCore:forceLockObsCore, setError}= props;
+        setServicesShowing, lockedSchemaName, lockedTableName, hasObsCoreTable, lockService, lockObsCore:forceLockObsCore, setError}= props;
     const {urlApi={},searchParams={}}= initArgs;
     const [getTapBrowserState,setTapBrowserState]= useFieldGroupMetaState(defTapBrowserState);
     const initState = getTapBrowserState();
@@ -151,7 +153,7 @@ function BasicUI(props) {
     const serviceLabel= props.serviceLabel ?? initState.serviceLabel;
     const [serviceUrl, serviceUrlRef, setServiceUrl] = useStateRef(initState.serviceUrl || props.serviceUrl);
     const [schemaName, schemaRef, setSchemaName] = useStateRef(lockedSchemaName || searchParams.schema || initState.schemaName || urlApi.schema);
-    const [tableName, tableRef, setTableName] = useStateRef(searchParams.table || initState.tableName || urlApi.table);
+    const [tableName, tableRef, setTableName] = useStateRef(lockedTableName || searchParams.table || initState.tableName || urlApi.table);
     const [obsCoreEnabled, setObsCoreEnabled] = useState(initState.obsCoreEnabled || initArgs.urlApi?.selectBy === 'obscore');
     const [,setCapabilitiesChange] = useState(); // this is just to force a rerender
     const [schemaOptions, setSchemaOptions] = useState();
@@ -162,6 +164,7 @@ function BasicUI(props) {
     const {schemaLabel}= getTapServices().find( ({value}) => value===serviceUrl) ?? {};
 
     const schemaIsLocked= !forceLockObsCore && Boolean(lockedSchemaName);
+    const tableIsLocked= !forceLockObsCore && Boolean(lockedTableName);
 
     const capabilities= getLoadedCapability(serviceUrl);
 
@@ -178,9 +181,15 @@ function BasicUI(props) {
     const setLockToObsCore= (doLock) => {
         if (!hasObsCoreTable || !obsCoreTableModel?.tableData?.data) return;
         if (doLock) {
-            const [schema, table] = obsCoreTableModel?.tableData?.data[0];
-            setSchemaName(schema);
-            setTableName(table);
+            if (lockedTableName && lockedSchemaName) {
+                setSchemaName(lockedSchemaName);
+                setTableName(lockedTableName);
+            }
+            else {
+                const [schema, table] = obsCoreTableModel?.tableData?.data[0];
+                setSchemaName(schema);
+                setTableName(table);
+            }
         }
         else {
             const foundSchema= schemaOptions.find( (s) => {
@@ -297,8 +306,9 @@ function BasicUI(props) {
 
     const loadObsCoreMeta = (serviceUrl, obsCoreTableModel) => {
         const [, obsCoreTable] = obsCoreTableModel?.tableData?.data?.[0];
-        const supportsObsCoreMetadataLoad = getTapObsCoreOptions(serviceLabel)?.enableMetadataLoad ?? false;
-        
+        const serviceId= getServiceId(serviceUrl);
+        const supportsObsCoreMetadataLoad = getDataServiceOption('enableMetadataLoad', serviceId, false);
+
         if (!obsCoreTable || !supportsObsCoreMetadataLoad) {
             setObsCoreMetadataModel(undefined); //indicates loading attempt wasn't made
         }
@@ -351,7 +361,7 @@ function BasicUI(props) {
             <Sheet sx={{display:'flex', flexDirection: 'row', justifyContent:'space-between'}}>
                 <Stack {...{direction:'row', justifyContent:'space-between', width:1, spacing:1}}>
                     {showTableSelectors ?
-                        <TableSelectors {...{hasObsCoreTable,obsCoreEnabled, setLockToObsCore, serviceLabel,
+                        <TableSelectors {...{hasObsCoreTable,obsCoreEnabled, setLockToObsCore, serviceLabel, obsCoreLockTitle,
                             sOps,schemaName,setSchemaName, realSchemaLabel, schemaIsLocked,
                             tOps,tableTableModel, tableName,setTableName}}/> :
                         <Stack {...{width:1}}>
@@ -412,7 +422,8 @@ function BasicUI(props) {
 
 function TableSelectors({hasObsCoreTable,obsCoreEnabled, setLockToObsCore, serviceLabel,
                             sOps,schemaName,setSchemaName, realSchemaLabel, schemaIsLocked,
-                            tOps,tableTableModel, tableName,setTableName}) {
+                            tOps,tableTableModel, tableName,setTableName, obsCoreLockTitle }) {
+    const schemaTitle= !schemaIsLocked ? `${serviceLabel} Tables` : (obsCoreLockTitle ?? schemaName);
     return (
         <Stack {...{direction:'row', alignItems:'center', width:1}}>
                 <Stack>
@@ -421,16 +432,14 @@ function TableSelectors({hasObsCoreTable,obsCoreEnabled, setLockToObsCore, servi
                             <Typography {...{level:'title-lg', color:'primary', component:'div' }}>
                                 <Stack {...{justifyContent:'center', height:55, overflow:'hidden'}}>
                                     <div style={{ textOverflow: 'ellipsis', whiteSpace: 'normal', overflow: 'hidden' }} >
-                                        {schemaIsLocked ?
-                                            `${serviceLabel}: ${schemaName}` :
-                                            `${serviceLabel} Tables`}
+                                        {schemaTitle}
                                     </div>
                                 </Stack>
                             </Typography>
                         </Tooltip>
                         <HelpIcon helpId={tapHelpId('selectTable')}/>
                     </Stack>
-                    {hasObsCoreTable && <TableTypeButton {...{
+                    {hasObsCoreTable && !schemaIsLocked && <TableTypeButton {...{
                         sx: {mr: 1},
                         lockToObsCore:obsCoreEnabled, setLockToObsCore}}/>}
                 </Stack>
@@ -438,7 +447,7 @@ function TableSelectors({hasObsCoreTable,obsCoreEnabled, setLockToObsCore, servi
                 {!schemaIsLocked &&
                     <SchemaChooser {...{sOps,schemaName,setSchemaName,schemaLabel:realSchemaLabel}}/>
                 }
-                <TableChooser {...{tOps,tableTableModel, tableName,setTableName,popupTitle:`${realSchemaLabel}: ${schemaName}`}}/>
+                <TableChooser {...{tOps,tableTableModel, schemaName,tableName,setTableName,popupTitle:`${realSchemaLabel}: ${schemaName}`}}/>
                 {schemaIsLocked && <Box width={1}/>}
             </Stack>
         </Stack>
@@ -446,6 +455,8 @@ function TableSelectors({hasObsCoreTable,obsCoreEnabled, setLockToObsCore, servi
 }
 
 function SchemaChooser({sOps,schemaName,setSchemaName,schemaLabel }) {
+    const dropOps= sOps?.map( (s) => ({...s, label:`${s.value}: ${s.label}`}));
+    const selectedOps= sOps?.map( (s) => ({...s, label:`${s.value}: ${s.label}`, displayLabel:s.label}));
     return (
         <Stack width={1}>
             <ListBoxInputFieldView {...{
@@ -453,16 +464,16 @@ function SchemaChooser({sOps,schemaName,setSchemaName,schemaLabel }) {
                     width:1,
                     '& .MuiSelect-root':{minWidth:'12rem', flex:'1 1 auto', height:'5rem'}},
                 title:SCHEMA_TIP,
-                options:sOps, value:schemaName, placeholder:'Loading...',
+                options:dropOps, value:schemaName, placeholder:'Loading...',
                 startDecorator:!sOps.length ? <Button loading={true}/> : undefined,
                 onChange:(ev, selectedTapSchema) => setSchemaName(selectedTapSchema),
                 renderValue:
                     ({value}) =>
                         (<OpRender {...{
-                            ops: sOps, value, lineClamp:2, label: schemaLabel, rowDesc:'tables'}}/>),
+                            ops: selectedOps, value, lineClamp:2, label: schemaLabel, rowDesc:'tables'}}/>),
                 decorator:
                     (label,value) => (<OpRender {...{sx:{width:'34rem', minHeight:'3rem'},
-                        ops: sOps, value, rowDesc:'tables'}}/>),
+                        ops: dropOps, value, rowDesc:'tables'}}/>),
             }} />
             <Typography level='body-xs' pl={1}>{`${schemaLabel} count: ${sOps.length}`}</Typography>
         </Stack>
@@ -470,17 +481,24 @@ function SchemaChooser({sOps,schemaName,setSchemaName,schemaLabel }) {
 
 }
 
-function TableChooser({tOps,tableTableModel, tableName,setTableName,popupTitle}) {
+function TableChooser({tOps=[],tableTableModel, tableName,setTableName,schemaName,popupTitle}) {
     const {setVal}= useContext(FieldGroupCtx);
+    const dropOps= tOps.length>=50 ? tOps : tOps.map( (s) => {
+        let start= s.value;
+        if (s.value.startsWith(schemaName+'.') || s.value.startsWith(schemaName+'_')) {
+            start= s.value.substring(schemaName.length+1);
+        }
+        return {...s,label:`${start}: ${s.label}`};
+    });
     return (
         <Stack width={1}>
-            {(!tOps?.length || tOps.length<50) ?
+            {(!tOps.length || tOps.length<50) ?
                 <ListBoxInputFieldView {...{
                     sx:{
                         width:1,
                         '& .MuiSelect-root':{minWidth:'12rem', flex:'1 1 auto', height:'5rem'}},
                     title:TABLE_TIP,
-                    options:tOps, value:tableName, placeholder:'Loading...',
+                    options:dropOps, value:tableName, placeholder:'Loading...',
                     startDecorator:!tOps.length ? <Button loading={true}/> : undefined,
                     onChange:(ev, selectedTapTable) => {
                         setTableName(selectedTapTable);
@@ -491,7 +509,7 @@ function TableChooser({tOps,tableTableModel, tableName,setTableName,popupTitle})
                             (<OpRender {...{ ops: tOps, value, label: 'Tables', lineClamp:2, rowDesc:'rows' }}/>),
                     decorator:
                         (label,value) => (<OpRender {...{sx:{width:'34rem', minHeight:'3rem', rowDesc:'rows'},
-                            ops: tOps, value}}/>),
+                            ops: dropOps, value}}/>),
                 }} /> :
                 <Button {...{ color:'neutral', variant:'outlined',
                     sx:{
@@ -538,7 +556,7 @@ function OpRender({ops, value, label='', sx, lineClamp, rowDesc='rows'}) {
                     <Typography level='body-md' >
                         {op.value}
                     </Typography>
-                    {op.rows &&
+                    {Boolean(op.rows) &&
                         <>
                             <Typography level='body-sm'> {`(${rowDesc}:`} </Typography>
                             <Typography level='body-sm' color='warning'> {`${op.rows})`} </Typography>
@@ -554,7 +572,7 @@ function OpRender({ops, value, label='', sx, lineClamp, rowDesc='rows'}) {
                                     WebkitBoxOrient: 'vertical',
                                 } : {}}
                             sx={{whiteSpace:'normal', textAlign:'left'}}>
-                <div dangerouslySetInnerHTML={{__html: `${cleanUp(op.label)}`}}/>
+                <div dangerouslySetInnerHTML={{__html: `${cleanUp(op.displayLabel??op.label)}`}}/>
                 </Typography>
             </Stack>
         </Tooltip>

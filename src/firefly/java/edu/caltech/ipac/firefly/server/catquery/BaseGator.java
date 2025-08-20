@@ -33,10 +33,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLEncoder;
-import java.util.Arrays;
 import java.util.List;
-
-import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 
 
 /**
@@ -111,7 +108,7 @@ public abstract class BaseGator extends EmbeddedDbProcessor {
             boolean isPost = isPost(req);
             URL url = createURL(req, isPost);
 
-            applyIfNotEmpty(getJob(), v -> v.getJobInfo().setDataOrigin(url.toString()));
+            updateJob(ji -> ji.getAux().setJobUrl(url.toString()));
 
             if (isPost) {
                 _postBuilder = new MultiPartPostBuilder(url.toString());
@@ -140,6 +137,9 @@ public abstract class BaseGator extends EmbeddedDbProcessor {
             _log.error(e, e.toString());
             throw new DataAccessException("Catalog Query Failed", e);
         }
+
+        setJobResults(outFile);
+
         return outFile;
     }
 
@@ -183,7 +183,7 @@ public abstract class BaseGator extends EmbeddedDbProcessor {
                         "Receiving errors from Gator, stat=" + stat.getValue());
             }
 
-        } else if (errStr.toLowerCase().contains(ANY_ERR_STR)) {
+        } else if (errStr.toLowerCase().contains(ANY_ERR_STR) && !errStr.startsWith("|")) {
             handleErr(outFile,
                     "IRSA search failed. Catalog is unavailable",
                     "Receiving unrecognized errors from Gator, Error: " + errStr);

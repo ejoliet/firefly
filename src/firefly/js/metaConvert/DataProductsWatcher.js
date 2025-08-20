@@ -15,7 +15,7 @@ import {getTblById,getTblInfo,getActiveTableId,isTblDataAvail} from '../tables/T
 import {isDefaultCoverageActive} from '../visualize/PlotViewUtil.js';
 import MultiViewCntlr, {
     getViewerItemIds, dispatchChangeViewerLayout,
-    getMultiViewRoot, getViewer, GRID, GRID_FULL, SINGLE, getLayoutType, getLayoutDetails
+    getMultiViewRoot, getViewer, GRID, GRID_FULL, SINGLE, getLayoutType, getLayoutDetails, GRID_RELATED
 } from '../visualize/MultiViewCntlr.js';
 import {
     makeDataProductsConverter, getFactoryTemplateOptions
@@ -24,7 +24,7 @@ import {findGridTableRows} from './TableDataProductUtils.js';
 import {dispatchAddTableTypeWatcherDef} from '../core/MasterSaga.js';
 import {zoomPlotPerViewSize, resetImageFullGridActivePlot, changeTableHighlightToMatchPlotView} from './ImageDataProductsUtil.js';
 import {
-    DEFAULT_DATA_PRODUCTS_COMPONENT_KEY, dataProductRoot, dispatchUpdateDataProducts, getActivateParams
+    dataProductRoot, dispatchUpdateDataProducts, getActivateParams
 } from './DataProductsCntlr.js';
 import {dpdtMessage, dpdtSimpleMsg, DPtypes} from './DataProductsType.js';
 import {UserZoomTypes} from '../visualize/ZoomUtil.js';
@@ -93,7 +93,10 @@ function watchDataProductsTable(tbl_id, action, cancelSelf, params) {
 
     if (payload.viewerId && payload.viewerId!==imageViewerId) return {...params,firstTime};
 
-    const payloadTblId= payload.tbl_id ?? payload.associatedTblId;
+    let payloadTblId;
+    if (action.type===ComponentCntlr.COMPONENT_STATE_CHANGE) payloadTblId= payload?.componentState?.tbl_id;
+    else payloadTblId= payload.tbl_id ?? payload.associatedTblId;
+
 
 
     if (payloadTblId) {
@@ -161,7 +164,7 @@ function watchDataProductsTable(tbl_id, action, cancelSelf, params) {
             break;
 
         case ComponentCntlr.COMPONENT_STATE_CHANGE:
-            const {dataProductsComponentKey=DEFAULT_DATA_PRODUCTS_COMPONENT_KEY}= getFactoryTemplateOptions(factoryKey) ??{};
+            const {dataProductsComponentKey}= getFactoryTemplateOptions(factoryKey) ??{};
             if (action.payload.componentId===dataProductsComponentKey) {
                 abortPromise= updateDataProducts(factoryKey, action, firstTime, tbl_id, activateParams, abortLastPromise);
             }
@@ -246,6 +249,12 @@ function updateDataProducts(factoryKey, action, firstTime, tbl_id, activateParam
         }
         viewer = getViewer(getMultiViewRoot(), imageViewerId);
     }
+    else {
+        if (viewer.layout===GRID && viewer.layoutDetail===GRID_RELATED && !converter.hasRelatedBands) {
+            dispatchChangeViewerLayout(viewer.viewerId,SINGLE,undefined,tbl_id);
+            viewer = getViewer(getMultiViewRoot(), imageViewerId);
+        }
+    }
 
     const threeData= viewer.customData?.[converterId];
     const threeColorOps= (threeColor && threeData?.threeColorVisible) ?
@@ -255,8 +264,16 @@ function updateDataProducts(factoryKey, action, firstTime, tbl_id, activateParam
     const {highlightedRow}= tableState;
 
     // keep the plotId array for 'single' layout
-    const layout= getLayoutType(getMultiViewRoot(), imageViewerId, tbl_id);
+    let layout= getLayoutType(getMultiViewRoot(), imageViewerId, tbl_id);
     const layoutDetail= getLayoutDetails(getMultiViewRoot(), imageViewerId, tbl_id);
+
+
+    if (layout===GRID && !converter.canGrid) {
+        dispatchChangeViewerLayout(viewer.viewerId,SINGLE,undefined,tbl_id);
+        layout= getLayoutType(getMultiViewRoot(), imageViewerId, tbl_id);
+    }
+
+
 
     let resultPromise;
     if (layout===SINGLE) {

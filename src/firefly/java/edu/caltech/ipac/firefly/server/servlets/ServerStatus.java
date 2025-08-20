@@ -3,6 +3,7 @@
  */
 package edu.caltech.ipac.firefly.server.servlets;
 
+import edu.caltech.ipac.firefly.core.RedisService;
 import edu.caltech.ipac.firefly.core.background.JobManager;
 import edu.caltech.ipac.firefly.messaging.Messenger;
 import edu.caltech.ipac.firefly.server.Counters;
@@ -14,6 +15,7 @@ import edu.caltech.ipac.firefly.server.db.DuckDbAdapter;
 import edu.caltech.ipac.firefly.server.db.HsqlDbAdapter;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
 import edu.caltech.ipac.util.FileUtil;
+import edu.caltech.ipac.util.KeyVal;
 import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.util.cache.CachePeerProviderFactory;
 import net.sf.ehcache.CacheManager;
@@ -28,16 +30,21 @@ import java.io.File;
 import java.io.PrintWriter;
 import java.rmi.RemoteException;
 import java.text.SimpleDateFormat;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Enumeration;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import static edu.caltech.ipac.firefly.server.ServerContext.ACCESS_TEST_EXT;
+import static edu.caltech.ipac.firefly.core.Util.Try;
+import static org.apache.commons.lang.StringUtils.isNotEmpty;
 
 
 /**
@@ -55,53 +62,40 @@ public class ServerStatus extends BaseHttpServlet {
 
     protected void processRequest(HttpServletRequest req, HttpServletResponse res) throws Exception {
 
-        boolean showHeaders = Boolean.parseBoolean(req.getParameter("headers"));
+        boolean showDebug = Boolean.parseBoolean(req.getParameter("debug"));
         boolean execGC = Boolean.parseBoolean(req.getParameter("execGC"));
         boolean showJobDetails = Boolean.parseBoolean(req.getParameter("job.details"));
+        boolean showRedisDetails = Boolean.parseBoolean(req.getParameter("redis.details"));
+        boolean execRedisCleanup = Boolean.parseBoolean(req.getParameter("execRedisCleanup"));
 
-        if (execGC)     System.gc();            // force garbage collection.
 
-        ServerContext.Info sInfo = ServerContext.getSeverInfo();
         res.addHeader("content-type", "text/html");
         PrintWriter writer = res.getWriter();
         writer.println("<pre style='font-size: -1'>");
+
+        if (execGC)             System.gc();            // force garbage collection.
+        if (execRedisCleanup)   {
+            long keyCount = RedisService.cleanupStaleKeys();    // manually clean up stale Redis keys
+            writer.println("* Redis cleanup completed. Number of keys removed: " + keyCount);
+            skip(writer);
+        }
+
         try {
+            showActions(writer);
 
-            // show optional parameters
-            writer.println("Available Actions");
-            writer.println("--------------------");
-            writer.println("<li><a href=./status>Default View</a>:   Default set of information");
-            writer.println("<li><a href=./status?headers=true>Full Headers</a>:   Display all request's headers");
-            writer.println("<li><a href=./status?job.details=true>Job Details</a>:    View detailed Async Job Information");
-            writer.println("<li><a href=./status?execGC=true>Trigger GC</a>:     Invoke JVM garbage collection");
-            skip(writer);
+            // some information may be time-consuming to load, so we should only do it on demand
+            if (showRedisDetails) {
+                redisView(writer);
+            } else {
+                defaultView(writer, showJobDetails);
+            }
 
-            showCountStatus(writer);
-            skip(writer);
-
-            showPackagingStatus(writer, showJobDetails);
-            skip(writer);
-
-            showMessagingStatus(writer);
-            skip(writer);
-
-            showEventsStatus(writer);
-            skip(writer);
-
-            showDatabaseStatus(writer);
-            skip(writer);
-
-            showWorkAreaStatus(writer);
-            skip(writer);
-
-            EhcacheProvider prov = (EhcacheProvider) edu.caltech.ipac.util.cache.CacheManager.getCacheProvider();
-
-            displayCacheInfo(writer, prov.getEhcacheManager(), sInfo);
-            displayCacheInfo(writer, prov.getSharedManager(), sInfo);
-
-            if (showHeaders) {
+            if (showDebug) {
                 skip(writer);
-                showHeaders(writer, req);
+                Try.it(() -> showHeaders(writer, req)).getOrElse(e -> writer.println("Failed to load Request Headers: " + e.getMessage()));
+
+                skip(writer);
+                Try.it(() -> showSystemProperties(writer)).getOrElse(e -> writer.println("Failed to load System Properties: " + e.getMessage()));
             }
 
             writer.println("</pre>");
@@ -111,6 +105,90 @@ public class ServerStatus extends BaseHttpServlet {
             writer.close();
         }
 
+    }
+    public static class EntryList {
+        private final LinkedList<KeyVal<String, Object>> data = new LinkedList<>();
+
+        public EntryList add(String key, Object value) {
+            data.add(new KeyVal<>(key, value));
+            return this;
+        }
+
+        public EntryList addAll(EntryList other) {
+            if (other != null) {
+                data.addAll(other.data);
+            }
+            return this;
+        }
+
+        public void print(PrintWriter writer) {
+            if (data.isEmpty()) {
+                writer.println("No data");
+            } else {
+                for (KeyVal<String, Object> entry : data) {
+                    printEntry(writer, entry.getKey(), entry.getValue());
+                }
+            }
+        }
+        private static void printEntry(PrintWriter writer, String key, Object value) {
+            if (isNotEmpty(key)) writer.print("  - " + key + ": ");
+
+            switch (value) {
+                case Integer v -> writer.printf("%,d\n", v);
+                case Long v -> writer.printf("%,d\n", v);
+                case Float v -> writer.printf("%,.2f\n", v);
+                case Double v -> writer.printf("%,.2f\n", v);
+                case List list -> writer.println(StringUtils.toString(list, ", "));
+                case null -> writer.println("");
+                default -> writer.println(value);
+            }
+        }
+    }
+
+    private void defaultView(PrintWriter writer, boolean showJobDetails) {
+
+        ServerContext.Info sInfo = ServerContext.getSeverInfo();
+
+        Try.it(() -> showCountStatus(writer)).getOrElse(e -> writer.println("Failed to load Count Status: " + e.getMessage()));
+        skip(writer);
+
+        Try.it(() -> showPackagingStatus(writer, showJobDetails)).getOrElse(e -> writer.println("Failed to Packaging Status: " + e.getMessage()));
+        skip(writer);
+
+        Try.it(() -> showMessagingStatus(writer)).getOrElse(e -> writer.println("Failed to load Messaging Status: " + e.getMessage()));
+        skip(writer);
+
+        Try.it(() -> showEventsStatus(writer)).getOrElse(e -> writer.println("Failed to load Event Status: " + e.getMessage()));
+        skip(writer);
+
+        Try.it(() -> showDatabaseStatus(writer)).getOrElse(e -> writer.println("Failed to load Database Status: " + e.getMessage()));
+        skip(writer);
+
+        Try.it(() -> showWorkAreaStatus(writer)).getOrElse(e -> writer.println("Failed to load Work Area Status: " + e.getMessage()));
+        skip(writer);
+
+        EhcacheProvider prov = (EhcacheProvider) edu.caltech.ipac.util.cache.CacheManager.getCacheProvider();
+
+        Try.it(() -> displayCacheInfo(writer, prov.getEhcacheManager(), sInfo)).getOrElse(e -> writer.println("Failed to load Cache Info: " + e.getMessage()));
+
+    }
+    private static void redisView(PrintWriter writer) {
+        writer.println("Redis detail information: ");
+        writer.println("-------------------------  ");
+        RedisService.getFullStats().print(writer);
+    }
+
+    private void showActions(PrintWriter writer) {
+        // show optional parameters
+        writer.println("Available Actions");
+        writer.println("--------------------");
+        writer.println("<li><a href=./status>Default View</a>:   Default set of information");
+        writer.println("<li><a href=./status?debug=true>Debug Info</a>:     Display information for debugging; request headers, system properties, etc.");
+        writer.println("<li><a href=./status?job.details=true>Job Details</a>:    View detailed Async Job Information");
+        writer.println("<li><a href=./status?execGC=true>Trigger GC</a>:     Invoke JVM garbage collection");
+        writer.println("<li><a href=./status?redis.details=true>Redis Details</a>:     View detailed Redis information");
+        writer.println("<li><a href=./status?execRedisCleanup=true>Redis Cleanup</a>:  Manually trigger Redis cleanup of stale keys");
+        skip(writer);
     }
 
     private static void displayCacheInfo(PrintWriter writer, CacheManager cm, ServerContext.Info sInfo) {
@@ -158,6 +236,15 @@ public class ServerStatus extends BaseHttpServlet {
 
     private static void showDatabaseStatus(PrintWriter writer) {
         DbAdapter.EmbeddedDbStats stats = DbMonitor.getRuntimeStats(true);
+
+        writer.printf(""" 
+            DATABASE INFORMATION
+            --------------------
+            Rows: %,15d       Peak Rows: %,15d 
+            Databases: %,10d       Peak Databases: %,10d      Total Database: %,10d
+            
+            """, stats.memRows, stats.peakMemRows, stats.memDbs, stats.peakMemDbs, stats.totalDbs);
+
         String driver;
         if (DbAdapter.DEF_DB_TYPE.equals(DuckDbAdapter.NAME)) {
             duckDbConfig(writer);
@@ -176,10 +263,12 @@ public class ServerStatus extends BaseHttpServlet {
             4. Click "Connect"
             </div>
             """, ServerContext.getRequestOwner().getBaseUrl(), driver);
-        writer.println("Idled   Age     Rows        Columns  Tables  Total Rows       Memory  JDBC URL     (elapsed time are in min:sec; memory is in MB)");
+
+        writer.println("Idled   Age     Rows        Columns  Tables  Total Rows       Memory  JDBC URL     (elapsed time are in min:sec; memory is in MB) (ONLY THE LATEST 100 JOBS ARE SHOWN BELOW)");
         writer.println("------  ------  ----------  -------  ------  ----------       ------  ---------");
         DbMonitor.getDbInstances().values().stream()
             .sorted((db1, db2) -> Long.compare(db2.getLastAccessed(), db1.getLastAccessed()))
+            .limit(100) // only show the latest 100
             .forEach((db) -> writer.printf("%7$tM:%7$tS   %8$tM:%8$tS   %,10d  %7d  %6d  %,10d  %11.1f  %s\n",
                 db.getDbStats().rowCnt(),
                 db.getDbStats().colCnt(),
@@ -254,7 +343,7 @@ public class ServerStatus extends BaseHttpServlet {
             File [] matchFiles= FileUtil.listFilesWithExtension(sharedDir, ACCESS_TEST_EXT);
             if (matchFiles.length==0) return;
             int maxLen= 5;
-            Arrays.sort(matchFiles, (f1,f2) -> (int)(f2.lastModified()-f1.lastModified()));
+            Arrays.sort(matchFiles, (f1,f2) -> (int)(f1.lastModified()-f2.lastModified()));
             w.println("              Most recent host using the shared working directory:");
             int len= Math.min(maxLen,matchFiles.length);
             for(int i=0; (i<len); i++) {
@@ -262,6 +351,7 @@ public class ServerStatus extends BaseHttpServlet {
                 String hostname= f.getName().substring(0,f.getName().length()- ACCESS_TEST_EXT.length()-1);
                 String detailStr= hostname.equals(FileUtil.getHostname()) ? "(self) " : "";
                 if (isDocker(hostname)) detailStr+= "(probably Docker)";
+                if (isK8S(hostname)) detailStr+= "(probably in container)";
                 w.println(String.format( "%19s%-20s  --  %s %s",
                         "- ", hostname, new Date(f.lastModified()).toString(), detailStr ));
             }
@@ -276,6 +366,10 @@ public class ServerStatus extends BaseHttpServlet {
         } catch (NumberFormatException ignored) {
             return false;
         }
+    }
+
+    private static boolean isK8S(String hostname) {
+        return (hostname!=null && hostname.contains("-") && !hostname.contains("."));
     }
 
     private static void showEventsStatus(PrintWriter w) {
@@ -297,14 +391,40 @@ public class ServerStatus extends BaseHttpServlet {
     }
 
     private static void showMessagingStatus(PrintWriter w) {
-        w.println("Messenger: Redis host: " + Messenger.getRedisHostPortDesc());
-        w.println("Messaging Pool: " + Messenger.getStats());
+        w.println("Redis information: ");
+        w.println("-----------------  ");
+        RedisService.getStats().print(w);
+
+        w.println("\nMessenger info: ");
+        w.println("-----------------  ");
+        w.println("  Subscribed Topics: " + Messenger.getSubscribedTopics());
+        for (Map.Entry<String, Messenger.SubscriberHandler> entry : Messenger.getSubscribers().entrySet()) {
+            String topic = entry.getKey();
+            Messenger.SubscriberHandler handler = entry.getValue();
+            w.println("  - Topic: " + "%-20s".formatted(topic) + " Status: " + (String.format(handler.getFailSince() == null ? "OK" :
+                    "Failed since " + DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault()).format(handler.getFailSince()))));
+        }
     }
 
     private static void showPackagingStatus(PrintWriter w, boolean details) {
         w.println("Async Job Information");
         w.println();
         w.println(JobManager.getStatistics(details));
+    }
+
+    private static void showSystemProperties(PrintWriter w) {
+
+        w.println("System Properties");
+        w.println("-----------------");
+
+        // Get system properties
+        var props = System.getProperties();
+
+        // Iterate through properties and print them
+        for (String key : props.stringPropertyNames()) {
+            String value = props.getProperty(key);
+            w.println(String.format("    %s: %s", key, value));
+        }
     }
 
     private static void showHeaders(PrintWriter w, HttpServletRequest req) {

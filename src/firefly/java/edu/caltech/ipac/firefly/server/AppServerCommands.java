@@ -3,22 +3,35 @@
  */
 package edu.caltech.ipac.firefly.server;
 
+import edu.caltech.ipac.firefly.core.RedisService;
+import edu.caltech.ipac.firefly.core.background.JobManager;
 import edu.caltech.ipac.firefly.data.Alert;
+import edu.caltech.ipac.firefly.data.ServerEvent;
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.userdata.UserInfo;
+import edu.caltech.ipac.firefly.messaging.JsonHelper;
+import edu.caltech.ipac.firefly.server.events.FluxAction;
+import edu.caltech.ipac.firefly.server.events.ServerEventManager;
 import edu.caltech.ipac.firefly.server.security.SsoAdapter;
 import edu.caltech.ipac.firefly.server.util.Logger;
+import edu.caltech.ipac.firefly.server.visualize.imageretrieve.URLFileRetriever;
 import edu.caltech.ipac.util.AppProperties;
+import edu.caltech.ipac.util.FileUtil;
+import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
+import redis.clients.jedis.Jedis;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
+import static edu.caltech.ipac.util.StringUtils.getDouble;
+import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 public class AppServerCommands {
     private static final String SPA_NAME = "spaName";
@@ -35,9 +48,53 @@ public class AppServerCommands {
             UserInfo userInfo = ServerContext.getRequestOwner().getUserInfo();
             LOG.info("Init "+spaName);
             LOG.debug("User info for this client: " + userInfo);
+
+            // setup initial email notification
+            JobManager.BackGroundInfo bgInfo = JobManager.getBackgroundInfo();
+            String email = ifNotNull(ServerContext.getRequestOwner().getUserInfo()).get(v -> v.isGuestUser() ? bgInfo.email() : v.getEmail());
+            FluxAction action = new FluxAction("background.bgSetInfo");
+            action.setValue(email, "email");
+            action.setValue(bgInfo.notifEnabled(), "notifEnabled");
+            ServerEventManager.fireAction(action, ServerEvent.Scope.SELF);
+
+            // check for redis connection
+            if (RedisService.getFailSince() != null)  RedisService.updateConnectionStatus(true);
+
             return "true";
         }
     }
+
+    public static class TextFile extends ServCommand {
+        
+        public String doCommand(SrvParam sp) throws Exception {
+            long maxSize= sp.getOptionalLong(ServerParams.MAX_FILE_SIZE, FileUtil.MEG);
+            JSONObject obj= new JSONObject();
+            JSONArray retAry= new JSONArray();
+            retAry.add(obj);
+            var fileInfo= new URLFileRetriever().getFile(sp.getRequired(ServerParams.URL));
+            if (fileInfo.getResponseCode() != 200) {
+                obj.put("success", false);
+                obj.put("error", "Error retrieving file, status: "+fileInfo.getResponseCode());
+                obj.put("cause", "Error retrieving file, status: "+fileInfo.getResponseCode());
+            }
+            if (fileInfo.getFile().length() > maxSize) {
+                var sizeStr= FileUtil.getSizeAsString(fileInfo.getFile().length());
+                obj.put("success", false);
+                obj.put("error", "File too large, size: "+sizeStr);
+                obj.put("cause", "File too large, size: "+sizeStr);
+            }
+            else {
+                String data= FileUtil.readFile(fileInfo.getFile());
+                obj.put("success", true);
+                obj.put("data", data);
+            }
+            return retAry.toString();
+        }
+    }
+
+
+
+
 
     public static class JsonProperty extends ServCommand {
         static final String INVENTORY_PROP = "inventory.serverURLAry";
@@ -136,22 +193,49 @@ public class AppServerCommands {
     }
 
 
+//    private static final String STRING_START="::STRING::";
+//    private static final int SS_OFFSET= STRING_START.length();
     private static final String HELP_BASE_URL = "help.base.url";
+    private static final String OP_ROOT = "OP_";
+    private static final String EMPTY_APP_PROP = "{}";
+    private static final int OP_ROOT_LENGTH = OP_ROOT.length();
     private static String getAppOptions() {
-        Map appOpts;
-        String def = "{}";
-        String appOptStr = AppProperties.getProperty(JsonProperty.FIREFLY_OPTIONS, def);
-        try{
-            appOpts = (Map) new JSONParser().parse(appOptStr);
-            // additional props as FIREFLY_OPTIONS
-            applyIfNotEmpty(AppProperties.getProperty(HELP_BASE_URL), v -> appOpts.put(HELP_BASE_URL, v));
-
-            return new JSONObject(appOpts).toJSONString();
-        }catch(ParseException pe){
+        String appOptStr= EMPTY_APP_PROP;
+        try {
+            appOptStr = AppProperties.getProperty(JsonProperty.FIREFLY_OPTIONS, EMPTY_APP_PROP);
+            if (isEmpty(appOptStr)) appOptStr = EMPTY_APP_PROP; // this check to see if the property returns ''
+            var extraProps = AppProperties.getWithStartingMatch(OP_ROOT);
+            var jsonData = JsonHelper.parse(appOptStr);
+            try{
+                extraProps.forEach((k, v) -> setToJson(jsonData, k, v));
+                applyIfNotEmpty(AppProperties.getProperty(HELP_BASE_URL), v -> jsonData.setValue(v,HELP_BASE_URL));
+            }
+            catch (Exception e){
+                Logger.getLogger().error(String.format("Could not add props to %s", appOptStr));
+                extraProps.forEach((k, v) -> Logger.getLogger().error("Could not add- "+ k+ ": "+v));
+            }
+            return jsonData.toJson();
+        } catch (Exception e) {
             Logger.getLogger().error(String.format("Failed parsing %s", appOptStr));
-            return def;
+            return EMPTY_APP_PROP;
         }
+
+
     }
 
 
+
+    private static void setToJson(JsonHelper jhelp, String key, String valStr) {
+        if (key.length()<=OP_ROOT_LENGTH) return;
+        Object val;
+//        if (valStr.startsWith(STRING_START)) {
+//            val= valStr.substring(SS_OFFSET).replaceAll("_", " ");
+//        }
+//        else {
+            double num= getDouble(valStr);
+            val= Double.isNaN(num) ? valStr : num;
+//        }
+        jhelp.setValueFromPath(val,key.substring(OP_ROOT_LENGTH),"_");
+    }
 }
+

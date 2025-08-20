@@ -12,7 +12,7 @@ package edu.caltech.ipac.firefly.server.query;
 import edu.caltech.ipac.firefly.core.background.Job;
 import edu.caltech.ipac.firefly.core.background.JobInfo;
 import edu.caltech.ipac.firefly.core.background.JobManager;
-import edu.caltech.ipac.firefly.core.background.ScriptAttributes;
+import edu.caltech.ipac.firefly.core.background.JobUtil;
 import edu.caltech.ipac.firefly.core.background.ServCmdJob;
 import edu.caltech.ipac.firefly.data.ServerEvent;
 import edu.caltech.ipac.firefly.data.ServerParams;
@@ -24,7 +24,7 @@ import edu.caltech.ipac.firefly.server.ServerCommandAccess;
 import edu.caltech.ipac.firefly.server.SrvParam;
 import edu.caltech.ipac.firefly.server.db.EmbeddedDbUtil;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
-import edu.caltech.ipac.firefly.server.packagedata.PackagedEmail;
+import edu.caltech.ipac.firefly.server.packagedata.DownloadScriptWorker;
 import edu.caltech.ipac.firefly.server.packagedata.PackagingWorker;
 import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.firefly.util.event.Name;
@@ -34,6 +34,7 @@ import edu.caltech.ipac.table.DataObject;
 import edu.caltech.ipac.table.DataType;
 import edu.caltech.ipac.table.JsonTableUtil;
 import edu.caltech.ipac.table.TableUtil;
+import edu.caltech.ipac.util.FormatUtil;
 import edu.caltech.ipac.util.StringUtils;
 import org.json.simple.JSONObject;
 
@@ -48,12 +49,11 @@ import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
-import java.util.ArrayList;
 import java.util.List;
 
-import static edu.caltech.ipac.firefly.data.ServerParams.EMAIL;
-import static edu.caltech.ipac.firefly.data.ServerParams.JOB_ID;
-import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
+import static edu.caltech.ipac.firefly.core.background.JobManager.sendUpdate;
+import static edu.caltech.ipac.firefly.data.ServerParams.*;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
@@ -64,8 +64,8 @@ public class SearchServerCommands {
 
     public static class TableSearch extends ServCmdJob {
         public Job.Type getType() {
-            JobInfo jInfo = getJobInfo();
-            Type type = jInfo == null || jInfo.getType() == null ? Type.SEARCH : jInfo.getType();
+            JobInfo jInfo = JobManager.getJobInfo(getJobId());
+            Type type = jInfo == null || jInfo.getMeta().getType() == null ? Type.SEARCH : jInfo.getMeta().getType();
             return type;
         }
 
@@ -87,7 +87,7 @@ public class SearchServerCommands {
 
             if (format.toLowerCase().contains("votable")) {
                 ByteArrayOutputStream rval = new ByteArrayOutputStream();
-                processor.writeData(rval, tsr, TableUtil.Format.VO_TABLE_TABLEDATA, TableUtil.Mode.displayed);
+                processor.writeData(rval, tsr, FormatUtil.Format.VO_TABLE_TABLEDATA, TableUtil.Mode.displayed);
                 return rval.toString();
             } else {
                 DataGroupPart dgp = new SearchManager().getDataGroup(tsr, processor);
@@ -266,14 +266,26 @@ public class SearchServerCommands {
             return new SearchManager().getJSONData(request);
         }
 
+
     }
 
     public static class PackageRequest extends ServCmdJob {
 
-        public Job.Type getType() { return Job.Type.PACKAGE; }
+        public Job.Type getType() { return PackagingWorker.JOB_TYPE; }
 
         public String doCommand(SrvParam params) throws Exception {
             PackagingWorker worker = new PackagingWorker();
+            setWorker(worker);
+            return worker.doCommand(params);
+        }
+    }
+
+    public static class  DownloadScriptRequest extends ServCmdJob {
+
+        public Job.Type getType() { return DownloadScriptWorker.JOB_TYPE; }
+
+        public String doCommand(SrvParam params) throws Exception {
+            DownloadScriptWorker worker = new DownloadScriptWorker();
             setWorker(worker);
             return worker.doCommand(params);
         }
@@ -284,7 +296,7 @@ public class SearchServerCommands {
         public String doCommand(SrvParam params) throws Exception {
             String jobId = params.getRequired(JOB_ID);
             JobInfo info = JobManager.setMonitored(jobId, true);
-            return JobManager.toJson(info);
+            return JobUtil.toJson(info);
         }
     }
 
@@ -292,8 +304,9 @@ public class SearchServerCommands {
 
         public String doCommand(SrvParam params) throws Exception {
             String jobId = params.getRequired(JOB_ID);
-            JobInfo info = JobManager.setMonitored(jobId, false);
-            return JobManager.toJson(info);
+            JobInfo info = JobManager.setMonitored(jobId, false);       // this removes if from the client job list
+            JobManager.removeJob(jobId);        // stop(if needed) and remove from the server
+            return JobUtil.toJson(info);
         }
     }
 
@@ -302,21 +315,25 @@ public class SearchServerCommands {
         public String doCommand(SrvParam params) throws Exception {
             String jobId = params.getRequired(JOB_ID);
             JobInfo info = JobManager.abort(jobId, "Aborted by user");
-            return JobManager.toJson(info);
+            return JobUtil.toJson(info);
         }
     }
 
-    public static class SetEmail extends ServCommand {
+    public static class Archive extends ServCommand {
 
         public String doCommand(SrvParam params) throws Exception {
-            String email = params.getRequired(EMAIL);
-            JobManager.list().forEach(jobInfo -> {
-                String cEmail = jobInfo.getParams().get(EMAIL);
-                    if (!email.equals(cEmail)) {
-                        jobInfo.getParams().put(EMAIL, email);
-                    }
-                }
-            );
+            String jobId = params.getRequired(JOB_ID);
+            JobInfo info = sendUpdate(jobId, jobInfo -> jobInfo.setPhase(JobInfo.Phase.ARCHIVED));
+            return JobUtil.toJson(info);
+        }
+    }
+
+    public static class SetBgInfo extends ServCommand {
+
+        public String doCommand(SrvParam params) throws Exception {
+            String email = params.getOptional(EMAIL);
+            boolean notifEnabled = params.getOptionalBoolean(NOTIF_ENABLED, false);
+            JobManager.setBackgroundInfo(new JobManager.BackGroundInfo(notifEnabled, email));
             return "true";
         }
     }
@@ -330,22 +347,24 @@ public class SearchServerCommands {
             JobInfo local = isEmpty(jobId) ? null : JobManager.getJobInfo(jobId);
 
             if (uws != null && local != null) {
-                // apply additional local info as needed
-                applyIfNotEmpty(local.getLocalRunId(), uws::setLocalRunId);
+                local.copyFrom(uws);
             }
-
-            if (uws != null) return JobManager.toJson(uws);
-            return local != null ? JobManager.toJson(local) : null;
+            return local != null ? JobUtil.toJson(local) :
+                    uws != null ? JobUtil.toJson(uws) : null;
         }
     }
 
-    public static class ResendEmail extends ServCommand {
+    public static class SetJobNotif extends ServCommand {
 
         public String doCommand(SrvParam params) throws Exception {
-            String id = params.getRequired(JOB_ID);
+            String jobId = params.getRequired(JOB_ID);
+            boolean notifEnabled = params.getRequiredBoolean(NOTIF_ENABLED);
             String email = params.getOptional(EMAIL);
-            JobInfo info = JobManager.sendEmail(id, email);
-            return JobManager.toJson(info);
+            JobInfo info = sendUpdate(jobId, ji -> {
+                ji.getMeta().setSendNotif(notifEnabled);
+                ji.getAux().setUserEmail(email);
+            });
+            return info != null ? JobUtil.toJson(info) : "false";
         }
     }
 
@@ -364,16 +383,8 @@ public class SearchServerCommands {
 
         @Override
         public String doCommand(SrvParam params) throws Exception {
-            String id = params.getRequired(JOB_ID);
-            String file = params.getRequired(ServerParams.FILE);
-            String source = params.getRequired(ServerParams.SOURCE);
-            List<String> attStrList = params.getOptionalList(ServerParams.ATTRIBUTE);
-            List<ScriptAttributes> attList= new ArrayList<ScriptAttributes>(5);
-            for(String a : attStrList) {
-                attList.add(Enum.valueOf(ScriptAttributes.class,a));
-            }
-            String url = PackagedEmail.makeScriptAndLink(JobManager.getJobInfo(id), source, attList);
-            return url;
+            // this is no longer a feature.  we'll remove it at some point
+            return "";
         }
     }
 

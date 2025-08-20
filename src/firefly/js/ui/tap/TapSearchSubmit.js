@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-    ADQL_QUERY_KEY, getAsEntryForTableName, getServiceHiPS, getServiceLabel,
+    ADQL_QUERY_KEY, getAsEntryForTableName, getServiceHiPS, getServiceId, getServiceLabel,
     makeNumberedTitle,
     makeTapSearchTitle,
     maybeQuote, TAP_UPLOAD_SCHEMA,
@@ -23,7 +23,8 @@ import {dispatchHideDialog} from 'firefly/core/ComponentCntlr';
 import {makeColsLines, tableColumnsConstraints} from 'firefly/ui/tap/TableColumnsConstraints';
 
 
-export function onTapSearchSubmit(request, serviceUrl, tapBrowserState, additionalClauses='', metaInfo={}) {
+export function onTapSearchSubmit({request, serviceUrl, tapBrowserState, additionalClauses = '',
+                                      allowColumnConstraints = true, metaInfo = {}, tblOptions = {}}) {
     const isUserEnteredADQL = (request.selectBy === 'adql');
     let adql;
     let isUpload;
@@ -32,7 +33,6 @@ export function onTapSearchSubmit(request, serviceUrl, tapBrowserState, addition
     let schemaEntry;
     let userColumns;
     const userTitle= request[USER_ENTERED_TITLE];
-    console.log(userTitle);
 
     if (isUserEnteredADQL) {
         adql = request[ADQL_QUERY_KEY];
@@ -42,7 +42,7 @@ export function onTapSearchSubmit(request, serviceUrl, tapBrowserState, addition
         uploadTableName = isUpload && TAP_UPLOAD[uploadFile].table;
     }
     else {
-        adql = getAdqlQuery(tapBrowserState, additionalClauses);
+        adql = getAdqlQuery(tapBrowserState, additionalClauses, allowColumnConstraints);
         isUpload = isTapUpload(tapBrowserState);
         schemaEntry = getTapUploadSchemaEntry(tapBrowserState);
         const cols = schemaEntry.columns;
@@ -61,6 +61,8 @@ export function onTapSearchSubmit(request, serviceUrl, tapBrowserState, addition
         const hips= getServiceHiPS(serviceUrl);
         const adqlClean = adql.replace(/\s/g, ' ');    // replace all whitespaces with spaces
         const params = {serviceUrl, QUERY: adqlClean};
+        if (request.META_INFO)  params.META_INFO = request.META_INFO;       // pass along META_INFO if it exists
+
         if (isUpload) {
             params.UPLOAD= serverFile;
             params.adqlUploadSelectTable= uploadTableName;
@@ -70,15 +72,19 @@ export function onTapSearchSubmit(request, serviceUrl, tapBrowserState, addition
         const title= makeNumberedTitle(userTitle || makeTapSearchTitle(adqlClean,serviceUrl));
         const treq = makeTblRequest('AsyncTapQuery', title, params);
         setNoCache(treq);
-        const additionalTapMeta= {};
-        if (!isUserEnteredADQL) {
-            additionalTapMeta[PREF_KEY]= `${tapBrowserState.schemaName}-${tapBrowserState.tableName}`;
-        }
-        additionalTapMeta.serviceLabel= serviceLabel;
+        const cutoutType= getCutoutType(tapBrowserState);
+        const additionalTapMeta= {serviceLabel};
+        if (!isUserEnteredADQL) additionalTapMeta[PREF_KEY]= `${tapBrowserState.schemaName}-${tapBrowserState.tableName}`;
+        if (cutoutType) additionalTapMeta[MetaConst.OBSCORE_CUTOUT_TYPE]= cutoutType;
         if (hips) additionalTapMeta[MetaConst.COVERAGE_HIPS]= hips;
 
-        treq.META_INFO= {...treq.META_INFO, ...additionalTapMeta, ...metaInfo };
-        dispatchTableSearch(treq, {backgroundable: true, showFilters: true, showInfoButton: true});
+        treq.META_INFO= {
+            ...treq.META_INFO,
+            ...additionalTapMeta,
+            ...metaInfo,
+            [MetaConst.DATA_SERVICE_ID] : metaInfo?.[MetaConst.DATA_SERVICE_ID] ?? getServiceId(serviceUrl)
+        };
+        dispatchTableSearch(treq, {backgroundable: true, showFilters: true, showInfoButton: true, ...tblOptions});
     };
 
     if (!hasMaxrec && !adql.toUpperCase().match(/ TOP | WHERE /)) {
@@ -96,16 +102,21 @@ export function onTapSearchSubmit(request, serviceUrl, tapBrowserState, addition
     return false;
 }
 
+function getCutoutType(tapBrowserState) {
+  return tapBrowserState?.constraintFragments?.get('spatial')?.cutoutType;
+}
 
 
 /**
  *
  * @param {TapBrowserState} tapBrowserState
  * @param {string} additionalClauses post-WHERE clauses like ORDER BY, GROUP BY, etc. that can't be extracted from UI inputs
- * @param [showErrors]
- * @returns {string|null}
+ * @param {boolean} [allowColumnConstraints] - if false, do not check for column constraints and `SELECT * from table`
+ * @param [showErrors] display error popups
+ * @returns {string|undefined}
  */
-export function getAdqlQuery(tapBrowserState, additionalClauses, showErrors= true) {
+export function getAdqlQuery(tapBrowserState, additionalClauses, allowColumnConstraints=true,
+                             showErrors= true) {
     const tableName = maybeQuote(tapBrowserState?.tableName, true);
     if (!tableName) return;
     const isUpload= isTapUpload(tapBrowserState);
@@ -121,14 +132,15 @@ export function getAdqlQuery(tapBrowserState, additionalClauses, showErrors= tru
     }
 
     const helperFragment = getHelperConstraints(tapBrowserState);
+    const tableAsName = getAsEntryForTableName(tableName); // alias is used when upload table is present
     const tableCol = tableColumnsConstraints(tapBrowserState.columnsModel,
-        isUpload?getAsEntryForTableName(tableName):undefined);
+        isUpload ? tableAsName : undefined);
 
-    const { table:uploadTable, asTable:uploadAsTable, columns:uploadColumns}= isUpload ?
+    const { table:uploadTable, asTable:uploadAsTable, columns:uploadColumns} = isUpload ?
         getTapUploadSchemaEntry(tapBrowserState) : {};
 
     const fromTables= isUpload ?
-        `${tableName} AS ${getAsEntryForTableName(tableName)}, ${TAP_UPLOAD_SCHEMA}.${uploadTable} ${uploadAsTable ? 'AS '+uploadAsTable : ''}` :
+        `${tableName} AS ${tableAsName}, ${TAP_UPLOAD_SCHEMA}.${uploadTable} ${uploadAsTable ? 'AS '+uploadAsTable : ''}` :
         tableName;
 
     // check for errors
@@ -136,13 +148,13 @@ export function getAdqlQuery(tapBrowserState, additionalClauses, showErrors= tru
         if (showErrors) showInfoPopup(helperFragment.messages[0], 'Error');
         return;
     }
-    if (!tableCol.valid) {
+    if (allowColumnConstraints && !tableCol.valid) {
         if (showErrors) showInfoPopup(tableCol.message, 'Error');
         return;
     }
 
     // build columns
-    let selcols = tableCol.selcols || (isUpload ? `${tableName}.*` : '*');
+    let selcols = tableCol.selcols || (isUpload ? `${tableAsName}.*` : '*');
     if (isUpload) {
         const ut= uploadAsTable ?? uploadTable ?? '';
         const tCol= uploadColumns.filter(({use}) => use).map( ({name}) => ut+'.'+name);

@@ -117,10 +117,26 @@ export function modifyURLToFull(url, rootPath) {
 }
 
 export function isFullURL(url) {
-    if (!url) return false;
+    if (url instanceof URL) return true;
+    if (!url || !isString(url)) return false;
     const hPref = ['http', 'https', '/', 'file'];
     url = url.toLowerCase();
     return hPref.some((s) => url.startsWith(s));
+}
+
+/**
+ * return true if the string is a valid full url
+ * @param url
+ * @return {boolean}
+ */
+export function isValidFullUrl(url) {
+    if (url instanceof URL) return true;
+    if (!url || !isString(url)) return false;
+    try {
+        return Boolean(new URL(url));
+    } catch {
+        return false;
+    }
 }
 
 
@@ -252,6 +268,16 @@ export function loadCancelableImage(src) {
         }
     };
     return {promise, cancelImageLoad};
+}
+
+export function isURL(url) {
+    if (url instanceof URL) return true;
+    if (!isString(url)) return false;
+    try {
+        new URL(url);
+        return true;
+    } catch (e) { /* empty */ } // eslint-disable-line no-unused-vars
+    return false;
 }
 
 /**
@@ -816,6 +842,61 @@ export function matches(s, regExp, ignoreCase) {
     return false;
 }
 
+/**
+ * trim a string on one of several ways.
+ * <ul>
+ *  <li>middle - both end are preserver middle has an ellipsis</li>
+ *  <li>bothEnds - middle is preserved both ends have an ellipsis</li>
+ *  <li>complex - middle and ends are preserved with ellipsis between the parts </li>
+ *  <li>startMiddle - start and middle are preserved with ellipsis between the parts </li>
+ *  <li>start - start is preserved ellipsis at end</li>
+ *  <li>end - end is preserved ellipsis at start</li>
+ * </ul>
+ * @param s - the string to trim
+ * @param maxLength - max length of the string
+ * @param trimType - either- 'middle', 'bothEnds', 'complex', 'start', 'end', 'startMiddle', default to 'middle'
+ * @return {string}
+ */
+export function advancedTrim(s='', maxLength=15, trimType='middle') {
+    const len= s?.length ?? 0;
+    const e= '…';
+    if (!s || maxLength < 1 || len<maxLength) return s;
+    if (maxLength===1) return s[0] + '…';
+    const types= ['start', 'end', 'middle','bothends', 'startmiddle', 'complex'];
+    const useTrimType= types.find( (t) => t===trimType.toLowerCase()) ?? 'middle';
+
+    const midpoint = Math.ceil(len / 2);
+    const middleLen = len - maxLength;
+    const startLen = Math.ceil(middleLen / 2);
+    const endLen = middleLen - startLen;
+    const maxLenThird= Math.ceil(maxLength / 3);
+    const maxLenHalf= Math.ceil(maxLength / 2);
+    switch (useTrimType) {
+        case 'start':
+            return s.substring(0,maxLength) + e;
+        case 'end':
+            return e + s.substring(s.length-maxLength,s.length);
+        case 'startmiddle':
+            const start2= s.substring(0,maxLenHalf);
+            const halfHalf= Math.ceil(maxLenHalf/2);
+            const mid2= s.substring(midpoint-halfHalf, midpoint+halfHalf);
+            return `${start2}${e}${mid2}${e}`;
+            return '';
+        case 'bothends':
+            return e + s.substring(midpoint-maxLenHalf, midpoint+maxLenHalf)+ e;
+        case 'complex':
+            const start3= s.substring(0,maxLenThird);
+            const end3= s.substring(s.length-maxLenThird);
+            const halfThird= Math.ceil(maxLenThird/2);
+            const mid3= s.substring(midpoint-halfThird, midpoint+halfThird);
+            return `${start3}${e}${mid3}${e}${end3}`;
+        case 'middle':
+        default:
+            return s.substring(0, midpoint - startLen) + e + s.substring(midpoint + endLen);
+
+    }
+}
+
 export const matchesIgCase= (s, regExp) => matches(s, regExp, true);
 
 export function uuid() {
@@ -842,6 +923,49 @@ export function tokenSub(valObs, str='') {
     return replaceStr;
 }
 
+
+// todo- the following two functions are not used but keep the around for awhile
+//       remove in a few months (8/25?) if still not being used
+// export function subCompare(str1, str2, minSubstringLength=2) {
+//     // Search possible substrings from largest to smallest:
+//     for (let i=str1.length; i>=minSubstringLength; i--) {
+//         for (let j=0; j <= (str1.length - i); j++) {
+//             const substring = str1.substr(j,i);
+//             const k = str2.indexOf(substring);
+//             if (k !== -1) {
+//                 return { str1, str2, found : true, substring, str1Index : j, str2Index : k};
+//             }
+//         }
+//     }
+//     return { found : false };
+// }
+//
+// /**
+//  *
+//  * @param {string} str1
+//  * @param {string} str2
+//  * @param minSubstringLength
+//  * @return {{str1: string, str2: string, found: boolean, substring: string, str1Index: number, str2Index: number}
+//  */
+// export function endCompare(str1, str2, minSubstringLength=2) {
+//     if (!str1 || !str2) return { found : false };
+//     for (let i=0; i <= (str1.length-1); i++) {
+//         const substring = str1.substring(i);
+//         const found = substring.length>=minSubstringLength ?  str2.endsWith(substring) : false;
+//         if (found) {
+//             return { str1, str2, found, substring, str1Index : i, str2Index: str2.indexOf(substring)};
+//         }
+//     }
+//     return { found : false };
+// }
+
+
+
+
+
+
+
+
 /**
  * File is safe to use from a WebWorker
  */
@@ -856,36 +980,40 @@ export function tokenSub(valObs, str='') {
  */
 export async function lowLevelDoFetch(url, options, doValidation, loggerFunc) {
     if (options.params) {
-        const params = toNameValuePairs(options.params);        // convert to name-value pairs if it's a simple object.
-        if (options.method.toLowerCase() === 'get') {
+        const params = toNameValuePairs(options.params); // Convert to name-value pairs
+        const method = options.method.toLowerCase();
+
+        if (method === 'get') {
             url = encodeUrl(url, params);
         } else {
             url = encodeUrl(url);
             if (!options.body) {
-                // if 'post' but, body is not provided, add the parameters into the body.
-                if (options.method.toLowerCase() === 'post') {
-                    options.headers['Content-type'] = 'application/x-www-form-urlencoded';
-                    options.body = params.map(({name, value = ''}) => encodeURIComponent(name) + '=' + encodeURIComponent(value))
-                        .join('&');
-                } else if (options.method.toLowerCase() === 'multipart') {
-                    options.method = 'post';
+                // Handle POST and multipart/form-data encoding
+                if (method === 'post') {
+                    // if 'post' but, body is not provided, add the parameters into the body.
+                    options.headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+                    options.body = params.map(({
+                                                   name,
+                                                   value = ''
+                                               }) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&');
+                } else if (method === 'multipart') {
+                    options.method = 'post'; // Ensure method is set correctly
                     const data = new FormData();
-                    params.forEach(({name, value}) => {
-                        data.append(name, value);
-                    });
+                    params.forEach(({name, value}) => data.append(name, value));
                     options.body = data;
+                    delete options.headers['Content-Type']; // Let browser set it for FormData
                 }
-                Reflect.deleteProperty(options, 'params');
             }
         }
+        Reflect.deleteProperty(options, 'params');
     }
 
-    loggerFunc?.({url, options});
-    // do the actually fetch, then return a promise.
-    const response= await fetch(url, options);
+    loggerFunc?.({ url, options });
+    // do the actual fetch, then return a promise.
+    const response = await fetch(url, options);
     if (!doValidation || response.ok) return response;
-    else if (response.status === 401) throw new Error('You are no longer logged in');
-    else throw new Error(`Request failed with status ${response.status}: ${url}`);
+    if (response.status === 401) throw new Error('You are no longer logged in');
+    throw new Error(`Request failed with status ${response.status}: ${url}`);
 }
 
 export function getStatusFromFetchError(eStr) {
@@ -900,3 +1028,68 @@ export function setIf(object, path, value, predicate=isUndefined) {
     const cv = get(object, path);
     if (predicate?.(cv)) set(object, path, value);
 }
+
+/**
+ * Process through an array or list and acting on each element. Return a promise that will return true if
+ * interation successfully completes
+ *
+ * @param {object} params
+ * @param params.iterator - iterator through an array or list
+ * @param {function} params.processValue - function to act on the next value of the interator
+ * @param {number} [params.intervalBreak] - how ofter the stop looping
+ * @param {function} [params.percentUpdate] - will call with percentage every 5 percent
+ * @param {number} [params.length] - length of the data being processed, only required if using percentUpdate
+ * @param {function} [params.shouldAbort] - call occasionally - return true if should abort, promise will return false
+ * @return {Promise<Boolean>}
+ */
+export function createBackgroundRunner({
+                                          iterator,
+                                          processValue,
+                                          intervalBreak= 10000,
+                                          percentUpdate= () => undefined,
+                                          length,
+                                          shouldAbort= () => false} ) {
+
+    let i=0;
+    let isDone= false;
+    let intervalID= undefined;
+    let percent= 0;
+
+    const showProgress= (i,length) => {
+        if (length < 750000 || i % 10000 !== 0) return percent;
+        const newPercent = Math.trunc(100 * (i / length));
+        if (newPercent > percent + 4) {
+            percent = newPercent;
+            percentUpdate(percent);
+        }
+        return percent;
+    };
+
+    const worker= (resolve) => {
+        if (shouldAbort()) {
+            isDone=true;
+            resolve(false);
+            window.clearInterval(intervalID);
+            return;
+        }
+        if (isDone) window.clearInterval(intervalID);
+        for (; (!isDone);) {
+            const {value, done}= iterator.next();
+            isDone= done;
+            if (!isDone) {
+                processValue(value, i);
+                i++;
+                if (length && percentUpdate) showProgress(i,length);
+                if (i % intervalBreak === 0) return;
+            }
+        }
+        resolve(true);
+    };
+
+
+    return new Promise( (resolve) => {
+        intervalID = window.setInterval(() => worker(resolve));
+    } );
+}
+
+export const varStr = (str) => '${' + str + '}';

@@ -4,30 +4,49 @@
 
 package edu.caltech.ipac.firefly.core.background;
 
+import edu.caltech.ipac.firefly.api.Async;
+import edu.caltech.ipac.firefly.core.Util.Try;
 import edu.caltech.ipac.firefly.data.ServerEvent;
+import edu.caltech.ipac.firefly.data.userdata.UserInfo;
+import edu.caltech.ipac.firefly.messaging.Message;
+import edu.caltech.ipac.firefly.messaging.Messenger;
+import edu.caltech.ipac.firefly.messaging.Subscriber;
 import edu.caltech.ipac.firefly.server.RequestOwner;
 import edu.caltech.ipac.firefly.server.ServerContext;
+import edu.caltech.ipac.firefly.server.cache.DistribMapCache;
 import edu.caltech.ipac.firefly.server.events.FluxAction;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
 import edu.caltech.ipac.firefly.server.events.WebsocketConnector;
-import edu.caltech.ipac.firefly.server.packagedata.PackagedEmail;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.util.AppProperties;
+import edu.caltech.ipac.util.cache.CacheKey;
+import edu.caltech.ipac.util.cache.CacheManager;
+import edu.caltech.ipac.util.cache.StringKey;
 import org.apache.commons.lang.text.StrBuilder;
 import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import redis.clients.jedis.params.ScanParams;
 
+import javax.annotation.Nonnull;
+import java.io.Serializable;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-import static edu.caltech.ipac.firefly.api.Async.getAsyncUrl;
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotEmpty;
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
+import static edu.caltech.ipac.firefly.core.background.JobInfo.*;
+import static edu.caltech.ipac.firefly.core.background.JobUtil.*;
 import static edu.caltech.ipac.firefly.data.ServerParams.EMAIL;
-import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 import static edu.caltech.ipac.firefly.core.background.Job.Type.PACKAGE;
 import static edu.caltech.ipac.firefly.core.background.JobInfo.Phase.*;
@@ -41,227 +60,251 @@ import static edu.caltech.ipac.firefly.core.background.JobInfo.Phase.*;
  */
 public class JobManager {
 
-    private static final int KEEP_ALIVE_INTERVAL = AppProperties.getIntProperty("job.keepalive.interval", 30);    // default keepalive interval in seconds
-    private static final int WAIT_COMPLETE = AppProperties.getIntProperty("job.wait.complete", 1);                // wait for complete after submit in seconds
-    private static final int MAX_PACKAGERS = AppProperties.getIntProperty("job.max.packagers", 10);               // maximum number of simultaneous packaging threads
+    public static final String BG_INFO = "background.info";
+    public static final String ALL_JOB_CACHE_KEY = "ALL_JOB_INFOS"; // cache key for all job infos
+    public static final long CLEANUP_INTVL_MINS = AppProperties.getIntProperty("job.cleanup.interval", 12*60);          // run cleanup once every 12 hours
+    public static final int JOB_LIST_DEFAULT_LIMIT = AppProperties.getIntProperty("job.list.default.limit", 100_000);    // the default limit for job list queries
+    private static final int KEEP_ALIVE_INTERVAL = AppProperties.getIntProperty("job.keepalive.interval", 60);  // default keepalive interval in seconds
+    private static final int WAIT_COMPLETE = AppProperties.getIntProperty("job.wait.complete", 1);              // wait for complete after submit in seconds
+    private static final int MAX_PACKAGERS = AppProperties.getIntProperty("job.max.packagers", 10);             // maximum number of simultaneous packaging threads
+    private static final int JOB_EXPIRY_HOURS = AppProperties.getIntProperty("job.expiry.hours", 24*14);        // Time in hours to keep a job after it has ended.  Default to 14 days.
+    public static final int JOB_SCAN_BATCH_SIZE = AppProperties.getIntProperty("job.scan.batch_size", 10_000);   // batch size for scanning job keys in Redis.  Default to 10,000.  Larger value return more keys per call but use more CPU and memory per iteration.  this is a good size for larger redis store.
 
-    private static Logger.LoggerImpl LOG = Logger.getLogger();
-    private static ExecutorService packagers = Executors.newFixedThreadPool(MAX_PACKAGERS);
-    private static ExecutorService searches = Executors.newCachedThreadPool();
-    private static HashMap<String, JobEntry> runningJobs = new HashMap<>();
-    private static HashMap<String, JobInfo> allJobInfos = new HashMap<>();
+    private static final Logger.LoggerImpl LOG = Logger.getLogger();
+    private static final ExecutorService packagers = Executors.newFixedThreadPool(MAX_PACKAGERS);
+    private static final ExecutorService searches = Executors.newCachedThreadPool();
+    private static final HashMap<String, JobEntry> runningJobs = new HashMap<>();
+    private static final DistribMapCache<JobInfo> allJobInfos = new DistribMapCache<>(ALL_JOB_CACHE_KEY, 0, new JobInfoSerializer()); // the all job hash should never expire
+    private static final String COMPLETED_HANDLER = AppProperties.getProperty("job.completed.handler");
+    private static final CacheKey JOB_CACHE_VERSION_KEY = new StringKey("job.all.cache.version");
+    private static final String JOB_CACHE_VERSION = "1.0";
 
     static {
+        if (!isEmpty(COMPLETED_HANDLER)) {
+            Class<?> clz = Try.it(() -> Class.forName(COMPLETED_HANDLER)).get();
+            if (clz != null && JobCompletedHandler.class.isAssignableFrom(clz)) {
+                JobCompletedHandler handler = Try.it(() -> (JobCompletedHandler) clz.newInstance()).get();
+                if (handler != null)    Messenger.subscribe(JobCompletedEvent.TOPIC, handler);
+            } else {
+                LOG.error("Invalid JobCompletedHandler class: " + COMPLETED_HANDLER);
+            }
+        }
+
+        Messenger.subscribe(JobEvent.TOPIC, new JobEventHandler());
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
                     JobManager::checkJobs, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_INTERVAL, TimeUnit.SECONDS);   // check every 30 seconds
-    }
 
-    private static String nextJobId() {
-        return String.valueOf(System.currentTimeMillis());
+
+        String jobCacheVersion = (String) CacheManager.getDistributed().get(JOB_CACHE_VERSION_KEY);
+        if (isEmpty(jobCacheVersion) || !jobCacheVersion.equals(JOB_CACHE_VERSION)) {
+            LOG.info("Migrating job cache keys to new format");
+            int count = migrateRedisKeys();
+            LOG.info("Migrated " + count + " job cache keys to new format");
+            CacheManager.getDistributed().put(JOB_CACHE_VERSION_KEY, JOB_CACHE_VERSION); // set the version
+        }
     }
 
     /**
      * @return a list of JobInfo belonging to the current request owner
      */
     public static List<JobInfo> list() {
-        String owner = ServerContext.getRequestOwner().getUserKey();
-        return allJobInfos.values().stream()
-                  .filter(info -> info != null && owner.equals(info.getOwner()))
-                  .collect(Collectors.toList());
-    }
-
-    public static JobInfo getJobInfo(String jobId) {
-        return allJobInfos.get(jobId);
-    }
-
-
-    public static void sendUpdate(JobInfo jobInfo) {
-        if (jobInfo.getPhase() == COMPLETED) {
-            runningJobs.remove(jobInfo.getJobId());
-        }
-        // send updated jobInfo to client
-        FluxAction addAction = new FluxAction(FluxAction.JOB_INFO, toJsonObject(jobInfo));
-        ServerEventManager.fireAction(addAction, ServerEvent.Scope.USER);
+        List<JobInfo> userJobs = JobManager.getUserJobs();      // Ensure getUserJobs() is called only once, since it may be expensive. List is updated and returned at the end.
+        UWS_HISTORY_SVCS.forEach(svc -> {
+            Try.it(() -> importJobHistories(svc, userJobs)).getOrElse(LOG::error);
+        });
+        return userJobs;
     }
 
     public static JobInfo submit(Job job) {
         RequestOwner reqOwner = ServerContext.getRequestOwner();
-        JobInfo info = new JobInfo(nextJobId());
-        Instant start = Instant.now();
-        info.setStartTime(start);
-        info.setCreationTime(start);
-        info.setDestruction(start.plus(7, ChronoUnit.DAYS));
-        info.setOwner(reqOwner.getUserKey());
-        info.setPhase(QUEUED);
-        info.setEventConnId(reqOwner.getEventConnID());
-        info.setType(job.getType());
-        allJobInfos.put(info.getJobId(), info);
-
+        String jobId = nextJobId();
+        updateJobInfo(jobId, true, ji -> {      // setting 'true' to add this jobInfo into the datastore
+            Instant start = Instant.now();
+            ji.setCreationTime(start);
+            ji.setDestruction(start.plus(7, ChronoUnit.DAYS));
+            ji.getMeta().setType(job.getType());
+        });
+        // update Job after jobInfo has been created
         job.runAs(reqOwner);
-        job.setJobId(info.getJobId());
+        job.setJobId(jobId);
 
-        logJobInfo(info);
-        Future future = job.getType() == PACKAGE ? packagers.submit(job) : searches.submit(job);
+        sendUpdate(jobId, ji -> {
+            ji.setPhase(QUEUED);
+            ji.getMeta().setProgress(0);
+        });
 
         try {
+            Future<String> future = job.getType() == PACKAGE ? packagers.submit(job) : searches.submit(job);
+            runningJobs.put(jobId, new JobEntry(future, job));
+
             future.get(WAIT_COMPLETE, TimeUnit.SECONDS);        // wait in seconds for a job to complete
-        } catch (InterruptedException e) {
-            info.setPhase(ABORTED);
-            logJobInfo(info);
         } catch (TimeoutException e) {
-            // it's ok.. job may take longer to complete
+            // it's ok; job may take longer to complete
         } catch (Exception e) {
-            if (info.getPhase() != ERROR) {
-                job.setError(500, e.getMessage());
-            }
-            logJobInfo(info);
+            // job run() handles exceptions; this only happens if submit or future.get() fails
+            sendUpdate(jobId, (ji) -> {
+                ji.setError(new JobInfo.Error(500, e.getMessage()));
+                ji.getMeta().setProgress(100, null);
+            });
             LOG.error(e);
-        }
-
-        if (future.isDone() && info.getPhase() != ERROR && info.getPhase() != ABORTED) {
-            info.setPhase(COMPLETED);
-        } else {
-            runningJobs.put(job.getJobId(), new JobEntry(future, job));
-        }
-        sendUpdate(info);
-        return job.getJobInfo();
-    }
-
-    public static JobInfo abort(String jobId, String reason) {
-        JobEntry jobEntry = runningJobs.get(jobId);
-        if (jobEntry != null) {
-            if (jobEntry.job != null) {
-                if (jobEntry.job.getWorker() != null) {
-                    jobEntry.job.getWorker().onAbort();
-                }
-            }
-            if (jobEntry.future != null) jobEntry.future.cancel(true);
-
-            runningJobs.remove(jobId);
-            JobInfo info = getJobInfo(jobId);
-            info.setError(new JobInfo.Error(410, reason));
-            info.setPhase(ABORTED);
-            sendUpdate(info);
         }
         return getJobInfo(jobId);
     }
 
-    public static JobInfo setMonitored(String jobId, boolean isMonitored) {
-        JobInfo info = getJobInfo(jobId);
-        if (info != null && info.isMonitored() != isMonitored) {
-            info.setMonitored(isMonitored);
-            sendUpdate(info);
+    public static JobInfo abort(String jobId, String reason) {
+        JobInfo info = updateJobInfo(jobId, (ji) -> {
+            ji.setError(new JobInfo.Error(410, reason));
+            ji.setPhase(ABORTED);
+        });
+        if (info != null) {
+            Messenger.publish(new JobEvent(JobEvent.EventType.ABORTED, info));      // notify all instances AFTER jobInfo is updated
         }
         return info;
+    }
+
+    public static void removeJob(String jobId) {
+        ifNotNull(getJobInfo(jobId)).apply(ji -> {
+            allJobInfos.remove(cacheKey(ji));
+            removeLocalJob(ji);
+        });
+    }
+
+    static void removeLocalJob(JobInfo jobInfo) {
+        if (jobInfo == null) return;
+        JobEntry jobEntry = runningJobs.get(jobInfo.getMeta().getJobId());
+        if (jobEntry != null) {
+            if (jobEntry.future != null) jobEntry.future.cancel(true);
+            runningJobs.remove(jobInfo.getMeta().getJobId());
+        }
+    }
+
+    @Nonnull
+    public static BackGroundInfo getBackgroundInfo() {
+        BackGroundInfo bgInfo = CacheManager.<BackGroundInfo>getUserCache().get(new StringKey(BG_INFO));
+        return bgInfo == null ? new BackGroundInfo(false, "") : bgInfo;
+    }
+
+    public static void setBackgroundInfo(BackGroundInfo bfInfo) {
+        CacheManager.getUserCache().put(new StringKey(BG_INFO), bfInfo);
+    }
+
+    public static JobInfo setMonitored(String jobId, boolean isMonitored) {
+        return sendUpdate(jobId, ji -> ji.getMeta().setMonitored(isMonitored));
     }
 
     public static JobInfo sendEmail(String jobId, String email) {
-        JobInfo info = getJobInfo(jobId);
-        if (!isEmpty(email)) info.getParams().put(EMAIL, email);
-        PackagedEmail.send(info);
-        return info;
+        updateJobInfo(jobId, (ji) -> ji.getMeta().getParams().put(EMAIL, email));
+        JobInfo jobInfo = getJobInfo(jobId);
+        if (jobInfo != null) EmailNotification.sendNotification(jobInfo);
+        return jobInfo;
     }
 
     public static String results(String jobId) {
-        return toJsonResults(getJobInfo(jobId));
+        return ifNotNull(getJobInfo(jobId)).get(JobUtil::toJsonResults);
     }
-
 
 //====================================================================
-//
+//  Getter/Setter
 //====================================================================
 
-    public static String toJson(JobInfo info) {
-        JSONObject jsonObject = toJsonObject(info);
-        return jsonObject == null ? "null" : jsonObject.toJSONString();
-    }
-
-    public static JSONObject toJsonObject(JobInfo info) {
-        if (info == null) return null;
-        String asyncUrl = getAsyncUrl();
-
-        JSONObject rval = new JSONObject();
-        rval.put("jobId", info.getJobId());
-        applyIfNotEmpty(info.getRunId(), v -> rval.put("runId", v));
-        applyIfNotEmpty(info.getOwner(), v -> rval.put("ownerId", v));
-        applyIfNotEmpty(info.getPhase(), v -> rval.put("phase", v.toString()));
-        applyIfNotEmpty(info.getQuote(),   v -> rval.put("quote", v.toString()));
-        applyIfNotEmpty(info.getCreationTime(),   v -> rval.put("creationTime", v.toString()));
-        applyIfNotEmpty(info.getStartTime(),   v -> rval.put("startTime", v.toString()));
-        applyIfNotEmpty(info.getEndTime(),   v -> rval.put("endTime", v.toString()));
-        applyIfNotEmpty(info.executionDuration(),   v -> rval.put("executionDuration", v.toString()));
-        applyIfNotEmpty(info.getDestruction(), v -> rval.put("destruction", v.toString()));
-        rval.put("parameters", info.getParams());
-
-        if (info.getPhase() == COMPLETED && info.getResults().size() == 0) {
-            rval.put("results", Arrays.asList(toResult(asyncUrl + info.getJobId() + "/results/result", null, null)));
-        } else if (info.getResults().size() > 0) {
-            rval.put("results", toResults(info.getResults()));
-        }
-        applyIfNotEmpty(info.getError(),   v -> {
-            JSONObject errSum = new JSONObject();
-            errSum.put("message", v.msg());
-            errSum.put("type", v.code() < 500 ? "fatal" : "transient");     // 5xx are typically system error, e.g. server down.
-            rval.put("errorSummary", errSum);
-        });
-
-
-        JSONObject addtlInfo = new JSONObject();
-        rval.put("jobInfo", addtlInfo);
-        applyIfNotEmpty(info.getType(),   v -> addtlInfo.put("type", v.toString()));
-        applyIfNotEmpty(info.getLabel(), v -> addtlInfo.put("label", v));
-        applyIfNotEmpty(info.getProgress(),   v -> addtlInfo.put("progress", v));
-        applyIfNotEmpty(info.isMonitored(),   v -> addtlInfo.put("monitored", v));
-        applyIfNotEmpty(info.getProgressDesc(),   v -> addtlInfo.put("progressDesc", v));
-        applyIfNotEmpty(info.getDataOrigin(), v -> addtlInfo.put("dataOrigin", v));
-        applyIfNotEmpty(info.getSummary(),   v -> addtlInfo.put("summary", v));
-        applyIfNotEmpty(info.getLocalRunId(),   v -> addtlInfo.put("localRunId", v));
-
-        return rval;
-    }
-
-    public static List<JSONObject> toResults(List<JobInfo.Result> results) {
-        return results.stream().map(r -> toResult(r.href(), r.mimeType(), r.size()))
-                .collect(Collectors.toList());
-    }
-
-    private static JSONObject toResult(String href, String mimeType, String size) {
-        JSONObject ro = new JSONObject();
-        applyIfNotEmpty(href,   v -> ro.put("href", v));
-        applyIfNotEmpty(mimeType,   v -> ro.put("mimeType", v));
-        applyIfNotEmpty(size,   v -> ro.put("size", v));
-        return ro;
+    public static JobInfo getJobInfo(String jobId) {
+        String userKey = ServerContext.getRequestOwner().getUserKey();
+        return getJobInfo(jobId, userKey);
     }
 
     /**
-     * @param infos
-     * @return an array of job IDs under the 'jobs' prop as a json string
+     * Retrieves the stored JobInfo with the given jobId and userKey.
+     * Returned value is read-only.  Use updateJobInfo to update the JobInfo.
+     * @param jobId the ID of the job
+     * @return the JobInfo with the jobId, or null not found
      */
-    public static String toJsonJobList(List<JobInfo> infos) {
-        JSONObject rval = new JSONObject();
-        if (infos != null && infos.size() > 0) {
-            // object with "jobs": array of JobInfo urls
-            List<String> urls = infos.stream().map(i ->i.getJobId()).collect(Collectors.toList());
-            rval.put("jobs", urls);
-        }
-        return rval.toJSONString();
+    public static JobInfo getJobInfo(String jobId, String userKey) {
+        if (isEmpty(jobId)) return null;
+        return allJobInfos.get(cacheKey(jobId, userKey));
+    }
+
+    public static JobInfo getJobInfo(CacheKey ckey) {
+        if (isEmpty(ckey)) return null;
+        return allJobInfos.get(ckey);
+    }
+
+
+    /**
+     *  see {@link #updateJobInfo(String, boolean, Consumer)}
+     */
+    public static JobInfo updateJobInfo(String jobId, Consumer<JobInfo> func) {
+        return updateJobInfo(jobId, false, func);
     }
 
     /**
+     * Retrieves the stored JobInfo, applies the updates, and returns the updated JobInfo.
+     * This is done only when there is a JobInfo with the given jobId.
+     * @param jobId refers to Firefly's internal jobId, accessible via JobInfo.getMeta().getJobId().
+     * @param addIfNoFound if true, a new JobInfo will be created and stored if no JobInfo is found with the given jobId
+     * @param func the update function to apply to the JobInfo
+     * @return the updated JobInfo, or null if no JobInfo is found
+     */
+    public static JobInfo updateJobInfo(String jobId, boolean addIfNoFound, Consumer<JobInfo> func) {
+        JobInfo info = getJobInfo(jobId);
+        if (info == null && addIfNoFound) {
+            info = new JobInfo(jobId);
+            initNewJob(info);
+        }
+        if (info == null || func == null) return null;
+        func.accept(info);
+        updateJobInfo(info);
+        return info;
+    }
+
+    /**
+     * This method updates the JobInfo using the provided function and publishes an update event.
+     * @param jobId the ID of the job to update
+     * @param func the function to apply to the JobInfo
+     */
+    public static JobInfo sendUpdate(String jobId, Consumer<JobInfo> func) {
+        JobInfo jobInfo = updateJobInfo(jobId, func);
+        if (jobInfo != null) {
+            Messenger.publish(new JobEvent(JobEvent.EventType.UPDATED, jobInfo));
+            Logger.getLogger().trace("sendUpdate: " + jobInfo.getMeta().getJobId() + " " + jobInfo.getPhase() + jobInfo.getMeta().getProgressDesc());
+        }
+        return jobInfo;
+    }
+
+    /**
+     * internal method to update the JobInfo in the datastore
      * @param info
-     * @return an array of result URLs for the given job
      */
-    public static String toJsonResults(JobInfo info) {
-        JSONObject rval = new JSONObject();
-        if (info.getPhase() == COMPLETED) {
-            if (info.getResults().size() == 0) {
-                rval.put("results", Arrays.asList(getAsyncUrl() + info.getJobId() + "/results/result"));
-            } else {
-                rval.put("results", info.getResults());
+    private static void updateJobInfo(JobInfo info) {
+        CacheKey key = cacheKey(info);
+        if (key != null) {
+            boolean isCompleted = ifNotNull(allJobInfos.get(key)).get(JobInfo::getPhase) == COMPLETED;
+            allJobInfos.put(key, info);
+            if (info.getPhase() == COMPLETED && !isCompleted) {     // job changed from not completed to completed
+                if (info.getResults().isEmpty()) {                  // if no results, add a default result
+                    info.setResults(List.of(new Result("result", Async.getAsyncUrl() + info.getMeta().getJobId() + "/results/result", null, null)));
+                }
+                runningJobs.remove(info.getMeta().getJobId());
+                if (info.getMeta().isMonitored()) {
+                    publishCompleted(info);
+                }
+            }
+            logJobInfo(info);
+        }
+    }
+
+    static void publishCompleted(JobInfo jobInfo) {
+        if (jobInfo != null) {
+            if (jobInfo.getMeta().getSendNotif()) {
+                Messenger.publish(new JobCompletedEvent(jobInfo));       // notify all instances this job is completed
             }
         }
-        return rval.toJSONString();
     }
+
+    public record BackGroundInfo(boolean notifEnabled, String email) implements Serializable {}
+
+//====================================================================
+//  Job statistics
+//====================================================================
 
     /**
      * Print job statistics info
@@ -270,94 +313,285 @@ public class JobManager {
     public static String getStatistics(boolean details) {
         StrBuilder sb = new StrBuilder();
 
-
         sb.append        ("          |   Job Count Active Count  Error Count\n");
         sb.append        ("          |------------ ------------ ------------\n");
+        List<JobInfo> allJobs = getAllJobs();
 
         Arrays.stream(Job.Type.values()).forEach(type -> {
-            long total = allJobInfos.values().stream().filter(v -> v.getType() == type).count();
-            long active = allJobInfos.values().stream().filter(v -> v.getPhase() == EXECUTING && v.getType() == type).count();
-            long error = allJobInfos.values().stream().filter(v -> v.getPhase() == ERROR && v.getType() == type).count();
+            long total = allJobs.stream().filter(v -> v.getMeta().getType() == type).count();
+            long active = allJobs.stream().filter(v -> v.getPhase() == EXECUTING && v.getMeta().getType() == type).count();
+            long error = allJobs.stream().filter(v -> v.getPhase() == ERROR && v.getMeta().getType() == type).count();
 
             sb.append(String.format("%9s |%,12d %,12d %,12d\n", type, total, active, error));
         });
 
         if (details) {
-            sb.append("\n");
-            sb.append("JOB ID          PHASE       startTime              elapsedTime(s) progress\n");
-            sb.append("--------------- ----------- ---------------------- -------------- --------\n");
-            allJobInfos.forEach((k, v) -> {
-                Instant endT = v.getEndTime() != null ? v.getEndTime() : Instant.now();
-                sb.append(String.format("%15s %11s %22s %,14d %8d\n",
-                        v.getJobId(), v.getPhase(), v.getStartTime().truncatedTo(ChronoUnit.SECONDS), Duration.between(v.getStartTime(), endT).toSeconds(), v.getProgress()));
+            allJobs.sort(
+                    Comparator.comparing(
+                            JobInfo::getCreationTime,
+                            Comparator.nullsFirst(Comparator.naturalOrder())
+                    ).reversed()
+            );
+
+
+            sb.append("\n (ONLY THE LATEST 100 JOBS ARE SHOWN BELOW) \n");
+            sb.append("JOB ID               LOCAL JOB ID         PHASE       creationTime           elapsedTime(s) progress monitored userKy                               \n");
+            sb.append("-------------------- -------------------- ----------- ---------------------- -------------- -------- --------- -------------------------------------\n");
+            allJobs.stream().limit(100).forEach((ji) -> {
+                Instant endT = ji.getEndTime();
+                Instant startT = ji.getStartTime();
+                sb.append(String.format("%-20s %-20s %-11s %-22s %,14d %8d %9s %-37s\n",
+                        ji.getJobId(),
+                        ji.getMeta().getJobId(),
+                        ji.getPhase(),
+                        ji.getCreationTime() == null ? "" : ji.getCreationTime().truncatedTo(ChronoUnit.SECONDS),
+                        startT == null || endT == null ? -1 : Duration.between(startT, endT).toSeconds(),
+                        ji.getMeta().getProgress(),
+                        ji.getMeta().isMonitored(),
+                        ji.getMeta().getUserKey()));
             });
         }
         return sb.toString();
     }
 
-    static void logJobInfo(JobInfo info) {
-        LOG.debug(String.format("JOB:%s  owner:%s  phase:%s  msg:%s", info.getJobId(), info.getOwner(), info.getPhase(), info.getSummary()));
-        LOG.trace(String.format("JOB: %s details: %s", info.getJobId(), toJson(info)));
+    static List<JobInfo> getRunningJobs() {
+        return runningJobs.values().stream()
+                .map(je -> getJobInfo(je.job.getJobId()))               // convert JobEntry to JobInfo
+                .filter(Objects::nonNull).toList();                     // return only non-null JobInfo
+    }
+    /**
+     * Get all job keys in the datastore.
+     * @return a list of all job keys in the datastore
+     */
+    static List<String> getAllJobKeys() {
+        return allJobInfos.getKeys().stream().map(CacheKey::getUniqueString).toList();
     }
 
+    /**
+     * Get jobs history.  This may be expensive when there are huge number of jobs, so use with caution.
+     * @return a list of all JobInfo in the datastore
+     */
+    static List<JobInfo> getAllJobs() {
+        ScanParams scanParams = new ScanParams().match("*").count(JOB_SCAN_BATCH_SIZE); // adjust count as needed
+        return allJobInfos.getValuesFor(scanParams);
+    }
 
+    /**
+     * Get all jobs that belong to the current user
+     * @return a list of JobInfo that belong to the current user
+     */
+    static List<JobInfo> getUserJobs() {
+        String userKey = ServerContext.getRequestOwner().getUserKey();
+        ScanParams scanParams = new ScanParams().match("*:%s".formatted(userKey)).count(JOB_SCAN_BATCH_SIZE); // adjust count as needed
+        return allJobInfos.getValuesFor(scanParams);
+    }
 
 //====================================================================
-//
+//  internal methods
 //====================================================================
+
+    /**
+     * Setup required job meta and other information used by internal sub-systems.
+     * @param ji the JobInfo to initialize
+     */
+    private static void initNewJob(JobInfo ji) {
+        // set required job meta
+        RequestOwner reqOwner = ServerContext.getRequestOwner();
+        ji.getMeta().setJobId(ji.getJobId());
+        ji.getMeta().setUserKey(reqOwner.getUserKey());
+        ji.getMeta().setEventConnId(reqOwner.getEventConnID());
+        ji.getMeta().setRunHost(hostName());
+        ji.getMeta().setAppUrl(ServerContext.getRequestOwner().getBaseUrl());
+        ji.getMeta().setMonitored(true);                // all async jobs are monitored by default
+
+        // set user info
+        UserInfo uInfo = reqOwner.getUserInfo();
+        String email = ifNotEmpty(ji.getAux().getUserEmail()).getOrElse(uInfo.getEmail());
+        String name = Stream.of(uInfo.getFirstName(), uInfo.getLastName())
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining(" "));
+        ji.getAux().setUserName(name);
+        ji.getAux().setUserEmail(email);
+        ji.getAux().setUserId(uInfo.getLoginName());
+    }
+
+    private static CacheKey cacheKey(JobInfo jobInfo) {
+        return cacheKey(jobInfo.getMeta().getJobId(), jobInfo.getMeta().getUserKey());
+    }
+
+    /**
+     * Redis key is compose of jobId and userKey.  This is so that we can filter the keys for a specific user.
+     * jobId should still be unique.  If jobId is empty, it will return null.
+     * @param jobId
+     * @param userKey
+     * @return a CacheKey for the jobId and userKey, or null if jobId is empty
+     */
+    private static CacheKey cacheKey(String jobId, String userKey) {
+        return isEmpty(jobId) ? null : new StringKey(jobId + ":" + userKey);
+    }
 
     private static void checkJobs() {
 
-        // ping clients with active(EXECUTING) job
-        List<String> activeClients = runningJobs.values().stream().map(jobEntry -> jobEntry.job.getJobInfo())
-                                    .filter(info -> info != null && info.getPhase() == EXECUTING)
-                                    .map(info -> info.getOwner() + "||" + info.getEventConnId())
-                                    .distinct()
-                                    .collect(Collectors.toList());
-        activeClients.forEach(client -> {
-            String[] ownerConnId = client.split("||");
-            WebsocketConnector.pingClient(ownerConnId[0], ownerConnId[1]);
-        });
+        // ping clients with active(EXECUTING) job to keep the connection alive
+        getRunningJobs().stream().filter(fi -> fi != null && fi.getPhase() == EXECUTING)     // all running jobs
+                .map(fi -> fi.getMeta().getUserKey() + ":" + fi.getMeta().getEventConnId()).distinct()       // get distinct list of userKey and connId
+                .forEach(client -> {                                                    // ensure it gets pinged only once, regardless of the number of jobs it has.
+                    String[] ownerConnId = client.split(":");
+                    WebsocketConnector.pingClient(ownerConnId[0], ownerConnId[1]);      // this will only ping client with the given owner/connId
+                });
 
         // kill expired jobs
-        runningJobs.values().forEach(je -> {
-            JobInfo info = je.job.getJobInfo();
-            long duration = info.executionDuration();
-            if (duration != 0 && info.getStartTime().plus(duration, ChronoUnit.SECONDS).isBefore(Instant.now())) {
-                abort(info.getJobId(), "Exceeded execution duration");
-            }
-        });
+        getRunningJobs().forEach(fi -> {
+                    long duration = fi.executionDuration();
+                    if (duration != 0 && fi.getStartTime().plus(duration, ChronoUnit.SECONDS).isBefore(Instant.now())) {
+                        abort(fi.getMeta().getJobId(), "Exceeded execution duration");
+                    }
+                });
     }
 
     private static class JobEntry {
-        Future future;
+        Future<String> future;
         Job job;
 
-        public JobEntry(Future future, Job job) {
+        public JobEntry(Future<String> future, Job job) {
             this.future = future;
             this.job = job;
         }
     }
+
+    private static class JobEventHandler implements Subscriber {
+        public void onMessage(Message msg) {
+            ifNotNull(JobEvent.getJobInfo(msg)).apply(jobInfo -> {
+                JobEvent.EventType type = Try.it(() -> JobEvent.EventType.valueOf(msg.getValue(null, JobEvent.TYPE))).get();
+                if (type == JobEvent.EventType.ABORTED) {
+                    removeLocalJob(jobInfo);
+                } else {
+                    updateClient(jobInfo);        // update jobInfo to client
+                }
+            });
+        }
+    }
+
+    /**
+     * internal method to notify all clients with the updated jobInfo
+     * @param jobInfo
+     */
+    private static void updateClient(JobInfo jobInfo) {
+        if (jobInfo == null) return;
+        // send updated jobInfo to client
+        FluxAction addAction = new FluxAction(FluxAction.JOB_INFO, toJsonObject(jobInfo));
+        ServerEvent.EventTarget evt = new ServerEvent.EventTarget(ServerEvent.Scope.USER);
+        evt.setUserKey(jobInfo.getMeta().getUserKey());
+        ServerEventManager.fireAction(addAction, evt);
+    }
+
+//====================================================================
+//  inner classes
+//====================================================================
+
+
+    public static class JobEvent extends Message {
+        public static final String TOPIC = "JobEvent";
+        public enum EventType { UPDATED, COMPLETED, ABORTED }
+        public static final String JOB = "job";
+        public static String TYPE = "type";
+
+        public JobEvent(EventType type, JobInfo jobInfo) {
+            setTopic(TOPIC);
+            setValue(type.toString(), TYPE);
+            if (jobInfo != null) setValue(toJsonObject(jobInfo), JOB);
+        }
+
+        public static JobInfo getJobInfo(Message msg) {
+            if (msg.getValue(null, JOB) instanceof JSONObject jo) {
+                return toJobInfo(jo);
+            }
+            return null;
+        }
+
+        public static boolean isJobEvent(Message msg) {
+            EventType type = Try.it(() -> EventType.valueOf(msg.getValue("", TYPE))).get();
+            return type != null && msg.getValue(null, JOB) != null;
+        }
+    }
+
+    /**
+     * Published event notifying that a job has completed.
+     * It contains all necessary information for a COMPLETED handler to perform its task.
+     */
+    public static final class JobCompletedEvent extends JobEvent {
+        public static final String TOPIC = "JobCompleted";
+
+        public JobCompletedEvent(JobInfo jobInfo) {
+            super(EventType.COMPLETED, jobInfo);
+            setTopic(TOPIC);
+        }
+
+        public static boolean isJobCompletedEvent(Message msg) {
+            EventType type = Try.it(() -> EventType.valueOf(msg.getValue("", TYPE))).get();      // make sure it does not fail on back messages
+            return type == EventType.COMPLETED &&
+                    msg.getValue("", TOPIC_KEY).equals(TOPIC) &&
+                    msg.getValue(null, JOB) != null;
+        }
+    }
+
+    public static void cleanup() {
+        List<JobInfo> jobs = getAllJobs();
+        jobs.forEach(job -> {
+            CacheKey k = cacheKey(job);
+            if (!job.getMeta().isMonitored() && job.getEndTime().plus(1, ChronoUnit.HOURS).isBefore(Instant.now())) {
+                LOG.info("Removing non-monitored job: " + k);
+                allJobInfos.remove(k);      // remove non-monitored job after 1 hour
+            } else if (!CLEANUP_PHASES_EXCLUDES.contains(job.getPhase()) && job.getEndTime().plus(JOB_EXPIRY_HOURS, ChronoUnit.HOURS).isBefore(Instant.now())) {
+                LOG.info("Removing expired job: " + k);
+                allJobInfos.remove(k);
+            }
+        });
+    }
+
+    /**
+     * This serializer is used to serialize JobInfo objects for storage in the cache.
+     * Instead of using the default Java serialization, it uses a JSON string.
+     */
+    private static class JobInfoSerializer implements DistribMapCache.Serializer<JobInfo> {
+
+        public String serialize(Object obj) {
+            if (obj instanceof JobInfo jobInfo) {
+                return toJson(jobInfo);
+            }
+            return null;
+        }
+
+        public JobInfo deserialize(String str) throws Exception{
+            if (str != null) {
+                return toJobInfo((JSONObject) new JSONParser().parse(str));
+            }
+            return null;
+        }
+    }
+
+
+//====================================================================
+//  Utilities: adhoc use cases
+//====================================================================
+
+    /**
+     * Migrate all Redis keys that do not have userKey in the key to the new format.
+     * @return the number of keys migrated
+     */
+    public static int migrateRedisKeys() {
+        // For keys without userKey, we need to migrate them to the new format where userKey is appended to the jobId.
+        int count = 0;
+        for(CacheKey key : allJobInfos.getKeys()) {
+            if (key instanceof StringKey sk && !sk.getUniqueString().contains(":")) { // has userKey in the key
+                JobInfo jobInfo = allJobInfos.get(key);
+                if (jobInfo != null) {
+                    allJobInfos.put(cacheKey(jobInfo), jobInfo);
+                    allJobInfos.remove(key); // remove old key
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
 }
-/*
- * THIS SOFTWARE AND ANY RELATED MATERIALS WERE CREATED BY THE CALIFORNIA
- * INSTITUTE OF TECHNOLOGY (CALTECH) UNDER A U.S. GOVERNMENT CONTRACT WITH
- * THE NATIONAL AERONAUTICS AND SPACE ADMINISTRATION (NASA). THE SOFTWARE
- * IS TECHNOLOGY AND SOFTWARE PUBLICLY AVAILABLE UNDER U.S. EXPORT LAWS
- * AND IS PROVIDED AS-IS TO THE RECIPIENT WITHOUT WARRANTY OF ANY KIND,
- * INCLUDING ANY WARRANTIES OF PERFORMANCE OR MERCHANTABILITY OR FITNESS FOR
- * A PARTICULAR USE OR PURPOSE (AS SET FORTH IN UNITED STATES UCC 2312-2313)
- * OR FOR ANY PURPOSE WHATSOEVER, FOR THE SOFTWARE AND RELATED MATERIALS,
- * HOWEVER USED.
- *
- * IN NO EVENT SHALL CALTECH, ITS JET PROPULSION LABORATORY, OR NASA BE LIABLE
- * FOR ANY DAMAGES AND/OR COSTS, INCLUDING, BUT NOT LIMITED TO, INCIDENTAL
- * OR CONSEQUENTIAL DAMAGES OF ANY KIND, INCLUDING ECONOMIC DAMAGE OR INJURY TO
- * PROPERTY AND LOST PROFITS, REGARDLESS OF WHETHER CALTECH, JPL, OR NASA BE
- * ADVISED, HAVE REASON TO KNOW, OR, IN FACT, SHALL KNOW OF THE POSSIBILITY.
- *
- * RECIPIENT BEARS ALL RISK RELATING TO QUALITY AND PERFORMANCE OF THE SOFTWARE
- * AND ANY RELATED MATERIALS, AND AGREES TO INDEMNIFY CALTECH AND NASA FOR
- * ALL THIRD-PARTY CLAIMS RESULTING FROM THE ACTIONS OF RECIPIENT IN THE USE
- * OF THE SOFTWARE.
- */

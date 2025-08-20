@@ -1,5 +1,5 @@
-import {Stack, Typography, Box} from '@mui/joy';
-import React from 'react';
+import {Stack, Typography} from '@mui/joy';
+import React, {useState} from 'react';
 
 import {dispatchHideDialog, dispatchShowDialog} from '../core/ComponentCntlr.js';
 import {FileAnalysisType, Format} from '../data/FileAnalysis.js';
@@ -19,8 +19,10 @@ import {ServerParams} from 'firefly/data/ServerParams';
 import {doJsonRequest} from 'firefly/core/JsonUtils';
 import {dispatchTableSearch} from 'firefly/tables/TablesCntlr';
 import {MetaConst} from 'firefly/data/MetaConst';
-import {makeFileRequest} from 'firefly/api/ApiUtilTable';
+import {cloneRequest, makeFileRequest} from 'firefly/api/ApiUtilTable';
 import {dispatchHideDropDown} from 'firefly/core/LayoutCntlr';
+import {determineValidity, fileAnalysisErr} from 'firefly/ui/FileUploadProcessor';
+import {LoadingMessage} from 'firefly/visualize/ui/FileUploadViewPanel';
 
 const dialogId = 'Upload-spatial-table';
 const UPLOAD_TBL_SOURCE= 'UPLOAD_TBL_SOURCE';
@@ -54,8 +56,23 @@ let tblCount = 0;
 function uploadSubmit(request,setUploadInfo,defaultColsEnabled)  {
     if (!request) return false;
     const {additionalParams = {}, fileUpload: serverFile} = request;
-    const {detailsModel, report, summaryModel} = additionalParams;
-    if (!detailsModel || !report || !summaryModel || !serverFile) return false;
+    const {detailsModel, report, message, summaryModel, groupKey: summaryTblId, acceptList,
+        uniqueTypes, acceptOneItem} = additionalParams;
+
+    // determine if the uploaded table file is valid and show error popup if not
+    const {valid, errorMsg, title} = determineValidity(acceptList, uniqueTypes, summaryModel,
+        summaryTblId, report, acceptOneItem, message);
+    if (!valid) {
+        showInfoPopup(errorMsg, title);
+        return false;
+    }
+
+    // show error popup if the analysis info required below is undefined (and if the file is still valid)
+    if (!detailsModel || !summaryModel || !serverFile) {
+        showInfoPopup(fileAnalysisErr.errorMsg, fileAnalysisErr.title);
+        return false;
+    }
+
     const {fileName,fileSize} = report;
     const {tableData={}}= detailsModel;
     const {data=[]}= tableData;
@@ -94,18 +111,21 @@ function uploadSubmit(request,setUploadInfo,defaultColsEnabled)  {
  * @param request
  * @param setUploadInfo
  * @param {DefaultColsEnabled} defaultColsEnabled
+ * @param setLoading
  * @returns {boolean}
  */
-function existingTableSubmit(request,setUploadInfo,defaultColsEnabled) {
+function existingTableSubmit(request,setUploadInfo,defaultColsEnabled,setLoading) {
     if (!request) return false;
+    setLoading(true);
     const tbl = getTblById('existing-table-list-ui');
     const idx = tbl.highlightedRow;
     const activeTblId = tbl.tableData.data[idx][3]; //tbl_id
     const activeTbl = getTableUiByTblId(activeTblId);
-    const tableRequest = activeTbl.request;
     const columnData = activeTbl.columns;
     const columns = columnData.map((col) => col.visibility === 'hide' || col.visibility === 'hidden'? ({...col, use:false}) :  ({...col, use:true})); //filter out hidden cols
     const columnsSelected = applyDefColumnSelection(columns,defaultColsEnabled);
+
+    const tableRequest = cloneRequest(activeTbl.request, {pageSize : 2147483647});
 
     const params ={
         [ServerParams.COMMAND]: ServerParams.TABLE_SAVE,
@@ -116,10 +136,13 @@ function existingTableSubmit(request,setUploadInfo,defaultColsEnabled) {
     };
 
     doJsonRequest(ServerParams.TABLE_SAVE, params).then((result) => {
+        setLoading(false);
+
         if (!result.success) {
             showInfoPopup('Error loading this table', result.error);
             return false;
         }
+
         const uploadInfo = {
             serverFile: result?.serverFile ?? null,
             title: tableRequest?.META_INFO?.title,
@@ -172,6 +195,7 @@ function applyDefColumnSelection(columns,defaultColsEnabled) {
         columnsSelected = defaultColumnsSelector(columns,colTypes,colCount);
     }
     else {
+        //TODO: don't select position columns by default, UploadTableSelector can be used for non position columns fields too
         const {lonCol='', latCol=''} = findTableCenterColumns({tableData:{columns}}) ?? {}; //centerCols
         columnsSelected = columns.map((col) => col.name === lonCol || col.name === latCol? ({...col, use:true}) :  ({...col, use:false})); //select position cols only
     }
@@ -187,7 +211,7 @@ const NoTables = () => {
 };
 
 const LoadedTables= (props) => {
-    const {onSubmit, onCancel=dispatchHideDropDown, keepState=true, groupKey} = props;
+    const {onSubmit, onCancel=dispatchHideDropDown, keepState=true, groupKey, isLoading} = props;
     const tables = getTableGroup()?.tables ?? null;
     if (!tables) {
         return <NoTables/>;
@@ -215,17 +239,13 @@ const LoadedTables= (props) => {
     return (
         <Stack width={1} height={1}>
             <Typography level={'title-lg'} color={'neutral'} p={1}>
-                {'Select one of the existing tables below to load into the TAP panel: '}
+                {'Select one of the existing tables below to load'}
             </Typography>
             <FieldGroup groupKey={groupKey} keepState={keepState} sx={{flexGrow: 1}}>
-                <FormPanel onSuccess={onSubmit} onCancel={onCancel} completeText='Load Table'
-                    slotProps={{
-                        searchBar: {p:1/2},
-                    }}>
-
+                <FormPanel onSuccess={onSubmit} onCancel={onCancel} completeText='Load Table'>
                     <TablePanel tbl_id={tbl_id+'-ui'} tbl_ui_id={tbl_id+'-ui'} tableModel={tableModel} border={false} showTypes={false}
-                                sx={{position: 'absolute', inset:0}}
                                 showToolbar={false} showFilters={true} selectable={false} showOptionButton={false}/>
+                    {isLoading && <LoadingMessage/>}
                 </FormPanel>
             </FieldGroup>
         </Stack>);
@@ -249,13 +269,14 @@ const LoadedTables= (props) => {
 export function showUploadTableChooser(setUploadInfo,groupKey= 'table-chooser',defaultColsEnabledObj=undefined) {
     DialogRootContainer.defineDialog(dialogId,
         <PopupPanel title={'Upload'} layoutPosition={LayoutType.TOP_EDGE_CENTER}>
-            <TapUploadPanel {...{setUploadInfo,groupKey,defaultColsEnabledObj}}/>
+            <TableUploadPanel {...{setUploadInfo,groupKey,defaultColsEnabledObj}}/>
         </PopupPanel>
     );
     dispatchShowDialog(dialogId);
 }
 
-const TapUploadPanel= ({setUploadInfo,groupKey= 'table-chooser',defaultColsEnabledObj}) => {
+const TableUploadPanel= ({setUploadInfo,groupKey= 'table-chooser',defaultColsEnabledObj}) => {
+    const [isLoading, setLoading]= useState(false);
     return (
         <Stack height='35rem' sx={{resize:'both', overflow:'hidden',minHeight:'35rem', minWidth:'40rem'}}>
             <FieldGroup groupKey={groupKey} sx={{ flexGrow: 1}}>
@@ -275,9 +296,9 @@ const TapUploadPanel= ({setUploadInfo,groupKey= 'table-chooser',defaultColsEnabl
                         </Tab>
                         <Tab name='Loaded Tables' id='tableLoad' sx={{fontSize:'larger'}}>
                                 <LoadedTables {...{
-                                    keepState: true, groupKey:groupKey+'-tableLoad',
+                                    keepState: true, groupKey:groupKey+'-tableLoad',isLoading,
                                     onCancel:() => dispatchHideDialog(dialogId),
-                                    onSubmit:(request) => existingTableSubmit(request,setUploadInfo,defaultColsEnabledObj)
+                                    onSubmit:(request) => existingTableSubmit(request,setUploadInfo,defaultColsEnabledObj,setLoading)
                                 }}/>
                         </Tab>
                     </FieldGroupTabs>

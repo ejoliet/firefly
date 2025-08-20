@@ -10,14 +10,14 @@ import {wrapResizer} from '../../ui/SizeMeConfig.js';
 import {get, set, isEmpty, isUndefined, omitBy, pick} from 'lodash';
 
 import {
-    getCellValue, getColMaxVal, getColMaxValues, getColumns, getProprietaryInfo, getTableState, getTableUiById,
+    getColMaxVal, getColMaxValues, getColumns, getProprietaryInfo, getTableState, getTableUiById,
     getTblById, hasRowAccess, hasSubHighlightRows, isClientTable, isSubHighlightRow, tableTextView, TBL_STATE,
     uniqueTblUiId
 } from '../TableUtil.js';
 import {SelectInfo} from '../SelectInfo.js';
 import {FilterInfo} from '../FilterInfo.js';
 import {SortInfo} from '../SortInfo.js';
-import {CellWrapper, getPxWidth, HeaderCell, headerStyle, makeDefaultRenderer, SelectableCell, SelectableHeader} from './TableRenderer.js';
+import {CellWrapper, FixedCellWrapper, getPxWidth, HeaderCell, headerStyle, makeDefaultRenderer, SelectableCell, SelectableHeader} from './TableRenderer.js';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {dispatchTableUiUpdate, TBL_UI_UPDATE} from '../TablesCntlr.js';
 import {Logger} from '../../util/Logger.js';
@@ -26,13 +26,11 @@ import 'fixed-data-table-2/dist/fixed-data-table.css';
 import {updateSet} from 'firefly/util/WebUtil.js';
 import {TableMask} from 'firefly/ui/panel/MaskPanel.jsx';
 import {TableErrorMsg} from 'firefly/tables/ui/TablePanel.jsx';
+import {BY_SCROLL, BY_TABLE} from '../reducer/TableUiReducer';
 
 const logger = Logger('Tables').tag('BasicTable');
 const noDataMsg = 'No Data Found';
 const noDataFromFilter = 'No data match these criteria';
-
-export const BY_SCROLL = 'byScroll';
-
 
 // Override default fixed-data-table-2 css with joy-ui colors and styles
 const tableStyleOverrides = {
@@ -375,7 +373,7 @@ const TextView = ({columns, data, width, height}) => {
 
 function correctScrollTopIfNeeded(maxScrollWidth, scrollTop, width, height, rowHeight, hlRowIdx, triggeredBy) {
     const rowHpos = hlRowIdx * rowHeight;
-    if (triggeredBy !== BY_SCROLL) {
+    if (triggeredBy === BY_TABLE) {     // FIREFLY-1729: don't correct scroll on column resize.
         // delta is a workaround for the horizontal scrollbar hiding part of the last row when visible
         const delta = maxScrollWidth > width ? (.5*rowHeight) : 0;
 
@@ -447,12 +445,19 @@ function makeColumnTag(props, col, idx) {
 
     if (col.visibility && col.visibility !== 'show') return false;
     const HeadRenderer = get(renderers, [col.name, 'headRenderer'], showHeader ? HeaderCell : ({})=>null);
-    const CellRenderer = get(renderers, [col.name, 'cellRenderer'], cellRenderers?.[idx] || makeDefaultRenderer(col,tbl_id, startIdx));
+    const CellRenderer = renderers?.[col.name]?.cellRenderer || cellRenderers?.[idx];
     const fixed = col.fixed || false;
     const {resizable=true} = col;
 
-    const cell = ({height, width, columnKey, rowIndex}) =>
-                    <CellWrapper {...{height, width, columnKey, rowIndex, data, col, colIdx:idx, tbl_id, startIdx, CellRenderer}} />;
+    const cell = ({height, width, columnKey, rowIndex}) => {
+        const props = {height, width, columnKey, rowIndex, data, col, colIdx:idx, tbl_id, startIdx};
+         if (CellRenderer) {
+             return <CellWrapper CellRenderer={CellRenderer} {...props} />;
+         } else {
+             return <FixedCellWrapper CellRenderer={makeDefaultRenderer(col, tbl_id, startIdx)} {...props} />;
+         }
+    };
+
     return (
         <Column
             key={col.name}

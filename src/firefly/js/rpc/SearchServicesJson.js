@@ -10,9 +10,8 @@
 import {get, pickBy, cloneDeep, has, isUndefined} from 'lodash';
 import {ServerParams} from '../data/ServerParams.js';
 import {doJsonRequest} from '../core/JsonUtils.js';
-import {submitJob, getBackgroundJobs, getJobInfo} from '../core/background/BackgroundUtil.js';
-import {dispatchBgJobInfo} from '../core/background/BackgroundCntlr.js';
-import {encodeUrl, updateSet, getCmdSrvSyncURL} from '../util/WebUtil.js';
+import {submitJob} from '../core/background/BackgroundUtil.js';
+import {encodeUrl, getCmdSrvSyncURL} from '../util/WebUtil.js';
 
 import {getTblById, getResultSetID, getResultSetRequest} from '../tables/TableUtil.js';
 import {MAX_ROW, getTblId, setResultSetID, setResultSetRequest, setSelectInfo} from '../tables/TableRequestUtil.js';
@@ -157,8 +156,9 @@ export function selectedValues({columnNames, request, selectedRows}) {
  * @param {DownloadRequest} dlRequest
  * @param {Object} searchRequest
  * @param {string} selectionInfo
+ * @param {string} downloadType
  */
-export function packageRequest(dlRequest, searchRequest, selectionInfo) {
+export function packageRequest(dlRequest, searchRequest, selectionInfo, downloadType) {
     if (!selectionInfo) {
         const {totalRow} = getTblById(searchRequest.tbl_id) || {};
         if (totalRow) {
@@ -171,8 +171,8 @@ export function packageRequest(dlRequest, searchRequest, selectionInfo) {
         [ServerParams.REQUEST]: JSON.stringify(searchRequest),
         [SELECTION_INFO]: selectionInfo
     };
-
-    return submitJob(ServerParams.PACKAGE_REQUEST, params);
+    const cmd = downloadType === 'script' ? ServerParams.DOWNLOAD_SCRIPT_REQUEST : ServerParams.PACKAGE_REQUEST;
+    return submitJob(cmd, params);
 }
 
 
@@ -206,11 +206,7 @@ export function addBgJob(jobId) {
  */
 export function removeBgJob(jobId) {
     const params = {[ServerParams.JOB_ID]: jobId};
-    return doJsonRequest(ServerParams.REMOVE_JOB, params).then( (jobInfo) => {
-        if (!jobInfo) {     // job is not on the server.. remove it locally
-            dispatchBgJobInfo(updateSet(getJobInfo(jobId), 'jobInfo.monitored', false));
-        }
-    });
+    return doJsonRequest(ServerParams.REMOVE_JOB, params);
 }
 
 /**
@@ -223,6 +219,16 @@ export function cancel(jobId) {
     return doJsonRequest(ServerParams.CANCEL, params);
 }
 
+/**
+ * Archive this job
+ * @param {string} jobId background job id
+ * @return {Promise}
+ */
+export function archive(jobId) {
+    const params = {[ServerParams.JOB_ID]: jobId};
+    return doJsonRequest(ServerParams.ARCHIVE, params);
+}
+
 export function uwsJobInfo(jobUrl, jobId) {
     const params = {[ServerParams.JOB_ID]: jobId,
                     [ServerParams.JOB_URL]: jobUrl};
@@ -231,17 +237,16 @@ export function uwsJobInfo(jobUrl, jobId) {
 
 /**
  * @param {string} email
+ * @param {boolean} notifEnabled
  * @return {Promise}
  */
-export function setEmail(email) {
-    const idList= Object.keys(getBackgroundJobs() || {});
-    const paramList= idList.map( (id) => {
-        return {name:ServerParams.ID, value: id};
-    } );
-    if(paramList.length > 0) {
-        paramList.push({name:ServerParams.EMAIL, value:email});
-        return doJsonRequest(ServerParams.SET_EMAIL, paramList);
-    }
+export function setBgInfo(email, notifEnabled) {
+
+    const params = [
+        {name:ServerParams.EMAIL, value:email},
+        {name:ServerParams.NOTIF_ENABLED, value:notifEnabled}
+    ];
+    return doJsonRequest(ServerParams.SET_BG_INFO, params);
 }
 
 /**
@@ -249,8 +254,12 @@ export function setEmail(email) {
  * @param {string} email
  * @return {Promise}
  */
-export function resendEmail(email) {
-    return doJsonRequest(ServerParams.RESEND_EMAIL, {[ServerParams.EMAIL]: email});
+export function setJobNotif(jobId, enable, email) {
+    return doJsonRequest(ServerParams.SET_JOB_NOTIF, {
+        [ServerParams.JOB_ID]: jobId,
+        [ServerParams.NOTIF_ENABLED]: enable,
+        [ServerParams.EMAIL]: email
+    });
 }
 
 /**

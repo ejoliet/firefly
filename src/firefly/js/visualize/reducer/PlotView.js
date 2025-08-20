@@ -3,6 +3,7 @@
  */
 
 import update from 'immutability-helper';
+import {isDefined, toBoolean} from '../../util/WebUtil';
 import {getCenterPtOfPlot} from '../WebPlotAnalysis';
 import {PlotAttribute} from '../PlotAttribute';
 import {isImage, isHiPS, changeHiPSProjectionCenter} from '../WebPlot.js';
@@ -173,6 +174,8 @@ function createPlotViewContextData(req, pvOptions={}) {
         lastCollapsedZoomLevel: 0,
         highlightFeedback: pvOptions.highlightFeedback ?? true,
         preferenceColorKey: attributes[PlotAttribute.PREFERENCE_COLOR_KEY],
+        ignorePanByTableRow: isDefined(attributes[PlotAttribute.IGNORE_PAN_BY_TABLE_ROW]) ?
+            toBoolean(attributes[PlotAttribute.IGNORE_PAN_BY_TABLE_ROW]) : false,
         defThumbnailSize: DEFAULT_THUMBNAIL_SIZE,  // todo - this option might need some cleanup
         plotCounter:0, // index of how many plots, used for making next ID
         multiHdu:false, // this is updated when plots are added
@@ -227,6 +230,12 @@ export function changePrimePlot(pv, nextIdx) {
     return updateTransform(pv);
 }
 
+let staticPlotCount=0;
+
+export function getNextStaticPlotCount() {
+    return ++staticPlotCount;
+}
+
 /**
  * Replace the plotAry and overlayPlotViews into the PlotView, return a new PlotView
  * @param {PlotView} pv
@@ -259,7 +268,7 @@ export function replacePlots(pv, plotAry, overlayPlotViews, expandedMode, newPlo
 
     pv.plots.forEach( (plot) => {
         plot.attributes= {...plot.attributes, ...getNewAttributes(plot)};
-        plot.plotImageId= `${pv.plotId}--${pv.plotViewCtx.plotCounter}`;
+        plot.plotImageId= `${pv.plotId}--${pv.plotViewCtx.plotCounter}--${getNextStaticPlotCount()}`;
         pv.plotViewCtx.plotCounter++;
     });
 

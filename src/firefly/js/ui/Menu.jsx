@@ -2,22 +2,26 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import PendingActionsOutlinedIcon from '@mui/icons-material/PendingActionsOutlined.js';
 import {
-    Badge, Button, Chip, CircularProgress, Divider, IconButton, ListItemDecorator, Sheet,
+    Badge, Chip, CircularProgress, Divider, IconButton, ListItemDecorator, Sheet,
     Stack, Tab, TabList, Tabs, Tooltip, Typography
 } from '@mui/joy';
 import {tabClasses} from '@mui/joy/Tab';
-import {debounce} from 'lodash';
-import React, {forwardRef, memo, useCallback, useContext, useEffect, useRef, useState} from 'react';
+import {debounce, isFunction} from 'lodash';
+import React, {forwardRef, useCallback, useContext, useEffect, useRef, useState} from 'react';
 import shallowequal from 'shallowequal';
 import {
-    COMMAND, dispatchAddPreference, dispatchSetMenu,
+    COMMAND, dispatchAddPreference, dispatchSetMenu, getAppOptions,
     getMenu, getPreference, getSelectedMenuItem, getUserInfo
 } from '../core/AppDataCntlr.js';
-import {getBackgroundInfo, isActive} from '../core/background/BackgroundUtil.js';
 import {flux} from '../core/ReduxFlux.js';
-import {dispatchHideDropDown, dispatchShowDropDown, getLayouInfo, getResultCounts} from '../core/LayoutCntlr.js';
+import {
+    dispatchHideDropDown,
+    dispatchShowDropDown,
+    dispatchUpdateMenuTabNodes,
+    getLayouInfo, getMenuTabNodes,
+    getResultCounts,
+} from '../core/LayoutCntlr.js';
 import QuizOutlinedIcon from '@mui/icons-material/QuizOutlined';
 import {AppPropertiesCtx} from './AppPropertiesCtx.jsx';
 import {useStoreConnector} from './SimpleComponent.jsx';
@@ -52,13 +56,12 @@ export const menuTabsBorderSx = (theme) => ({
     borderColor: theme.vars.palette.neutral.outlinedBorder //if we need blue accent, can use primary.outlinedBorder or primary.outlinedActiveBg (lighter)
 });
 
-
 export function Menu() {
     const [ready,setReady]= useState(false);
     const [,setWindowWidth]= useState(window?.innerWidth??1000);
     const {appTitle, showUserInfo} = useContext(AppPropertiesCtx);
     const menu= useStoreConnector(() => getMenu());
-    const {menuItems=[], showBgMonitor=true} = menu;
+    const {menuItems=[]} = menu;
     const layoutInfo= getLayouInfo() ?? {};
     const {dropDown={}}=  layoutInfo;
     const selected= getSelectedMenuItem(menu,dropDown);
@@ -85,7 +88,7 @@ export function Menu() {
         if (!selected) return;
         const selectedItem= menuItems.find(({action}) => (action===selected));
         if (!selectedItem) return;
-        const isVisible=  selectedItem.visible ?? selectedItem.primary;
+        const isVisible= itemVisible(selectedItem);
         if (!isVisible && selected === selectedItem.action) {
             const newMenuItems= menuItems.map( (mi) => mi===selectedItem ? {...mi, visible:true} : mi);
             updateMenu(appTitle, {...menu, menuItems:newMenuItems, selected});
@@ -102,17 +105,21 @@ export function Menu() {
     const helpItem= menuItems?.find(({action,type}) => (action==='app_data.helpLoad' && type==='COMMAND'));
 
     return (<AdjustableMenu
-            {...{menuTabItems,helpItem,selected,dropDown, showBgMonitor,showUserInfo}}/>
+            {...{menuTabItems,helpItem,selected,dropDown, showUserInfo}}/>
     );
 }
 
 
-function AdjustableMenu({menuTabItems, helpItem, selected, dropDown, showBgMonitor,showUserInfo}) {
+function AdjustableMenu({menuTabItems, helpItem, selected, dropDown, showUserInfo}) {
     const [maskTestRender,setMaskTestRender]= useState(false);
     const [tabCount,setTabCount]= useState(-1); // use for forcing re-renders, don't start tracking until we know the tab bar element
     const {current:tbarElement}= useRef({element:undefined});
     const {current:tabRenderedInfo}= useRef({tabWidths:{}});
     const {current:lastButtonSize}= useRef({size:'lg'});
+
+    const storedMenuTabNodes = useStoreConnector(getMenuTabNodes);
+    const tabNodesRef = useRef({first: undefined, last: undefined});
+
     const showHelp= Boolean(helpItem);
 
     useEffect(() => {
@@ -126,15 +133,28 @@ function AdjustableMenu({menuTabItems, helpItem, selected, dropDown, showBgMonit
         setTabCount(menuTabItems.length); // force a rerender if number of tabs change
     }, [menuTabItems.length]);
 
+    useEffect(() => {
+        const newTabNodes = Object.fromEntries(Object.entries(tabNodesRef.current).filter(
+            ([k, node])=> storedMenuTabNodes?.[k] !== node));
+        if (Object.keys(newTabNodes).length > 0) {
+            dispatchUpdateMenuTabNodes(newTabNodes);
+        }
+    });
+
     const setTabBarElement= useCallback((ts) => {
         tbarElement.element= ts;
         if (ts && tabCount===-1) setTabCount(menuTabItems.length); // force a rerender when we know the html element of the tab bar
     },[]);
 
-    const setElement= useCallback( (key,e) => {
-        if (!e) return;
+    const setElement= useCallback( (key,el) => {
+        if (!el) return;
+
+        // save the first and last tab elements as they are needed for positioning the app hints
+        if (key==='0') tabNodesRef.current['first'] = el;
+        if (key===menuTabItems.length-1+'') tabNodesRef.current['last'] = el;
+
         const {tabWidths}= tabRenderedInfo;
-        tabWidths[key]= Math.trunc(e.getBoundingClientRect()?.width ?? 0);
+        tabWidths[key]= Math.trunc(el.getBoundingClientRect()?.width ?? 0);
         Object.keys(tabWidths).forEach( (key) => {
             if (Number(key)>=menuTabItems.length) tabWidths[key]= undefined;
         });
@@ -142,7 +162,7 @@ function AdjustableMenu({menuTabItems, helpItem, selected, dropDown, showBgMonit
 
     const selectedIdx= menuTabItems?.findIndex( ({action}) => action===selected);
     const {size,displayMask}= getTabDisplayInfo(selectedIdx, tabRenderedInfo.tabWidths,tbarElement.element,
-        lastButtonSize.size, showBgMonitor,showHelp,showUserInfo);
+        lastButtonSize.size, showHelp,showUserInfo);
 
     lastButtonSize.size= size;
 
@@ -152,37 +172,13 @@ function AdjustableMenu({menuTabItems, helpItem, selected, dropDown, showBgMonit
         <Stack direction='row' justifyContent={'space-between'} alignItems='flex-end' ref={(c) => setTabBarElement(c) }>
             <MenuTabBar {...{menuTabItems,size,selected,dropDown, displayMask, setElement}}/>
             <Stack {...{direction:'row', alignItems:'center', alignSelf:'center', divider}} >
-                {size==='lg' && showBgMonitor  && <React.Fragment/>}
-                {showBgMonitor && <BgMonitorButton size={size}/> }
+                {size==='lg' && <React.Fragment/>}
                 {showHelp && <AppHelpButton {...{ menuItem:helpItem,size}}/>}
                 {showUserInfo && <UserInfo/>}
             </Stack>
         </Stack>
     );
 }
-
-function MenuItemButton({menuItem, icon, size='lg', clickHandler, isWorking=false, badgeCount=0, sx}) {
-    const variant= 'plain';
-    const color= 'neutral';
-
-    const startDecorator= isWorking ? <CircularProgress {...{sx:{'--CircularProgress-size':'12px'}, size:'sm' }}/> : undefined;
-
-    const item=(
-        icon ?
-            (<IconButton {...{ className: 'ff-MenuItem', size, color, variant,
-                onClick: () => onClickHandler(clickHandler,menuItem)}}>
-                {icon}
-            </IconButton>) :
-            (<Button {...{startDecorator, className: 'ff-MenuItem', size, color, variant,
-                sx:{whiteSpace:'nowrap', ...sx},
-                onClick: () => onClickHandler(clickHandler,menuItem) }}>
-                {menuItem.label}
-            </Button>)
-    );
-    return !badgeCount ? item : <Badge {...{badgeContent:badgeCount}}> {item} </Badge>;
-}
-
-
 
 function tabDivider(size, placeAtEnd=true) {
     return {
@@ -218,18 +214,17 @@ function MenuTabBar({menuTabItems=[], size, selected, dropDown, displayMask, set
     const variant='soft';
     const color='primary';
 
-
     const tabItems= [
-        <ResultsTab {...{key:'results-tab', size, color, variant, ref: (c) => setElement('results-tab ',c)}}/>,
+        <ResultsTab {...{key:'results-tab', size, color, variant, ref: (el) => setElement('results-tab ', el)}}/>,
         ...menuTabItems
-            .map(({action,label,title}, idx) =>
+            .filter( isItemEnabled)
+            .map(({action,label,TabRenderer,title}, idx) =>
             {
-                const tab= (
-                    <Tab {...{ key: idx, value:action, disableIndicator:true, color, variant,
-                        ref: (c) => setElement(idx+'',c),
-                        sx: (theme) => ({ ...setupTabCss(theme,size) }) }} >
-                        {label}
-                    </Tab>);
+                const tabProps = {key: idx, value:action, disableIndicator:true, color, variant,
+                    ref: (el) => setElement(idx + '', el),
+                    sx: (theme) => ({ ...setupTabCss(theme,size) })
+                };
+                const tab= TabRenderer ? <TabRenderer {...tabProps} /> : <Tab {...tabProps}> {label}</Tab>;
                 const tip= getTip(title,action);
                 return tip ? <Tooltip key={idx} title={tip}>{tab}</Tooltip> : tab;
             }
@@ -266,14 +261,23 @@ function MenuTabBar({menuTabItems=[], size, selected, dropDown, displayMask, set
 }
 
 function itemVisible(menuItem) {
-     const {visible, primary,type} = menuItem;
+     const {visible, type} = menuItem;
      if (type==='COMMAND') return true;
-    return visible ?? primary;
+    return Boolean(visible ?? isItemPrimary(menuItem));
+}
+
+function isItemEnabled(item={}) {
+    const {enabled=true}= item;
+    return isFunction(enabled) ? Boolean(enabled(item)) : enabled;
+}
+
+function isItemPrimary(item={}) {
+    const {primary=false}= item;
+    return isFunction(primary) ? Boolean(primary(item)) : primary;
 }
 
 function updateMenu(appTitle, menu) {
-    const pref= menu.menuItems
-        .map( (mi)  => [mi.action, Boolean(mi.visible ?? mi.primary)] );
+    const pref= menu.menuItems.map( (mi)  => [mi.action, itemVisible(mi)] );
     dispatchAddPreference(MENU_PREF_ROOT+appTitle, Object.fromEntries(pref));
     dispatchSetMenu(menu);
 }
@@ -285,23 +289,22 @@ function getTabBarRealWidth(tabBarElement) {
 }
 
 
-function getTabDisplayInfo(selectedIdx,tabWidths,tabBarElement,lastButtonSize,showBgMonitor,showHelp,showUserInfo) {
-    const size= getButtonSize(tabWidths,tabBarElement,lastButtonSize,showBgMonitor,showHelp,showUserInfo);
+function getTabDisplayInfo(selectedIdx,tabWidths,tabBarElement,lastButtonSize,showHelp,showUserInfo) {
+    const size= getButtonSize(tabWidths,tabBarElement,lastButtonSize,showHelp,showUserInfo);
     const displayMask= size==='sm' && lastButtonSize==='sm' ?
-        getButtonDisplayMask(tabWidths, tabBarElement, selectedIdx, showBgMonitor,showHelp,showUserInfo) : undefined;
+        getButtonDisplayMask(tabWidths, tabBarElement, selectedIdx, showHelp,showUserInfo) : undefined;
     return {size,displayMask};
 }
 
 const sumAry= (ary) => ary.reduce( (total,num) => num ? total+num : total,0);
 
-function getButtonSize(tabWidths,tabBarElement,lastButtonSize,showBgMonitor,showHelp,showUserInfo) {
+function getButtonSize(tabWidths,tabBarElement,lastButtonSize, showHelp,showUserInfo) {
     if (!tabBarElement) return 'lg';
 
     const tabBarRealWidth =  getTabBarRealWidth(tabBarElement);
     const sumTabWidth= sumAry(Object.values(tabWidths));
 
-    const bgMon= showBgMonitor ? lastButtonSize==='lg'?175:50 : 0;
-    const bTotal= sumTabWidth+ bgMon + (showHelp?50:0) + (showUserInfo?50:0);
+    const bTotal= sumTabWidth + (showHelp?50:0) + (showUserInfo?50:0);
 
     if (lastButtonSize==='lg') {
         if (bTotal < tabBarRealWidth) return 'lg';
@@ -319,8 +322,9 @@ function getButtonSize(tabWidths,tabBarElement,lastButtonSize,showBgMonitor,show
 }
 
 
-function getButtonDisplayMask(tabWidths,tabBarElement,selectedTabIdx, showBgMonitor,showHelp,showUserInfo) {
-    const usedWith= (showBgMonitor?50:0) + (showHelp?50:0) + (showUserInfo?50:0);
+
+function getButtonDisplayMask(tabWidths,tabBarElement,selectedTabIdx, showHelp,showUserInfo) {
+    const usedWith= (showHelp?50:0) + (showUserInfo?50:0);
     const tabBarRealWidth =  getTabBarRealWidth(tabBarElement) - usedWith;
     const sizeAry= Object.values(tabWidths);
     const maskAry= sizeAry.map( () => true);
@@ -347,7 +351,7 @@ function AppHelpButton({menuItem,sx,size='lg'}) {
 }
 
 
-const UserInfo= memo(() => {
+const UserInfo= () => {
     const userInfo = useStoreConnector(() => getUserInfo() ?? {});
 
     const {loginName='Guest', firstName='', lastName='', login_url, logout_url} = userInfo;
@@ -372,7 +376,7 @@ const UserInfo= memo(() => {
             {isGuest && <Chip onClick={onLogin}>Login</Chip>}
         </Stack>
     );
-});
+};
 
 
 
@@ -414,7 +418,7 @@ function SideBarView({menu,appTitle,closeSideBar,haveResults,selected,dropDown,
                                 variant='outlined'
                                 onClick={() => {
                                     const newMI= menu.menuItems.map( (mi) => ({...mi, visible: undefined}) );
-                                    const selected= newMI.find( (m) => m.action===menu.selected && m.primary)?.action;
+                                    const selected= newMI.find( (m) => m.action===menu.selected && isItemPrimary(m))?.action;
                                     if (!selected) dispatchHideDropDown();
                                     updateMenu(appTitle, {...menu, selected, menuItems: newMI});
                                 }}>
@@ -465,6 +469,7 @@ function SideBarView({menu,appTitle,closeSideBar,haveResults,selected,dropDown,
                         {/* Other no-category items, if any */}
                         {Boolean(noCatItems?.length) &&
                             menuItems
+                                .filter( isItemEnabled)
                                 .filter( ({category}) => !category )
                                 .map( (item) => (<SideBarItem {...{key:item.label, item,selected,menu,closeSideBar, allowMenuHide, sx:itemLayoutSx}}/>) )
                         }
@@ -476,6 +481,7 @@ function SideBarView({menu,appTitle,closeSideBar,haveResults,selected,dropDown,
                             {Boolean(cat) && <Typography key={cat} level='title-sm'>{cat}</Typography>}
                             {
                                 menuItems
+                                    .filter( isItemEnabled)
                                     .filter( ({category}) => category===cat )
                                     .map( (item) => (<SideBarItem {...{key:item.label, item,selected,menu,closeSideBar, allowMenuHide, sx:itemLayoutSx}}/>) )
                             }
@@ -490,7 +496,7 @@ function SideBarView({menu,appTitle,closeSideBar,haveResults,selected,dropDown,
 function tabsUpdated(menu) {
     if (!menu?.menuItems) return false;
     return menu.menuItems.some( (mi) => {
-        return (mi.visible??mi.primary)!==mi.primary;
+        return (mi.visible??isItemPrimary(mi))!==isItemPrimary(mi);
     });
 }
 
@@ -512,7 +518,7 @@ function doTabChange(action,menuTabItems) {
 }
 
 
-const workingIndicator= (
+export const workingIndicator= (
     <CircularProgress
         color='success'
         sx={{
@@ -558,6 +564,7 @@ function ResultsTip({useBadge=false,children}) {
     const {haveResults,tableCnt,tableLoadingCnt, imageCnt, imageLoadingCnt, bgTableCnt, pinChartCnt}= useStoreConnector(getCounts);
     const badgeCnt=useBadge && tableCnt+imageCnt+pinChartCnt;
     if (!haveResults) return children;
+    const jobHistoryLabel = getAppOptions()?.background?.history?.label;
     const ttWrap= (
         <Tooltip
             followCursor={true}
@@ -568,7 +575,7 @@ function ResultsTip({useBadge=false,children}) {
                     {tableCnt>0 && <Typography>{`${tableCnt} table${tableCnt>1?'s':''}`}</Typography>}
                     {tableLoadingCnt>0 && <Typography>{`${tableLoadingCnt} table${tableLoadingCnt>1?'s':''} still loading`}</Typography>}
                     {pinChartCnt>0 && <Typography>{`${pinChartCnt} pinned chart${pinChartCnt>1?'s':''}`}</Typography>}
-                    {bgTableCnt>0 && <Typography>{`${bgTableCnt} table${bgTableCnt>1?'s':''} in Background Monitor`}</Typography>}
+                    {bgTableCnt>0 && <Typography>{`${bgTableCnt} table${bgTableCnt>1?'s':''} in ${jobHistoryLabel}`}</Typography>}
                 </Stack> )}>
             {children}
         </Tooltip>
@@ -591,12 +598,12 @@ function SideBarItem({item,selected,menu,closeSideBar,allowMenuHide,icon,sx}) {
     };
 
     if (!item) return <div>missing</div>;
-    const {title,action,label,visible,primary}= item;
+    const {title,action,label}= item;
     return (
         <Stack direction='row' sx={sx}>
             <ToolbarButton tip={getTip(title,action)} icon={icon} text={label}
                            pressed={selected===action} onClick= {() => onClick(item)}  />
-            {(allowMenuHide && (visible ?? primary)) &&
+            {(allowMenuHide && itemVisible(item)) &&
                 <Chip {...{
                     className: 'hideTab',
                     onClick:() => {
@@ -619,23 +626,3 @@ function getCounts(prev={}) {
     return results;
 }
 
-const showBgMonAction = { type:'COMMAND',
-    action: 'background.bgMonitorShow',
-    label: 'Background Monitor',
-    desc: 'Watch and retrieve background tasks for packaging and catalogs'
-};
-
-
-function BgMonitorButton ({sx,size}) {
-    const {jobs={}} = useStoreConnector(() => getBackgroundInfo());
-
-    const monitoredJobs = Object.values(jobs).filter( (info) => info?.jobInfo?.monitored );
-    const isWorking = monitoredJobs.some( (info) => isActive(info) );
-
-    const buttonSize= size==='lg' ? 'sm' : size==='md' ? 'lg' : 'md';
-
-    return (
-        <MenuItemButton {...{ sx, size:buttonSize, menuItem:showBgMonAction, isWorking,
-            icon:size!=='lg' ? <PendingActionsOutlinedIcon/> : undefined,
-            badgeCount: monitoredJobs.length }}/>);
-}

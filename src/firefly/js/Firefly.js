@@ -7,10 +7,10 @@ import 'isomorphic-fetch';
 import {Stack, Typography} from '@mui/joy';
 import React from 'react';
 import {createRoot} from 'react-dom/client';
-import {set, defer, once} from 'lodash';
+import {set, defer, once, isArray} from 'lodash';
 import 'styles/global.css';
 
-import {APP_LOAD, dispatchAppOptions, dispatchUpdateAppData} from './core/AppDataCntlr.js';
+import {APP_LOAD, dispatchAppOptions, dispatchConnectionStatus, dispatchUpdateAppData} from './core/AppDataCntlr.js';
 import {FireflyViewer} from './templates/fireflyviewer/FireflyViewer.js';
 import {FireflySlate} from './templates/fireflyslate/FireflySlate.jsx';
 import {LandingPage} from './templates/fireflyviewer/LandingPage.jsx';
@@ -21,9 +21,9 @@ import {initApi} from './api/ApiBuild.js';
 import {dispatchUpdateLayoutInfo} from './core/LayoutCntlr.js';
 import {FireflyRoot} from './ui/FireflyRoot.jsx';
 import {SIAv2SearchPanel} from './ui/tap/SIASearchRootPanel';
-import {getSIAv2Services} from './ui/tap/SiaUtil';
-import {TapSearchPanel} from './ui/tap/TapSearchRootPanel';
-import {dispatchChangeReadoutPrefs} from './visualize/MouseReadoutCntlr.js';
+import {getSIAv2ServicesByName} from './ui/tap/SiaUtil';
+import {mergeServices} from './ui/tap/TapUtil';
+import {dispatchChangeReadoutPrefs, initReadoutPrefs} from './visualize/MouseReadoutCntlr.js';
 import {showInfoPopup} from './ui/PopupUtil';
 import {bootstrapRedux, flux} from './core/ReduxFlux.js';
 import {getOrCreateWsConn} from './core/messaging/WebSocketClient.js';
@@ -36,11 +36,11 @@ import {evaluateWebApi, initWebApi, isUsingWebApi, WebApiStat} from './api/WebAp
 import {WebApiHelpInfoPage} from './ui/WebApiHelpInfoPage.jsx';
 import {dispatchOnAppReady} from './core/AppDataCntlr.js';
 import {getBootstrapRegistry} from './core/BootstrapRegistry.js';
-import {showLostConnection} from './ui/LostConnection.jsx';
 import {recordHistory} from './core/History.js';
+import {GatorProtocolRootPanel} from './visualize/ui/GatorProtocolRootPanel';
 import {setDefaultImageColorTable} from './visualize/WebPlotRequest.js';
 import {initWorkerContext} from './threadWorker/WorkerAccess.js';
-import {getTAPServices} from './ui/tap/TapKnownServices.js';
+import {getTAPServicesByName} from './ui/tap/TapKnownServices.js';
 import {loadAllJobs} from './core/background/BackgroundUtil.js';
 import {
     makeDefImageSearchActions, makeDefTableSearchActions, makeDefTapSearchActions, makeExternalSearchActions
@@ -107,7 +107,7 @@ const ARCHIVE= 'Archive Searches';
  *                                  the catalog panel will show the polygon option as default when possible
  * @prop {Array.<string> } imageMasterSources -  default - ['ALL'], source to build image master data from
  * @prop {Array.<string> } imageMasterSourcesOrder - for the image dialog sort order of the projects, anything not listed is put on bottom
- * @prop {PROP_SHEET} table.propertySheet - specifies how to show propertySheet
+ * @prop {Object} table.propertySheet - specifies how to show propertySheet
  */
 
 /** @type {AppProps} */
@@ -138,7 +138,8 @@ const defAppProps = {
                         layout= {{width: '100%'}}
                           lockTitle='IRSA SIAv2 Search'
                         name='IRSA_USING_SIAv2'/>,
-        ]
+    ]
+
 };
 
 /** @type {FireflyOptions} */
@@ -182,7 +183,7 @@ const defFireflyOptions = {
         defHipsSources: {source: 'irsa', label: 'Featured'},
         mergedListPriority: 'irsa',
         mocMaxDepth : 5,
-        mocDefaultStyle : 'DESTINATION_OUTLINE',
+        mocDefaultStyle : 'AUTO',
     },
     table : {
         pageSize: 100,
@@ -195,8 +196,9 @@ const defFireflyOptions = {
         defaultColorTable: 1,
         canCreateExtractionTable: false,
     },
-    tapObsCore: {
+    dataServiceOptions: {
         enableObsCoreDownload: true,
+        generateDownloadFileName: false
         // debug: true,
     },
     coverage : {
@@ -217,14 +219,27 @@ const defFireflyOptions = {
         ...makeDefImageSearchActions(),
     ],
     tap : {
-        services: getTAPServices( ['IRSA', 'NED', 'NASA Exoplanet Archive', 'KOA', 'HEASARC', 'MAST Images',
-                                   'CADC', 'VizieR (CDS)', 'Simbad (CDS)', 'Gaia', 'GAVO', 'HSA', 'NOIR Lab'] ),
+        services: getTAPServicesByName( ['IRSA', 'NED', 'ExoplanetArchive', 'KOA', 'HEASARC', 'MASTImages',
+                                   'CADC', 'CANFARyoucat', 'VizieR', 'Simbad', 'Gaia', 'GAVO', 'HSA', 'NOIRLab'] ),
         defaultMaxrec: 50000
     },
     SIAv2 : {
-        services: getSIAv2Services( ['IRSA', 'CADC', ]),
+        services: getSIAv2ServicesByName( ['IRSA', 'CADC', ]),
         defaultMaxrec: 50000
-    }
+    },
+    background : {
+        notification: {
+            enable: false,          // enable notification feature
+            showEmail: false,       // display email input field; if true, enable will be set to true
+        },
+        history: {
+            label: 'Job Monitor',    // label for the background monitor button
+            note: `
+                Note: The listed jobs are limited to your current session, where "session" may refer to your browser or archive, 
+                or account with which you're currently logged in. Jobs older than 14 days will not appear.
+            `.trim(),
+        }
+    },
 };
 
 
@@ -237,9 +252,11 @@ const defFireflyOptions = {
  * @param {Object} appSpecificOptions
  */
 function installOptions(appSpecificOptions) {
-    const options=  mergeObjectOnly(defFireflyOptions, appSpecificOptions); // app specific will override default
+    // const options=  mergeObjectOnly(defFireflyOptions, appSpecificOptions); // app specific will override default
+    const options=  mergeAppOptions(defFireflyOptions, appSpecificOptions); // app specific will override default
     // setup options
     dispatchAppOptions(options);
+    initReadoutPrefs();
     options.disableDefaultDropDown && dispatchUpdateLayoutInfo({disableDefaultDropDown:true});
     options.readoutDefaultPref && dispatchChangeReadoutPrefs(options.readoutDefaultPref);
     options.wcsMatchType && dispatchWcsMatch({matchType:options.wcsMatchType, lockMatch:true});
@@ -248,6 +265,7 @@ function installOptions(appSpecificOptions) {
     if (options.imageScrollsToHighlightedTableRow!==visRoot().autoScrollToHighlightedTableRow) {
         dispatchChangeTableAutoScroll(options.imageScrollsToHighlightedTableRow);
     }
+    return options;
 
 }
 
@@ -276,14 +294,42 @@ function fireflyInit(props, appSpecificOptions={}, webApiCommands) {
         set(appSpecificOptions, 'table.showPropertySheetButton', appSpecificOptions?.table?.showPropertySheetButton ?? true);
     }
 
-    installOptions(appSpecificOptions);
+    const finalOptions= installOptions(appSpecificOptions);
+    const finalAppProps= setupGatorProtocolPanel(finalOptions,appProps);
 
+    if (viewer) window.firefly= {...window.firefly, finalAppProps, finalOptions};
     // initialize UI or API depending on entry mode.
     documentReady().then(() => {
-        viewer ? renderRoot(undefined, viewer, appProps,webApiCommands) : initApi(props);
+        viewer ? renderRoot(undefined, viewer, finalAppProps,webApiCommands) : initApi(props);
     });
     initDone = true;
 }
+
+function setupGatorProtocolPanel(installedOptions, appProps) {
+    const title=installedOptions?.gatorProtocol?.title ?? 'LSDB Searches';
+    const ddPanels= appProps.dropdownPanels ?? [];
+    const gatorProtoMenuItem= {
+        label: title,
+        action: 'GatorProtocolRootPanel',
+        primary: installedOptions?.gatorProtocol?.primary ?? true,
+        category:ARCHIVE
+    };
+    if (window.location.search.substring(1).split('view=').pop().split('&')[0]==='GatorProtocolRootPanel') {
+        if (!isArray(appProps.menu)) return appProps;
+        const menu= [...appProps.menu, gatorProtoMenuItem];
+        return {...appProps, menu, dropdownPanels:ddPanels};
+    }
+    else {
+        if (!installedOptions.gatorProtocol?.services?.length) return appProps;
+        if (!isArray(appProps.menu)) return appProps;
+        const gpPanel= <GatorProtocolRootPanel name='GatorProtocol' title={title}/>;
+        const menu= [...appProps.menu, gatorProtoMenuItem];
+        const dropdownPanels= [...ddPanels, gpPanel];
+        return {...appProps, menu, dropdownPanels};
+    }
+}
+
+
 
 /*
  *
@@ -400,7 +446,6 @@ export const firefly = {
     bootstrap
 };
 
-/* eslint-disable  quotes */
 
 
 /**
@@ -418,7 +463,7 @@ function bootstrap(props, clientAppSpecificOptions, webApiCommands) {
     return new Promise(async (resolve) => {
 
         const processDecor= (process) => (rawAction) => {
-            getOrCreateWsConn().catch(() => showLostConnection());
+            getOrCreateWsConn().catch(() => dispatchConnectionStatus({lost: true, reason: 'You are no longer connected to the server'}));
             process(rawAction);
             recordHistory(rawAction);
         };
@@ -435,7 +480,8 @@ function bootstrap(props, clientAppSpecificOptions, webApiCommands) {
         catch (err) {
             logger.error('could not retrieve valid server options');
         }
-        const appSpecificOptions = mergeObjectOnly(clientAppSpecificOptions, srvAppSpecificOptions);
+        // const appSpecificOptions = mergeObjectOnly(clientAppSpecificOptions, srvAppSpecificOptions);
+        const appSpecificOptions = mergeAppOptions(clientAppSpecificOptions, srvAppSpecificOptions);
 
         const client= await getOrCreateWsConn(); // establish websocket connection first before doing anything else.
 
@@ -452,22 +498,37 @@ function bootstrap(props, clientAppSpecificOptions, webApiCommands) {
         // when all is done, mark app as 'ready'
         defer(() => {
             setTimeout(() => {
-                dispatchUpdateAppData({isReady: true})
+                dispatchUpdateAppData({isReady: true});
             },3);
         });
         initWorkerContext();
     });
 }
 
+/**
+ *
+ * @param ops
+ * @param overrideOps
+ */
+function mergeAppOptions(ops, overrideOps) {
+    const saveOpsTapSrv= ops?.tap?.services ? [...ops.tap.services] : undefined;
+    const mergedOps = mergeObjectOnly(ops, overrideOps);
+    if (saveOpsTapSrv && overrideOps?.tap?.services)  { // merge tap services by hands
+        const newServices= mergeServices(saveOpsTapSrv, overrideOps.tap.services);
+        mergedOps.tap.services= newServices;
+    }
+    return mergedOps;
+}
+
 function renderRoot(root, viewer, props, webApiCommands) {
-    const e= document.getElementById(props.div);
-    if (!e) {
+    const element= document.getElementById(props.div);
+    if (!element) {
         showInfoPopup('HTML page is not setup correctly, Firefly cannot start.');
         logger.error(`DOM Element "${props.div}" is not found in the document, Firefly cannot start.`);
         return;
     }
 
-    const rootToUse = root ?? createRoot(e);
+    const rootToUse = root ?? createRoot(element);
     initWebApi(webApiCommands);
     const webApi= isUsingWebApi(webApiCommands);
     const doAppRender= () => {
@@ -481,11 +542,11 @@ function renderRoot(root, viewer, props, webApiCommands) {
             );
         }
     };
-    webApi ? handleWebApi(webApiCommands, e, doAppRender) : doAppRender();
+    webApi ? handleWebApi(webApiCommands, props, element, doAppRender) : doAppRender();
 }
 
 
-function handleWebApi(webApiCommands, e, doAppRender) {
+function handleWebApi(webApiCommands, appProps, element, doAppRender) {
     const {status, helpType, contextMessage, cmd, execute,
         params, badParams, missingParams}= evaluateWebApi(webApiCommands);
     switch (status) {
@@ -500,10 +561,10 @@ function handleWebApi(webApiCommands, e, doAppRender) {
             });
             break;
         case WebApiStat.SHOW_HELP:
-            createRoot(e).render(
-                React.createElement(
-                    WebApiHelpInfoPage,
-                    {helpType, contextMessage, cmd, params, webApiCommands, badParams, missingParams}), e);
+            createRoot(element).render(
+                <WebApiHelpInfoPage {...{helpType, contextMessage, appProps, cmd, params,
+                    webApiCommands, badParams, missingParams}}/>
+            );
             break;
         default:
             logger.error('Unexpect status, can\'t handle web api: '+ status);

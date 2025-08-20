@@ -20,6 +20,24 @@ export const RtoD = 180.0 / Math.PI;
 export const toDegrees = (angle) => angle * (180 / Math.PI);
 export const toRadians = (angle) => (angle * Math.PI) / 180;
 
+/**
+ * @typedef {Object} WavelengthUnitDefinition
+ * @property {number} m - The equivalent value in meters.
+ * @property {string} name - The full unit name in ASCII characters.
+ * @property {string} symbol - The shorter unit symbol using Unicode characters.
+ */
+
+/**
+ * Mapping of wavelength unit keys to their definitions.
+ * @type {Object.<string, WavelengthUnitDefinition>}
+ */
+export const WAVELENGTH_UNITS = {
+    // key: { m: meters equivalent, name: full string in ASCII, symbol: shorter string with Unicode characters }
+    m: { m: 1, name: 'meters', symbol: 'm' },
+    um: { m: 1e-6, name: 'microns', symbol: 'μm' },
+    nm: { m: 1e-9, name: 'nanometers', symbol: 'nm' },
+    angstrom: { m: 1e-10, name: 'angstroms', symbol: 'Å' },
+};
 
 //======================================================================
 //----------------------- Public Methods -------------------------------
@@ -107,7 +125,7 @@ export function getLatDist(lat1,lat2) {
 /**
  * Convert from one coordinate system to another. No action, if the world point coordinate system is non-celestial.
  *
- * @param {WorldPt} wpt the world point to convert
+ * @param {WorldPt|undefined} wpt the world point to convert
  * @param {CoordinateSys} to CoordSys, the coordinate system to convert to; defaults to J2000, ignored for non-celestial world points
  * @return {WorldPt|undefined} the world point in the new coordinate system
  */
@@ -137,7 +155,9 @@ export function computeCentralPointAndRadius(inPoints) {
     let radius;
     let maxRadius = Number.NEGATIVE_INFINITY;
 
-    const points= inPoints.map((wp) => convertToJ2000(wp));
+    const points= inPoints
+        .map((wp) => convertToJ2000(wp))
+        .filter(Boolean);
 
 
     /* get max,min of lon and lat */
@@ -147,19 +167,19 @@ export function computeCentralPointAndRadius(inPoints) {
     let minLat = Number.POSITIVE_INFINITY;
 
     points.forEach((pt) => {
-        if (pt.x > maxLon) {
-            maxLon = pt.x;
-        }
-        if (pt.x < minLon) {
-            minLon = pt.x;
-        }
-        if (pt.y > maxLat) {
-            maxLat = pt.y;
-        }
-        if (pt.y < minLat) {
-            minLat = pt.y;
-        }
-    });
+            if (pt.x > maxLon) {
+                maxLon = pt.x;
+            }
+            if (pt.x < minLon) {
+                minLon = pt.x;
+            }
+            if (pt.y > maxLat) {
+                maxLat = pt.y;
+            }
+            if (pt.y < minLat) {
+                minLat = pt.y;
+            }
+        });
     if (maxLon - minLon > 180) {
         minLon = 360 + minLon;
     }
@@ -743,7 +763,16 @@ export function convertAngle(from, to, angle) {
             numAngle = numAngle * Math.PI/180.0;
             toIdx = 0;
         }
-        return numAngle * Math.pow(60.0, (toIdx - fromIdx));
+        const v=  numAngle * Math.pow(60.0, (toIdx - fromIdx));
+        switch (to) {
+            case 'arcsec':
+                return Math.trunc(1000*v)/1000;
+            case 'arcmin':
+                return Math.trunc(100000*v)/100000;
+            case 'degree':
+                return v;
+        }
+        return v;
     }
 }
 
@@ -870,6 +899,22 @@ export function segmentIntersectRect(point1, point2,  view_corners) {
     return false;
 }
 
+/**
+ * Determine if a point is in a rectangle
+ * assume a non-slanted rectangular area
+ * @param point1
+ * @param view_corners
+ * @return {boolean}
+ */
+export function pointInRec(point1, view_corners) {
+    const xAry = view_corners.map((one_corner) => one_corner.x);
+    const yAry = view_corners.map((one_corner) => one_corner.y);
+    const xMin = Math.min(...xAry);
+    const xMax = Math.max(...xAry);
+    const yMin = Math.min(...yAry);
+    const yMax = Math.max(...yAry);
+    return (point1.x >= xMin && point1.y >= yMin && point1.x <= xMax && point1.y <= yMax);
+}
 
 
 /**

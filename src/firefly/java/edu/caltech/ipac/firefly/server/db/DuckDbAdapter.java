@@ -3,10 +3,13 @@
  */
 package edu.caltech.ipac.firefly.server.db;
 
+import edu.caltech.ipac.firefly.core.Util;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.db.spring.JdbcFactory;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
+import edu.caltech.ipac.firefly.server.util.Logger;
+import edu.caltech.ipac.firefly.util.Ref;
 import edu.caltech.ipac.table.DataGroup;
 import edu.caltech.ipac.table.DataType;
 import edu.caltech.ipac.util.AppProperties;
@@ -16,6 +19,7 @@ import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 import org.springframework.jdbc.core.simple.SimpleJdbcTemplate;
 
+import javax.annotation.Nonnull;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -27,7 +31,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
+import static edu.caltech.ipac.firefly.core.Util.Try;
 import static edu.caltech.ipac.firefly.server.db.DuckDbUDF.*;
 import static edu.caltech.ipac.firefly.server.db.EmbeddedDbUtil.*;
 import static edu.caltech.ipac.util.StringUtils.*;
@@ -39,6 +45,7 @@ import static edu.caltech.ipac.util.StringUtils.*;
 public class DuckDbAdapter extends BaseDbAdapter {
     public static final String NAME = "duckdb";
     public static final String DRIVER = "org.duckdb.DuckDBDriver";
+    public static final String EXT_DIR = AppProperties.getProperty("duckdb.ext.dir", System.getProperty("java.io.tmpdir"));
     public static String maxMemory = AppProperties.getProperty("duckdb.max.memory");        // in GB; 2G, 5.5G, etc
     private static int threadCnt=1;    // min 125mb per thread.  recommend 5gb per thread; we will config 1gb per thread but not more than 4.
 
@@ -66,6 +73,7 @@ public class DuckDbAdapter extends BaseDbAdapter {
 
     public DuckDbAdapter(DbFileCreator dbFileCreator) { this(dbFileCreator.create(NAME)); }
     public DuckDbAdapter(File dbFile) { super(dbFile); }
+    DuckDbAdapter() { super(null) ;}
 
     public String getName() { return NAME; }
 
@@ -81,14 +89,15 @@ public class DuckDbAdapter extends BaseDbAdapter {
                 } catch (SQLException e) { return false; }
             }
         };
-        db.consumeProps("memory_limit=%s,threads=%d".formatted(maxMemory, threadCnt));
+        db.consumeProps("memory_limit=%s,threads=%d,extension_directory=%s".formatted(maxMemory, threadCnt, EXT_DIR));
         return db;
     }
 
     void createUDFs() {
+        SimpleJdbcTemplate jdbc = getJdbc();
         for (String cf : customFunctions) {
             try {
-                execUpdate(cf);
+                jdbc.update(cf);
             } catch (Exception ex) {
                 LOGGER.error("Fail to create custom function:" + cf);
             }
@@ -183,7 +192,7 @@ public class DuckDbAdapter extends BaseDbAdapter {
                     List<Integer> aryIdx = colIdxWithArrayData(colsAry);
                     for (int r = 0; r < totalRows; r++) {
                         Object[] row = dg.get(r).getData();
-                        aryIdx.forEach(idx -> row[idx] = serialize(row[idx]));      // serialize array data if necessary
+                        aryIdx.forEach(idx -> row[idx] = Util.serialize(row[idx]));      // serialize array data if necessary
                         addRow(appender, row, r);
                     }
                     appender.flush();
@@ -200,36 +209,23 @@ public class DuckDbAdapter extends BaseDbAdapter {
     public static void addRow(DuckDBAppender appender, Object[] row, int ridx) throws SQLException {
         appender.beginRow();
         for (Object d : row) {
-            if (d == null) {
-                appender.append(null);
-            } else if (d instanceof Boolean v) {
-                appender.append(v);
-            } else if (d instanceof Byte v) {
-                appender.append(v);
-            } else if (d instanceof Short v) {
-                appender.append(v);
-            } else if (d instanceof Integer v) {
-                appender.append(v);
-            } else if (d instanceof Long v) {
-                appender.append(v);
-            } else if (d instanceof Float v) {
-                appender.append(v);
-            } else if (d instanceof Double v) {
-                appender.append(v);
-            } else if (d instanceof String v) {
-                appender.append(v);
-            } else if (d instanceof BigDecimal v) {
-                appender.appendBigDecimal(v);
-            } else if (d instanceof java.sql.Date v) {
-                appender.appendLocalDateTime(v.toLocalDate().atStartOfDay());
-            } else if (d instanceof LocalDate v) {
-                appender.appendLocalDateTime(v.atStartOfDay());
-            } else if (d instanceof LocalDateTime v) {
-                appender.appendLocalDateTime(v.atZone(ZoneOffset.UTC).toLocalDateTime());
-            } else if (d instanceof Date v) {
-                appender.appendLocalDateTime(LocalDateTime.ofInstant(v.toInstant(), ZoneOffset.UTC));  // date/time should be stored as utc.
-            } else {
-                throw new IllegalStateException("Unexpected value: " + d);
+            switch (d) {
+                case null -> appender.append(null);
+                case Boolean v -> appender.append(v);
+                case Byte v -> appender.append(v);
+                case Short v -> appender.append(v);
+                case Integer v -> appender.append(v);
+                case Long v -> appender.append(v);
+                case Float v -> appender.append(v);
+                case Double v -> appender.append(v);
+                case String v -> appender.append(v);
+                case Character v -> appender.append(String.valueOf(v));
+                case BigDecimal v -> appender.append(v.doubleValue());
+                case java.sql.Date v -> appender.appendLocalDateTime(v.toLocalDate().atStartOfDay());
+                case LocalDate v -> appender.appendLocalDateTime(v.atStartOfDay());
+                case LocalDateTime v -> appender.appendLocalDateTime(v.atZone(ZoneOffset.UTC).toLocalDateTime());
+                case Date v -> appender.appendLocalDateTime(LocalDateTime.ofInstant(v.toInstant(), ZoneOffset.UTC));    // date/time should be stored as utc.
+                default -> throw new IllegalStateException("Unexpected value: " + d);
             }
         }
         appender.append(ridx);         // add ROW_IDX
@@ -260,7 +256,8 @@ public class DuckDbAdapter extends BaseDbAdapter {
             if (e instanceof SQLException ex) {
                 JSONObject json = (JSONObject) JSONValue.parse(ex.getMessage().replace("%s:".formatted(ex.getClass().getName()), ""));
                 String msg = json.get("exception_message").toString().split("\n")[0];
-                String type = getSafe(() -> json.get("error_subtype").toString(), json.get("exception_type").toString());
+                String type = Try.it(() -> json.get("error_subtype").toString())
+                                    .getOrElse(json.get("exception_type").toString());
                 return type + ":" + msg;
             }
             return super.interpretError(e);
@@ -279,6 +276,45 @@ public class DuckDbAdapter extends BaseDbAdapter {
 
     public static String replaceLike(String input) {
         return replaceUnquoted(input, "like", "ILIKE");
+    }
+
+    public record MimeDesc(String mime, String desc) {}
+    @Nonnull
+    public static MimeDesc getMimeType(File inFile) {
+        try(JdbcFactory.SharedDS ds = JdbcFactory.getSharedDS(new DuckDbAdapter().createDbInstance())) {
+            loadExtension(ds, "magic");
+            Map<String, Object> rs = ds.getJdbc().queryForMap("SELECT file, magic_mime(file) AS mime, magic_type(file) AS desc FROM glob('%s')".formatted(inFile.getAbsolutePath()));
+            if (!rs.isEmpty()) {
+                return new MimeDesc(String.valueOf(rs.get("mime")), String.valueOf(rs.get("desc")));
+            }
+        } catch (Exception ex) {
+            Logger.getLogger().error(ex, "Failed to detect mime type");
+        }
+        return new MimeDesc("application/x-unknown", "unknown");
+    }
+
+    /**
+     * Loads the specified extension in DuckDB.
+     *
+     * @param ds the shared data source
+     * @param name the name of the extension to load
+     */
+    static void loadExtension(JdbcFactory.SharedDS ds, String name) {
+        SimpleJdbcTemplate jdbc = ds.getJdbc();
+        Ref<Boolean> installed = new Ref<>(false);
+        Ref<Boolean> loaded = new Ref<>(false);
+        jdbc.query("SELECT installed, loaded FROM duckdb_extensions() WHERE extension_name = '%s'".formatted(name), (rs, idx) -> {
+            installed.set(rs.getBoolean("installed"));
+            loaded.set(rs.getBoolean("loaded"));
+            return null;
+        });
+        // Install and load the extension if not already done
+        if (!installed.get()) {
+            jdbc.update("INSTALL %s FROM community".formatted(name));
+        }
+        if (!loaded.get()) {
+            jdbc.update("LOAD %s".formatted(name));
+        }
     }
 
 }

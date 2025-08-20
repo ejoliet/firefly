@@ -5,15 +5,11 @@
 import {Sheet, Stack} from '@mui/joy';
 import {isEmpty, isEqual, omit} from 'lodash';
 import React from 'react';
-import PropTypes from 'prop-types';
-import {SD_CUTOUT_KEY} from '../../metaConvert/vo/ServDescProducts';
+import PropTypes, {arrayOf, bool, func, string, object, element, any} from 'prop-types';
 import {getTblInfo} from '../../tables/TableUtil.js';
-import {getComponentState} from '../../core/ComponentCntlr.js';
-import {showCutoutSizeDialog} from '../../ui/CutoutSizeDialog.jsx';
-import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
-import {getObsCoreOption} from '../../ui/tap/TableSearchHelpers';
-import {makeFoVString} from '../ZoomUtil.js';
-import {ToolbarButton, ToolbarHorizontalSeparator} from '../../ui/ToolbarButton.jsx';
+import {CutoutButton, showCutoutSizeDialog, SHOWING_CUTOUT, SHOWING_FULL} from '../../ui/CutoutSizeDialog.jsx';
+import {ViewerScroll} from '../iv/ExpandedTools';
+import {ToolbarHorizontalSeparator} from '../../ui/ToolbarButton.jsx';
 import {showInfoPopup} from '../../ui/PopupUtil.jsx';
 import {
     dispatchChangeViewerLayout, getViewer, getMultiViewRoot,
@@ -24,39 +20,31 @@ import {showColorBandChooserPopup} from './ColorBandChooserPopup.jsx';
 import {ImagePager} from './ImagePager.jsx';
 import {VisMiniToolbar} from 'firefly/visualize/ui/VisMiniToolbar.jsx';
 
-import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded';
-
-
 export function ImageMetaDataToolbarView({viewerId, viewerPlotIds=[], layoutType, factoryKey, serDef,
-                                             enableCutout, pixelBasedCutout,
+                                             enableCutout, pixelBasedCutout,enableCutoutFullSwitching,
+                                             cutoutToFullWarning, containerElement,
                                           activeTable, makeDataProductsConverter, makeDropDown}) {
 
     const converter= makeDataProductsConverter(activeTable,factoryKey) || {};
     const {canGrid, hasRelatedBands, converterId, maxPlots, threeColor, dataProductsComponentKey}= converter ?? {};
-    const cutoutValue= useStoreConnector( () => getComponentState(dataProductsComponentKey)[SD_CUTOUT_KEY]) ?? getObsCoreOption('cutoutDefSizeDeg') ?? .01;
 
     if (!converter) return <div/>;
-    let cSize='';
-    if (dataProductsComponentKey&&enableCutout) {
-        if (pixelBasedCutout) {
-            cSize= cutoutValue+'';
-        }
-        else {
-            cSize= makeFoVString(Number(cutoutValue));
-        }
 
-    }
-
-
+    const viewer= getViewer(getMultiViewRoot(), viewerId) ?? {scroll:false};
     const layoutDetail= getLayoutDetails(getMultiViewRoot(), viewerId, activeTable?.tbl_id);
-    const viewer= getViewer(getMultiViewRoot(), viewerId);
+
+
+
 
     // single mode stuff
 
-    const showThreeColorButton= threeColor && viewer?.layout===GRID &&
+    const showThreeColorButton= threeColor && viewer.layout===GRID &&
         layoutDetail!==GRID_FULL && !(viewerPlotIds[0].includes(GRID_FULL.toLowerCase()));
     const showPager= activeTable && canGrid && layoutType===GRID && layoutDetail===GRID_FULL;
     const showMultiImageOps= canGrid || hasRelatedBands;
+
+    const {width,height}= containerElement?.getBoundingClientRect() ?? {width:0,height:0};
+    const showScroll= showMultiImageOps && (width>height || viewer.scroll);
 
 
     let metaControls= true;
@@ -65,9 +53,18 @@ export function ImageMetaDataToolbarView({viewerId, viewerPlotIds=[], layoutType
         metaControls= false;
     }
 
-    const gridConfig=[];
-    const gridValue= layoutType===SINGLE ? 'one' : layoutType===GRID && layoutDetail!==GRID_RELATED ? 'gridFull' : 'gridRelated';
 
+    const cutoutMode= enableCutout
+        ? SHOWING_CUTOUT :
+        enableCutoutFullSwitching
+            ? SHOWING_FULL : undefined;
+
+    const gridValue= layoutType===SINGLE
+        ? 'one' :
+        layoutType===GRID && layoutDetail!==GRID_RELATED
+            ? 'gridFull' : 'gridRelated';
+
+    const gridConfig=[];
     if (showMultiImageOps) {
         gridConfig.push(
             { value:'one', title:'Show single image at full size',
@@ -100,17 +97,20 @@ export function ImageMetaDataToolbarView({viewerId, viewerPlotIds=[], layoutType
                 <Stack direction='row' alignItems='center' divider={<ToolbarHorizontalSeparator/>}
                        sx={{ pl: 1/2, flexWrap:'wrap'}}>
                     {makeDropDown ? makeDropDown() : false}
-                    {enableCutout &&
-                        <ToolbarButton
-                            icon={<ContentCutRoundedIcon/>}
-                            text={`${cSize}`} onClick={() => showCutoutSizeDialog(cutoutValue,pixelBasedCutout,dataProductsComponentKey)}/>
-                    }
+                    {cutoutMode && <CutoutButton {...{dataProductsComponentKey,activeTable, serDef,pixelBasedCutout,
+                        enableCutoutFullSwitching, cutoutToFullWarning, cutoutMode }}/> }
                     {metaControls &&
                         <Stack direction='row' spacing={1} alignItems='center' whiteSpace='nowrap'>
                             {showMultiImageOps && <DisplayTypeButtonGroup {...{value:gridValue, config:gridConfig }}/>}
                             {showThreeColorButton &&
                                 <ThreeColor tip='Create three color image'
                                             onClick={() => showThreeColorOps(viewerId,converter,activeTable,converterId)}/>
+                            }
+                            {showScroll &&
+                                <>
+                                    <ToolbarHorizontalSeparator/>
+                                    <ViewerScroll {...{viewerId,checked:viewer.scroll,count:viewerPlotIds.length}}/>
+                                </>
                             }
                         </Stack> }
                     {showPager && <ImagePager pageSize={maxPlots} tbl_id={activeTable.tbl_id}/>}
@@ -122,19 +122,23 @@ export function ImageMetaDataToolbarView({viewerId, viewerPlotIds=[], layoutType
 }
 
 ImageMetaDataToolbarView.propTypes= {
-    dlAry : PropTypes.arrayOf(PropTypes.object),
-    activePlotId : PropTypes.string,
-    viewerId : PropTypes.string.isRequired,
-    layoutType : PropTypes.string.isRequired,
-    viewerPlotIds : PropTypes.arrayOf(PropTypes.string).isRequired,
-    activeTable: PropTypes.object,
-    makeDataProductsConverter: PropTypes.func,
-    makeDropDown: PropTypes.func,
-    serDef: PropTypes.object,
-    enableCutout: PropTypes.bool,
-    pixelBasedCutout: PropTypes.bool,
-    factoryKey: PropTypes.string
+    dlAry : arrayOf(object),
+    activePlotId : string,
+    viewerId : string.isRequired,
+    layoutType : string.isRequired,
+    viewerPlotIds : arrayOf(PropTypes.string).isRequired,
+    activeTable: object,
+    makeDataProductsConverter: func,
+    makeDropDown: func,
+    serDef: object,
+    enableCutout: bool,
+    pixelBasedCutout: bool,
+    factoryKey: string,
+    cutoutToFullWarning: string,
+    enableCutoutFullSwitching: bool,
+    containerElement: any,
 };
+
 
 
 async function showThreeColorOps(viewerId,converter, table, converterId) {

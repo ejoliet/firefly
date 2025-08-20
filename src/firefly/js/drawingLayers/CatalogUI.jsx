@@ -2,8 +2,8 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {IconButton, Stack, Switch, Typography} from '@mui/joy';
-import React from 'react';
+import {Chip, IconButton, Stack, Switch, Typography} from '@mui/joy';
+import React, {useEffect, useState} from 'react';
 import {object,number} from 'prop-types';
 import Enum from 'enum';
 import {CatalogType} from 'firefly/drawingLayers/Catalog.js';
@@ -12,13 +12,15 @@ import {isEmpty, startCase} from 'lodash';
 import * as AppDataCntlr from '../core/AppDataCntlr';
 import {dispatchHideDialog, isDialogVisible} from '../core/ComponentCntlr.js';
 import {MIN_ROWS_FOR_HIERARCHICAL} from '../tables/HpxIndexCntlr';
+import {dispatchTableHighlight} from '../tables/TablesCntlr';
 import {getTblById} from '../tables/TableUtil';
 import {ListBoxInputFieldView} from '../ui/ListBoxInputField';
 import {INFO_POPUP, showInfoPopup} from '../ui/PopupUtil.jsx';
 import {RadioGroupInputFieldView} from '../ui/RadioGroupInputFieldView.jsx';
+import {useStoreConnector} from '../ui/SimpleComponent';
 import {DataTypes} from '../visualize/draw/DrawLayer.js';
 import {dispatchChangeVisibility, dispatchModifyCustomField, GroupingScope} from '../visualize/DrawLayerCntlr.js';
-import {dispatchViewerScroll} from '../visualize/MultiViewCntlr';
+import {dispatchBottomUIComponent} from '../visualize/MultiViewCntlr';
 import {isDrawLayerVisible} from '../visualize/PlotViewUtil.js';
 import {InfoButton} from '../visualize/ui/Buttons.jsx';
 
@@ -170,7 +172,11 @@ function changeVisibilityScope(drawLayer,pv,value) {
 
 function showHpxOptions(drawLayer) {
     const groupOp= [];
-    for(let i= 5; i<=75;i+=5) groupOp.push({label:i+'', value:i});
+    const {minGroupSize=10}= drawLayer ?? {};
+    for(let i= 10; i<=165;i+=10) {
+        groupOp.push({label:i+'', value:i});
+        if (minGroupSize>i && minGroupSize<i+10) groupOp.push({label:minGroupSize+'', value:minGroupSize});
+    }
 
     const groupTypeOp= [
         {label: 'Ellipse', value: ELLIPSE_GROUP_TYPE},
@@ -204,7 +210,7 @@ function showHpxOptions(drawLayer) {
             {!heatmap && <ListBoxInputFieldView
                 label='Min Group' tooltip='Choose min grouping'
                 sx={{minWidth: '10rem'}}
-                options={groupOp} value={drawLayer.minGroupSize}
+                options={groupOp} value={minGroupSize}
                 onChange={(ev, newValue) => {
                     dispatchModifyCustomField(drawLayer.drawLayerId, {minGroupSize:newValue});
                     AppDataCntlr.dispatchAddPreference(HPX_MIN_GROUP_PREF,newValue);
@@ -256,3 +262,44 @@ CatalogUI.propTypes= {
 };
 
 
+export function OptionalHighlight({viewerId, tbl_id,highlightRow, originalCurrentRow, tableRequest,renderTime}) {
+    const [visible,setVisible]= useState(true);
+    const currentRow= useStoreConnector(() => getTblById(tbl_id)?.highlightedRow);
+
+
+    const sx= (theme) => ({
+        alignItems:'center',
+        borderRadius: '5px',
+        overflow:'hidden',
+        border: '2px solid rgba(0,0,0,.1)',
+        borderColor: theme.vars.palette.warning.outlinedColor,
+        backgroundColor: theme.vars.palette.neutral.softBg,
+        visibility: visible ? 'visible' : 'hidden',
+        mb: 2,
+    });
+    
+
+    useEffect(() => {
+        setVisible(true);
+        const id= setTimeout(() => setVisible(false),10000); // 10 seconds
+        return () => clearTimeout(id);
+    }, [viewerId,tbl_id,highlightRow,originalCurrentRow,renderTime]);
+
+    useEffect(() => {
+        if (originalCurrentRow!==currentRow) setVisible(false);
+    }, [currentRow]);
+
+    return (
+        <Stack {...{sx}}>
+            <Stack {...{direction:'row', p:1, spacing:2, alignItems:'center'}}>
+                <Typography color='warning' level='body-lg'>{`Change table highlight to row ${highlightRow}? New images will load.`}</Typography>
+                <Chip variant='solid' color='primary' size='lg' onClick={() => {
+                    dispatchTableHighlight(tbl_id, highlightRow, tableRequest);
+                    dispatchBottomUIComponent({viewerId});
+                }}> Yes </Chip>
+                <Chip variant='solid' color='primary' size='lg' onClick={() => dispatchBottomUIComponent({viewerId}) }> No </Chip>
+            </Stack>
+        </Stack>
+
+    );
+}

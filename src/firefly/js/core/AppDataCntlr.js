@@ -11,6 +11,7 @@ import {getModuleName, getProp, getRootURL, isFullURL} from '../util/WebUtil.js'
 import {dispatchRemoteAction} from './JsonUtils.js';
 import {getWsConn} from './messaging/WebSocketClient';
 import {getLayouInfo} from 'firefly/core/LayoutCntlr';
+import {makeBackgroundMonitorMenuItem} from './background/JobMonitor';
 
 export const APP_DATA_PATH = 'app_data';
 export const COMMAND = 'COMMAND';
@@ -24,6 +25,7 @@ export const ADD_TASK_COUNT = `${APP_DATA_PATH}.addTaskCount`;
 export const REMOVE_TASK_COUNT = `${APP_DATA_PATH}.removeTaskCount`;
 export const ACTIVE_TARGET = `${APP_DATA_PATH}.activeTarget`;
 export const APP_OPTIONS = `${APP_DATA_PATH}.appOptions`;
+export const MENU_UPDATE = `${APP_DATA_PATH}.menuUpdate`;
 
 export const ADD_PREF = `${APP_DATA_PATH}.addPreference`;
 export const REMOVE_PREF = `${APP_DATA_PATH}.removePreference`;
@@ -55,7 +57,8 @@ function actionCreators() {
     return {
         [GRAB_WINDOW_FOCUS]:     grabWindowFocus,
         [HELP_LOAD]:  onlineHelpLoad,
-        [LOAD_SEARCHES]:  loadSearches
+        [LOAD_SEARCHES]:  loadSearches,
+        [MENU_UPDATE]: setMenu
     };
 }
 
@@ -129,7 +132,7 @@ export function dispatchRemovePreference(name) {
  * @param menu the menu object to set.
  */
 export function dispatchSetMenu(menu) {
-    flux.process({ type : APP_UPDATE, payload: {menu} });
+    flux.process({ type : MENU_UPDATE, payload: {menu} });
 }
 
 /**
@@ -147,6 +150,17 @@ export function dispatchLoadSearches(searchInfo) {
  */
 export function dispatchUpdateAppData(appData) {
     flux.process({ type : APP_UPDATE, payload: appData });
+}
+
+/**
+ * updates connection status.
+ * @param p
+ * @param p.lost    true if connection is lost
+ * @param p.reason  reason for the lost connection
+ * @returns {{type: string, payload: *}}
+ */
+export function dispatchConnectionStatus({lost, reason}) {
+    flux.process({ type : APP_UPDATE, payload: {connectionStatus: {lost, reason} }});
 }
 
 /**
@@ -204,7 +218,11 @@ export function makeViewerChannel(channel, file) {
 }
 
 export function isAppReady() {
-    return get(flux.getState(), [APP_DATA_PATH, 'isReady']);
+    return flux.getState()?.[APP_DATA_PATH]?.isReady;
+}
+
+export function getConnectionStatus() {
+    return flux.getState()?.[APP_DATA_PATH]?.connectionStatus;
 }
 
 export function getSearchInfo() {
@@ -218,11 +236,11 @@ export function getSearchByName(name) {
 }
 
 export function getMenu() {
-    return get(flux.getState(), [APP_DATA_PATH, 'menu']);
+    return flux.getState()?.[APP_DATA_PATH]?.menu;
 }
 
 export function getAlerts() {
-    return get(flux.getState(), [APP_DATA_PATH, 'alerts'], {});
+    return flux.getState()?.[APP_DATA_PATH]?.alerts || {};
 }
 
 export const getActiveTarget= function() { return flux.getState()[APP_DATA_PATH].activeTarget; };
@@ -367,6 +385,19 @@ function loadSearches(action) {
 
         Object.assign(searchInfo, rest, {flow, renderAsMenuItems, allSearchItems, groups});
         dispatch({ type : APP_UPDATE, payload: {searches: {activeSearch}}});
+    };
+}
+
+function setMenu(action) {
+    return (dispatch) => {
+        const menu = action.payload?.menu;
+        if (menu?.showBgMonitor ?? true) {
+            menu.menuItems ??= [];
+            if (!menu.menuItems.some((item) => item.action === 'BackgroundMonitorCmd')) {
+                menu.menuItems.push(makeBackgroundMonitorMenuItem());
+            }
+        }
+        dispatch(action);
     };
 }
 

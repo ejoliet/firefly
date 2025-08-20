@@ -29,7 +29,7 @@ import {isLsstFootprintTable} from '../task/LSSTFootprintTask.js';
 import {useFieldGroupMetaState, useFieldGroupValue, useStoreConnector} from '../../ui/SimpleComponent.jsx';
 
 import {getIntHeaderFromAnalysis} from '../../metaConvert/PartAnalyzer';
-import {FileAnalysisType} from '../../data/FileAnalysis';
+import {FileAnalysisType, TableDataType} from '../../data/FileAnalysis';
 import {Format} from '../../data/FileAnalysis';
 import {dispatchValueChange} from 'firefly/fieldGroup/FieldGroupCntlr.js';
 import {dispatchAddActionWatcher, dispatchCancelActionWatcher} from 'firefly/core/MasterSaga.js';
@@ -193,7 +193,7 @@ export function FileUploadViewPanel({setSubmitText, acceptList, acceptOneItem, e
                         </Stack>
                     </Box>
                     <FileAnalysis {...{report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT, acceptList,
-                        isDatalink, acceptOneItem, summaryTblId}}/>
+                        isDatalink, acceptOneItem, summaryTblId, message}}/>
                     <ImageDisplayOption {...{summaryTblId, currentReport:report, currentSummaryModel:summaryModel, acceptList}}/>
                     <TableDisplayOption {...{isMoc, isDatalink, summaryTblId,
                         currentReport:report, currentSummaryModel:summaryModel, currentDetailsModel:detailsModel,
@@ -244,7 +244,7 @@ export function FileDropZone({dropEvent, setDropEvent, setLoadingOp, sx, childre
     );
 }
 
-const LoadingMessage= ({message}) => (
+export const LoadingMessage= ({message}) => (
     <div style={{
         position: 'absolute',
         zIndex:20,
@@ -327,8 +327,14 @@ function getNextState(summaryTblId, summaryTbl, detailsTblId, analysisResult, me
     } else if (analysisResult) {
         if (analysisResult !== prevAnalysisResult) {
             currentReport = JSON.parse(analysisResult);
+
             if (currentReport.fileFormat === Format.UNKNOWN) {
-                return {message:'Unrecognized file type', report:undefined, summaryModel:undefined, detailsModel:undefined, selectInfo: undefined};
+                let errMessage = 'Unrecognized file type'; //since format is unknown
+                if (currentReport?.parts?.[0]?.type === FileAnalysisType.ErrorResponse) {
+                    errMessage = currentReport?.parts[0]?.desc; //use ErrorResponse description if available
+                }
+                return {message: errMessage, report:undefined, summaryModel:undefined,
+                    detailsModel:undefined, selectInfo: undefined};
             }
 
             currentSummaryModel= makeSummaryModel(currentReport, summaryTblId, acceptList);
@@ -397,16 +403,18 @@ function summaryModelEqual(sm1,sm2) {
 }
 
 function makeSummaryModel(report, summaryTblId, acceptList) {
+    const isFits= report?.fileFormat===Format.FITS;
     const columns = [
-        {name: 'Index', type: 'int', desc: 'Extension Index'},
+        {name: 'Index', label:isFits? 'HDU' : 'Index', type: 'int', desc: 'Extension Index', width:isFits?3:5},
         {name: 'Type', type: 'char', desc: 'Data Type'},
-        {name: 'Description', type: 'char', desc: 'Extension Description', width: 30},
+        {name: 'Description', type: 'char', desc: 'Extension Description', width: 40},
         {name: 'AllowedType', type: 'boolean', desc: 'Type in AcceptList', visibility: 'hidden'}
     ];
     const {parts=[]} = report;
     const data = parts.map( (p) => {
         const naxis= getIntHeaderFromAnalysis('NAXIS',p,0);
         const entryType = (naxis===1 && p.type===FileAnalysisType.Image)?FileAnalysisType.Table :p.type;
+        const descPrefix= (naxis===1 && p.type===FileAnalysisType.Image)? '1D image, load as table, ' : '';
         const isMoc=  isMOCFitsFromUploadAnalsysis(report)?.valid;
         const isDatalink=  isAnalysisTableDatalink(report);
         let isImageAllowed = true;
@@ -422,7 +430,8 @@ function makeSummaryModel(report, summaryTblId, acceptList) {
         if (entryType === FileAnalysisType.Table || entryType === FileAnalysisType.Image) {
             allowedType = entryType === FileAnalysisType.Table? isTableAllowed: isImageAllowed;
         }
-        return [p.index, entryType , p.desc, allowedType];
+        const desc= p.desc ? descPrefix+p.desc : '';
+        return [p.index, entryType , desc, allowedType];
     });
 
     const summaryModel = {
@@ -490,13 +499,21 @@ function TableDisplayOption({isMoc, isDatalink, summaryTblId, currentReport, cur
         );
     }
 
+    const foundSpec= selectedTables.some( (idx) =>
+        currentReport.parts[idx].tableDataType===TableDataType.Spectrum);
+
+    const specPref= foundSpec ?
+        selectedTables.length > 1 ?
+            'Some tables appear to be spectra, ' :
+            'Table appears to be a spectrum. ' : '';
+
     return (
         <div style={{marginTop: 3}}>
                 {acceptList.includes(SPECTRUM_TABLES) && <CheckboxGroupInputField
                     sx={{mx:1}}
                     options={[{value: 'spectrum',
-                        title:'If possible - interpret table columns names to fit into a spectrum data model',
-                        label:'Attempt to interpret tables as spectra'}]}
+                        title:'If possible - interpret table columns names to fit into a spectrum data model.',
+                        label:specPref+'Attempt to interpret tables as spectra.'}]}
                     fieldKey='tablesAsSpectrum'
                 />}
         </div>
@@ -669,7 +686,7 @@ function MultiDataSet({summaryModel, detailsModel, isMoc, acceptOneItem}) {
                 </Typography>
             }
             <Box sx={{height:1, position:'relative'}}>
-                <SplitPane split='vertical' maxSize={-20} minSize={20} defaultSize={350}>
+                <SplitPane split='vertical' maxSize={-20} minSize={20} defaultSize={525}>
                     {acceptOneItem && <TablePanel {...{showTypes:false, title:'File Summary', tableModel:summaryModel,
                         ...tblOptions, selectable:false, }} />}
                     {!acceptOneItem && <TablePanel {...{sx:{mr:1}, showTypes:false, title:'File Summary', tableModel:summaryModel,
@@ -841,7 +858,7 @@ function UWSInfo ({jobUrl}) {
 
 
 const FileAnalysis = ({report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT, acceptList,
-                          isDL, acceptOneItem}) => {
+                          isDL, acceptOneItem, message}) => {
     //getting FieldGroup context and adding required params to the request object (used in resultSuccess in FileUploadProcessor)
     const {groupKey, register, unregister}= useContext(FieldGroupCtx);
 
@@ -850,11 +867,11 @@ const FileAnalysis = ({report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT
     //types will have repeated 'Image', 'Table', etc. - getting only unique values from types
     const uniqueTypes = types.filter((value, index, self) => self.indexOf(value) === index);
 
-    const additionalReqObjs = {summaryModel, report, detailsModel, groupKey, acceptList, uniqueTypes, acceptOneItem};
+    const additionalReqObjs = {summaryModel, report, message, detailsModel, groupKey, acceptList, uniqueTypes, acceptOneItem};
     useEffect(() => {
         register('additionalParams', () => additionalReqObjs);
         return () => unregister('additionalParams');
-    }, [report]);
+    }, [report, message]);
 
     if (report) {
 
@@ -878,7 +895,10 @@ const FileAnalysis = ({report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT
     else {
         return (
             <>
-            <AcceptedList list={acceptList}/>
+                <Stack spacing={2} alignItems='center' alignSelf='flex-start' ml='200px' mt={4}>
+                    { Boolean(message) && <Typography color='danger'>{message}</Typography> }
+                    <AcceptedList list={acceptList}/>
+                </Stack>
                 <Typography level='h2' component='div' color='warning' sx={{minHeight:'5rem', flex:'1 1 auto', mt:'4rem', textAlign: 'center'}}>
                     Drag & drop your files here
                 </Typography>

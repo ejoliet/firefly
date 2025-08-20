@@ -11,12 +11,13 @@ import {
 import {isDefined} from '../util/WebUtil.js';
 import CoordinateSys from '../visualize/CoordSys.js';
 import {makeAnyPt, makeWorldPt, parseWorldPt} from '../visualize/Point.js';
+import {isTableExclusiveToPlot} from '../visualize/saga/CatalogWatcher';
 import {
     ACCESS_FORMAT, ACCESS_URL, DEFAULT_TNAME_OPTIONS, obsPrefix, OBSTAP_CNAMES, S_REGION, SERVICE_DESC_COL_NAMES,
     SSA_COV_UTYPE, SSA_TITLE_UTYPE
 } from './VoConst.js';
 import {getObsTabColEntry, getTableModel} from './VoCoreUtils.js';
-import {hasServiceDescriptors} from './VoDataLinkServDef.js';
+import {getServiceDescriptors, hasServiceDescriptors, isDataLinkServiceDesc} from './VoDataLinkServDef.js';
 import {VoTableRecognizer} from './VoTableRecognizer.js';
 
 
@@ -29,33 +30,40 @@ export function isOrbitalPathTable(tableOrId) {
 /**
  * find the center column base on the table model of catalog or image metadata
  * Investigate table meta data a return a CoordColsDescription for two columns that represent and object in the row
- * @param {TableModel|undefined} table
+ * @param {TableModel|String} tableOrId - a table model or a table id
  * @param {boolean} acceptArrayCol - if true then allow of a single column with an array entry for RA and Dec
  * @return {CoordColsDescription|null|undefined}
  */
-export function findTableCenterColumns(table, acceptArrayCol = false) {
+export function findTableCenterColumns(tableOrId, acceptArrayCol = false) {
+    const table = getTableModel(tableOrId);
     const tblRecog = get(table, ['tableData', 'columns']) && VoTableRecognizer.newInstance(table);
     return tblRecog && tblRecog.getCenterColumns(acceptArrayCol);
 }
 
+export const isRowTargetCapable= (tbl_id) => Boolean(findTableCenterColumns(tbl_id));
+
 export function findImageCenterColumns(tableOrId) {
     const table = getTableModel(tableOrId);
     const tblRecog = get(table, ['tableData', 'columns']) && VoTableRecognizer.newInstance(table);
-    return getMetaEntry(table, MetaConst.FITS_FILE_PATH) && tblRecog?.getImagePtColumnsOnMeta();
+    return getMetaEntry(table, MetaConst.IMAGE_COLUMN) && tblRecog?.getImagePtColumnsOnMeta();
 }
 
 /**
  * If there are center columns defined with this table then return a WorldPt
- * @param table
+ * @param {TableModel|String} tableOrId - a table model or a table id
  * @param row
  * @return {WorldPt|undefined} a world point or undefined it no center columns exist
  */
-export function makeWorldPtUsingCenterColumns(table, row) {
+export function makeWorldPtUsingCenterColumns(tableOrId, row) {
+    const table = getTableModel(tableOrId);
     if (!table || isUndefined(row)) return;
     const cen = findTableCenterColumns(table);
-    return cen && makeWorldPt(getCellValue(table, row, cen.lonCol), getCellValue(table, row, cen.latCol), cen.csys);
+    if (!cen) return;
+    const lon= getCellValue(table, row, cen.lonCol);
+    const lat= getCellValue(table, row, cen.latCol);
+    if (!cen || isUndefined(lon) || isUndefined(lat)) return;
+    return makeWorldPt(lon, lat, cen.csys);
 }
-
 /**
  * find ObsCore defined 's_region' column
  * @param table
@@ -76,6 +84,7 @@ export function hasCoverageData(tableOrId) {
     if (!getBooleanMetaEntry(table, MetaConst.COVERAGE_SHOWING, true)) return false;
     if (!table) return false;
     if (!table.totalRows) return false;
+    if (isTableExclusiveToPlot(table)) return false;
     return !isEmpty(findTableRegionColumn(table)) || !isEmpty(findTableCenterColumns(table, true)) || !isEmpty(getCornersColumns(table));
 }
 
@@ -120,6 +129,15 @@ export function isTableWithRegion(tableOrId) {
     return Boolean(VoTableRecognizer.newInstance(table).getVODefinedRegionColumn());
 }
 
+export function getTableRegionColumn(tableOrId) {
+    const table = getTableModel(tableOrId);
+    if (!table) return;
+    return VoTableRecognizer.newInstance(table).getVODefinedRegionColumn();
+}
+
+
+
+
 function getObsCoreTableColumn(tableOrId, name) {
     const entry = getObsTabColEntry(name);
     if (!entry) return;
@@ -159,6 +177,18 @@ export function hasObsCoreLikeDataProducts(tableOrId) {
     const hasProdType = getObsCoreProdTypeCol(table);
     return Boolean(hasUrl && hasFormat && hasProdType);
 }
+
+/**
+ * Return true if this table has a datalink service descriptor (treat it like obscore-type table in this case)
+ * @param {TableModel|String} tableOrId
+ * @return {boolean}
+ */
+export function hasDataLinkSvcDesc(tableOrId) {
+    const table = getTableModel(tableOrId);
+    const serDefs  = getServiceDescriptors?.(table) ?? [];
+    return serDefs && serDefs.some(isDataLinkServiceDesc);
+}
+
 
 export function isDatalinkTable(tableOrId) {
     const columns = getTableModel(tableOrId)?.tableData?.columns?.map( (c) => c?.name?.toLowerCase() ?? '') ?? [];
@@ -322,6 +352,7 @@ export function getProdTypeGuess(tableOrId, rowIdx) {
  * @returns {boolean}
  */
 export function isObsCoreLike(tableModel) {
+    if (!tableModel) return false;
     const cols = getColumns(tableModel);
     if (cols.findIndex((c) => get(c, 'utype', '').startsWith(obsPrefix)) >= 0) {
         return true;
@@ -355,12 +386,21 @@ export function isFormatPng(tableOrId, rowIdx) {
 }
 
 export function getWorldPtFromTableRow(table) {
-    const centerColumns = findTableCenterColumns(table);
+    const centerColumns = findTableCenterColumns(table,true);
     if (!centerColumns) return undefined;
     const {lonCol, latCol, csys} = centerColumns;
-    const ra = Number(getCellValue(table, table.highlightedRow, lonCol));
-    const dec = Number(getCellValue(table, table.highlightedRow, latCol));
-    const usingRad = isTableUsingRadians(table, [lonCol, latCol]);
+    let ra, dec, usingRad=false;
+
+    if (lonCol===latCol) {
+        const latlonAry= getCellValue(table,table.highlightedRow, lonCol);
+        ra= Number(latlonAry[0] ?? NaN);
+        dec= Number(latlonAry[1] ?? NaN);
+    }
+    else {
+        ra = Number(getCellValue(table, table.highlightedRow, lonCol));
+        dec = Number(getCellValue(table, table.highlightedRow, latCol));
+        usingRad = isTableUsingRadians(table, [lonCol, latCol]);
+    }
     const raDeg = usingRad ? ra * (180 / Math.PI) : ra;
     const decDeg = usingRad ? dec * (180 / Math.PI) : dec;
     return makeAnyPt(raDeg, decDeg, csys || CoordinateSys.EQ_J2000);
@@ -401,6 +441,15 @@ export function getSSATitle(tableOrId,row) {
     return foundCol.length>0 ? getCellValue(table,row,foundCol[0].name) : undefined;
 }
 
+
+export function getSearchTargetFromTable(tableOrId) {
+    const table= getTableModel(tableOrId);
+    if (!table) return;
+    const wpFromMeta= parseWorldPt(getMetaEntry(table, MetaConst.SEARCH_TARGET, undefined));
+    if (wpFromMeta) return wpFromMeta;
+    return getSearchTarget(table?.request, table);
+}
+
 export function getSearchTarget(r, tableModel, searchTargetStr, overlayPositionStr) {
     if (!r) r = tableModel?.request;
     if (searchTargetStr) return parseWorldPt(searchTargetStr);
@@ -409,14 +458,14 @@ export function getSearchTarget(r, tableModel, searchTargetStr, overlayPositionS
     if (pos) return parseWorldPt(pos);
     if (!r) return;
     if (r.UserTargetWorldPt) return parseWorldPt(r.UserTargetWorldPt);
-    if (r.QUERY) return extractCircleFromADQL(r.QUERY);
+    if (r.QUERY) return extractWorldPtFromADQL(r.QUERY);
     if (r.source?.toLowerCase()?.includes('circle')) return extractCircleFromUrl(r.source);
 }
 
 function extractCircleFromUrl(url) {
     const params = new URL(url)?.searchParams;
     if (!params) return;
-    if (params.has('ADQL')) return extractCircleFromADQL(params.get('ADQL'));
+    if (params.has('ADQL')) return extractWorldPtFromADQL(params.get('ADQL'));
     if (params.has('POS')) return extractCircleFromPOS(params.get('POS'));
     const pts = [...params.entries()]
         .map(([, v]) => v)
@@ -436,19 +485,37 @@ function extractCircleFromPOS(circleStr) {
     return makeWorldPt(raNum, decNum);
 }
 
-function extractCircleFromADQL(adql) {
-    const regEx = /CIRCLE\s?\(.*\)/;
-    const result = regEx.exec(adql);
-    if (!result) return;
-    const circle = result[0];
-    const parts = circle.split(',');
-    if (parts.length < 4) return;
-    let cStr = parts[0].split('(')[1];
-    if (!cStr) return;
-    if (cStr.startsWith(`\'`) && cStr.endsWith(`\'`)) { // eslint-disable-line quotes
-        cStr = cStr.substring(1, cStr.length - 1);
+function extractWorldPtFromADQL(adql) {
+    //for case-insensitive capturing of CIRCLE('<cStr>', <lonStr>, <latStr>, <radius>) or POINT('<cStr>', <lonStr>, <latStr>)
+    const regExp = /(CIRCLE|POINT)\(\s*'(.*?)'\s*,\s*([\d.-]+)\s*,\s*([\d.-]+).*?\)/i;
+
+    const match = adql.match(regExp);
+    if (!match) return;
+
+    const [, , cStr, lonStr, latStr] = match;
+    if (!isNaN(Number(lonStr)) && !isNaN(Number(latStr))) {
+        return makeWorldPt(lonStr, latStr, CoordinateSys.parse(cStr));
     }
-    if (!isNaN(Number(parts[1])) && !isNaN(Number(parts[1]))) {
-        return makeWorldPt(parts[1], parts[2], CoordinateSys.parse(cStr));
+}
+
+export function obsCoreTableHasOnlyImages(table) {
+    if (!table) return false;
+
+    const propTypeCol = getObsCoreProdTypeCol(table);
+    if (propTypeCol?.enumVals) {
+        const pTypes = propTypeCol.enumVals.split(',');
+        if (pTypes.every((s) => s.toLowerCase() === 'image' || s.toLowerCase() === 'cube')) return true;
     }
+
+    if (table.request?.filters) {
+        const fList = table.request.filters.split(';');
+        const pTFilter = fList.find((f) => f.includes(propTypeCol.name) && f.includes('IN'));
+        if (pTFilter) {
+            const inList = pTFilter.substring(pTFilter.indexOf('(') + 1, pTFilter.indexOf(')')).split(',');
+            if (inList.every((s) => s.toLocaleLowerCase() === '\'image\'' || s.toLocaleLowerCase() === '\'cube\'')) {
+                return true;
+            }
+        }
+    }
+    return false;
 }

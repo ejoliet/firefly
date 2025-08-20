@@ -22,6 +22,7 @@ const ONE_POPULATED= 'at least one field must be populated';
 const panelTitle = 'Timing';
 const panelValue = 'Exposure';
 const panelPrefix = getPanelPrefix(panelValue);
+export const exposurePanelId = panelPrefix;
 const exposureRangeOptions = [
     {label: 'Completed in the Last...', value: 'since' },
     {label: 'Overlapping specified range', value: 'range'}
@@ -110,13 +111,13 @@ function makeExposureConstraints(rangeType, fldObj) {
 }
 
 
-const checkHeaderCtl= makeCollapsibleCheckHeader(getPanelPrefix(panelValue));
+const checkHeaderCtl= makeCollapsibleCheckHeader(exposurePanelId);
 const {CollapsibleCheckHeader, collapsibleCheckHeaderKeys}= checkHeaderCtl;
 
 const fldListAry= ['exposureSinceValue', 'exposureLengthMin', 'exposureLengthMax',
             'exposureMin', 'exposureMax', 'exposureSinceOptions', 'exposureRangeType'];
 
-export function ExposureDurationSearch({initArgs, slotProps,useSIAv2}) {
+export function ExposureDurationSearch({initArgs, slotProps,useSIAv2, showLengthInput=true}) {
     const {getVal,makeFldObj}= useContext(FieldGroupCtx);
     const {setConstraintFragment}= useContext(ConstraintContext);
     const [constraintResult, setConstraintResult] = useState({});
@@ -157,7 +158,8 @@ export function ExposureDurationSearch({initArgs, slotProps,useSIAv2}) {
                             : <ExposureSince {...{initArgs, turnOnPanel, panelActive:checkHeaderCtl.isPanelActive(),
                                 ...slotProps?.exposureSince}} />
                         }
-                        <ExposureLength {...{initArgs, turnOnPanel, panelActive:checkHeaderCtl.isPanelActive()}}/>
+                        {showLengthInput &&
+                            <ExposureLength {...{initArgs, turnOnPanel, panelActive: checkHeaderCtl.isPanelActive()}}/>}
                         <DebugObsCore {...{constraintResult}}/>
                     </Stack>
                 </ForceFieldGroupValid>
@@ -173,11 +175,12 @@ ExposureDurationSearch.propTypes = {
         exposureRangeType: PropTypes.object,
         exposureTimeRange: PropTypes.object,
         exposureSince: PropTypes.object,
-    })
+    }),
+    showLengthInput: PropTypes.bool,
 };
 
 
-function ExposureSince({initArgs, turnOnPanel}) {
+function ExposureSince({initArgs, turnOnPanel, slotProps}) {
 
     useFieldGroupWatch(['exposureSinceValue'], ([expSince],isInit) => expSince && !isInit && turnOnPanel());
 
@@ -205,9 +208,12 @@ function ExposureSince({initArgs, turnOnPanel}) {
                                         variant:'plain',
                                         sx:{minHeight:'unset'}
                                     } }}
-                                initialState={{value: initArgs?.urlApi?.exposureSinceOptions || 'hours'}}/>
+                                initialState={{value: initArgs?.urlApi?.exposureSinceOptions || 'hours'}}
+                                {...slotProps?.sinceOptions}
+                            />
 
                         </Stack>),
+                ...slotProps?.sinceValue
             }} />
         </Stack>
     );

@@ -1,46 +1,52 @@
-import {Divider, Stack, Typography} from '@mui/joy';
+import {Stack, Typography} from '@mui/joy';
 import PropTypes from 'prop-types';
 import React, {useContext, useEffect, useState} from 'react';
-import {floatValidator, maximumPositiveFloatValidator, minimumPositiveFloatValidator} from '../../util/Validate.js';
 import {CheckboxGroupInputField} from '../CheckboxGroupInputField.jsx';
 import {FieldGroupCtx, ForceFieldGroupValid} from '../FieldGroup.jsx';
 import {ListBoxInputField} from '../ListBoxInputField.jsx';
 import {RadioGroupInputField} from '../RadioGroupInputField.jsx';
-import {useFieldGroupRerender, useFieldGroupWatch} from '../SimpleComponent.jsx';
-import {ValidationField} from '../ValidationField.jsx';
+import {useFieldGroupRerender, useFieldGroupValue, useFieldGroupWatch} from '../SimpleComponent.jsx';
 import {makeAdqlQueryRangeFragment, ConstraintContext, siaQueryRange} from './Constraints.js';
+import {getDataServiceOption} from './DataServicesOptions';
 import {
-    DebugObsCore, getPanelPrefix, getTapObsCoreOptions, LeftInSearch, makeCollapsibleCheckHeader,
+    DebugObsCore, getPanelPrefix, makeCollapsibleCheckHeader,
     makeFieldErrorList,
-    makePanelStatusUpdater, SmallFloatNumericWidth, SpatialWidth,
+    makePanelStatusUpdater, SpatialWidth,
 } from './TableSearchHelpers.jsx';
 import {tapHelpId} from './TapUtil.js';
+import {
+    BASE_UNIT,
+    convertWavelengthStr,
+    WavelengthInputField,
+    WavelengthRangeInput
+} from 'firefly/ui/WavelengthInputField';
+import {isString, omit} from 'lodash';
 
 const panelTitle = 'Spectral Coverage';
 const panelValue = 'Wavelength';
 const panelPrefix = getPanelPrefix(panelValue);
+export const wavelengthPanelId = panelPrefix;
 
-function getExponent(units) {
-    switch (units) {
-        case 'nm': return 'e-9';
-        case 'angstrom': return 'e-10';
-        case 'um': return 'e-6';
-        default: return '';
-    }
-}
+const obsCoreWvlFieldKeys = {
+    selectionType: 'obsCoreWavelengthSelectionType',
+    rangeType: 'obsCoreWavelengthRangeType',
+    wvlContains: 'obsCoreWavelengthContains',
+    wvlMin: 'obsCoreWavelengthMinRange',
+    wvlMax: 'obsCoreWavelengthMaxRange',
+};
 
-
-function makeWavelengthConstraints(wavelengthSelection, rangeType, filterDefinitions, fldObj) {
+function makeWavelengthConstraints(filterDefinitions, fldObj) {
     const errList= makeFieldErrorList();
     const siaConstraints= [];
     const adqlConstraintsAry = [];
 
-    const {obsCoreWavelengthContains:wlContains, obsCoreWavelengthMinRange:wlMinRange,
-        obsCoreWavelengthMaxRange:wlMaxRange, obsCoreWavelengthUnits:wlUnits}= fldObj;
+    const {[obsCoreWvlFieldKeys.selectionType]:wavelengthSelection, [obsCoreWvlFieldKeys.rangeType]:rangeType,
+        [obsCoreWvlFieldKeys.wvlContains]:wlContains, [obsCoreWvlFieldKeys.wvlMin]:wlMinRange,
+        [obsCoreWvlFieldKeys.wvlMax]:wlMaxRange} = fldObj;
 
 
     // pull out the fields we care about
-    if (wavelengthSelection === 'filter') {
+    if (wavelengthSelection?.value === 'filter') {
         const rangeList = [];
         filterDefinitions.forEach((filterDefinition) => {
             const fieldKey = 'filter' + filterDefinition.name;
@@ -65,14 +71,14 @@ function makeWavelengthConstraints(wavelengthSelection, rangeType, filterDefinit
             // Need at least one field to be non-empty
             errList.addError('at least one filter must be checked');
         }
-    } else if (wavelengthSelection === 'numerical') {
-        const exponent= getExponent(wlUnits?.value);
-        if (rangeType === 'contains') {
+    } else { //wavelengthSelection fld is undefined (because of no filters), or 'numerical' (radio option)
+        if (rangeType?.value === 'contains') {
             errList.checkForError(wlContains);
             if (wlContains?.valid) {
-                const range = wlContains.value;
-                if (range) {
-                    const rangeList = [[`${range}${exponent}`, `${range}${exponent}`]];
+                // value is represented in BASE_UNIT but 'em_min' and 'em_max' in query fragment are in m (meters) so convert to m
+                const rangeBound = convertWavelengthStr(wlContains.value, BASE_UNIT, 'm');
+                if (rangeBound) {
+                    const rangeList = [[rangeBound, rangeBound]];
                     adqlConstraintsAry.push(makeAdqlQueryRangeFragment('em_min', 'em_max', rangeList, true));
                     siaConstraints.push(...siaQueryRange('BAND', rangeList));
                 }
@@ -81,22 +87,17 @@ function makeWavelengthConstraints(wavelengthSelection, rangeType, filterDefinit
                 }
             }
         }
-        if (rangeType === 'overlaps') {
+        if (rangeType?.value === 'overlaps') {
             errList.checkForError(wlMinRange);
             errList.checkForError(wlMaxRange);
             const anyHasValue = wlMinRange?.value || wlMaxRange?.value;
             if (anyHasValue) {
-                const minValue = wlMinRange?.value?.length === 0 ? '-Inf' : wlMinRange?.value ?? '-Inf';
-                const maxValue = wlMaxRange?.value?.length === 0 ? '+Inf' : wlMaxRange?.value ?? '+Inf';
-                const lowerValue = minValue === '-Inf' ? minValue : `${minValue}${exponent}`;
-                const upperValue = maxValue === '+Inf' ? maxValue : `${maxValue}${exponent}`;
+                // value is represented in BASE_UNIT but 'em_min' and 'em_max' in query fragment are in m (meters) so convert to m
+                const lowerValue = convertWavelengthStr(wlMinRange?.value, BASE_UNIT, 'm') || '-Inf';
+                const upperValue = convertWavelengthStr(wlMaxRange?.value, BASE_UNIT, 'm') || 'Inf';
                 const rangeList = [[lowerValue, upperValue]];
-                if (!lowerValue.endsWith('Inf') && !upperValue.endsWith('Inf') && Number(lowerValue) > Number(upperValue)) {
-                    errList.addError('the max wavelength is smaller than the min wavelength');
-                } else {
-                    adqlConstraintsAry.push(makeAdqlQueryRangeFragment('em_min', 'em_max', rangeList));
-                    siaConstraints.push(...siaQueryRange('BAND', rangeList));
-                }
+                adqlConstraintsAry.push(makeAdqlQueryRangeFragment('em_min', 'em_max', rangeList));
+                siaConstraints.push(...siaQueryRange('BAND', rangeList));
             } else {
                 errList.addError('at least one field must be populated');
             }
@@ -107,146 +108,196 @@ function makeWavelengthConstraints(wavelengthSelection, rangeType, filterDefinit
 
 }
 
-const checkHeaderCtl= makeCollapsibleCheckHeader(getPanelPrefix(panelValue));
+const checkHeaderCtl= makeCollapsibleCheckHeader(wavelengthPanelId);
 const {CollapsibleCheckHeader, collapsibleCheckHeaderKeys}= checkHeaderCtl;
-const fldKeys= ['obsCoreWavelengthContains', 'obsCoreWavelengthMinRange','obsCoreWavelengthSelectionType',
-                'obsCoreWavelengthRangeType', 'obsCoreWavelengthMaxRange', 'obsCoreWavelengthUnits'];
 
-export function ObsCoreWavelengthSearch({initArgs, serviceLabel, slotProps,useSIAv2}) {
-    const filterDefinitions = getTapObsCoreOptions(serviceLabel).filterDefinitions ?? [];
-    const fdDefsKeys= filterDefinitions.length ? filterDefinitions.map((fd) =>'filter' +fd.name ) : [];
-
-    const {getVal,makeFldObj}= useContext(FieldGroupCtx);
-    const {setConstraintFragment}= useContext(ConstraintContext);
-    const [constraintResult, setConstraintResult] = useState({});
-    useFieldGroupRerender([...fldKeys,...fdDefsKeys, ...collapsibleCheckHeaderKeys]); // force rerender on any change
-
-
-    const rangeType= getVal('obsCoreWavelengthRangeType');
-    const selectionType= getVal('obsCoreWavelengthSelectionType') ?? 'numerical';
-    const hasFilters = filterDefinitions?.length > 0;
-    const useNumerical = !hasFilters || selectionType === 'numerical';
-    const updatePanelStatus= makePanelStatusUpdater(checkHeaderCtl.isPanelActive(), panelValue);
+export function WavelengthOptions({initArgs, fieldKeys, filterDefinitionsLabel, filterDefinitions, fixedSelectionType,
+                                      fixedRangeType, slotProps }) {
+    const [getSelectionType, setSelectionType] = useFieldGroupValue(fieldKeys.selectionType);
+    const [getRangeType,] = useFieldGroupValue(fieldKeys.rangeType);
 
     useEffect(() => {
-        const fldObj= makeFldObj([...fdDefsKeys, ...fldKeys]);
-        const constraints= makeWavelengthConstraints(selectionType,rangeType, filterDefinitions, fldObj);
-        updatePanelStatus(constraints, constraintResult, setConstraintResult,useSIAv2);
+        if (Object.keys(initArgs?.urlApi ?? {})?.some((k) => k.startsWith('obsCoreWavelength'))) {
+            setSelectionType('numerical'); //url api doesn't allow selecting filter bands, so we default to numerical
+        }
+    }, [initArgs?.urlApi]);
+
+    const hasFilters = filterDefinitions?.length > 0;
+    const useFilters = hasFilters && (fixedSelectionType
+        ? fixedSelectionType === 'filter' : getSelectionType() === 'filter');
+    const useNumerical = !hasFilters || (fixedSelectionType
+        ? fixedSelectionType === 'numerical' : getSelectionType() === 'numerical');
+    const useRangeContains = fixedRangeType ? fixedRangeType === 'contains' : getRangeType() === 'contains';
+    const useRangeOverlaps = fixedRangeType ? fixedRangeType === 'overlaps' : getRangeType() === 'overlaps';
+
+    return (
+        <Stack spacing={2}>
+            {!fixedSelectionType && hasFilters && (
+                <RadioGroupInputField
+                    fieldKey={fieldKeys.selectionType}
+                    options={[{ label: 'By Filter Bands', value: 'filter' }, { label: 'By Wavelength', value: 'numerical' }]}
+                    orientation='horizontal'
+                    label={'Query Type:'}
+                    {...slotProps?.selectionType}
+                />
+            )}
+
+            {useFilters && (
+                <Stack spacing={1} {...slotProps?.filterBandsWvlOptions}>
+                    {isString(filterDefinitionsLabel)
+                        ? <Typography level='title-sm'>{filterDefinitionsLabel}</Typography>
+                        : filterDefinitionsLabel // just render it as is if it's a React node
+                    }
+                    <Stack spacing={.5} sx={{ pl: filterDefinitionsLabel ? 2 : 0 }}>
+                        {filterDefinitions.map((filterDefinition) => (
+                            <CheckboxGroupInputField
+                                key={'filter' + filterDefinition.name + 'Key'}
+                                fieldKey={'filter' + filterDefinition.name}
+                                options={filterDefinition.options}
+                                alignment='horizontal'
+                                label={filterDefinition.name}
+                                {...slotProps?.filterDefOptionsGroup}
+                            />
+                        ))}
+                    </Stack>
+                </Stack>
+            )}
+
+            {useNumerical && (
+                <Stack spacing={1} {...slotProps?.numericalWvlOptions}>
+                    {!fixedRangeType && (
+                        <div style={{display: 'flex'}}>
+                            <ListBoxInputField
+                                fieldKey={fieldKeys.rangeType}
+                                options={[
+                                    {label: 'contains', value: 'contains'},
+                                    {label: 'overlaps', value: 'overlaps'},
+                                ]}
+                                initialState={{value: initArgs?.urlApi?.[fieldKeys.rangeType] || 'contains'}}
+                                label='Select observations whose wavelength coverage'
+                                orientation='vertical'
+                                multiple={false}
+                                {...slotProps?.rangeType}
+                            />
+                        </div>
+                    )}
+                    {useRangeContains && (
+                        <div style={{ display: 'flex' }}>
+                            <WavelengthInputField fieldKey={fieldKeys.wvlContains}
+                                                  inputStyle={{ overflow: 'auto', height: 16 }}
+                                                  placeholder='enter wavelength'
+                                                  {...slotProps?.wvlContains}
+                                                  initialState={{
+                                                      unit: 'nm', //unit that shows up in the units dropdown
+                                                      ...slotProps?.wvlContains?.initialState,
+                                                      value: initArgs?.urlApi?.[fieldKeys.wvlContains], //always in BASE_UNIT
+                                                      //we don't need `unit` from initArgs since its purpose is only for display:
+                                                      //displayValue that shows in input field is computed with value and unit
+                                                  }}/>
+                        </div>
+                    )}
+                    {useRangeOverlaps && (
+                        <WavelengthRangeInput minFieldKey={fieldKeys.wvlMin} maxFieldKey={fieldKeys.wvlMax}
+                                              {...slotProps?.wvlRange}
+                                              slotProps={{
+                                                  wvlMin: {
+                                                      ...slotProps?.wvlMin,
+                                                      initialState: {
+                                                          unit: 'nm',
+                                                          ...slotProps?.wvlMin?.initialState,
+                                                          value: initArgs?.urlApi?.[fieldKeys.wvlMin],
+                                                      },
+                                                  },
+                                                  wvlMax: {
+                                                      ...slotProps?.wvlMax,
+                                                      initialState: {
+                                                          unit: 'nm',
+                                                          ...slotProps?.wvlMax?.initialState,
+                                                          value: initArgs?.urlApi?.[fieldKeys.wvlMax],
+                                                      },
+                                                  }
+                                              }}/>
+                    )}
+                </Stack>
+            )}
+        </Stack>
+    );
+}
+
+WavelengthOptions.propTypes = {
+    initArgs: PropTypes.object,
+    fieldKeys: PropTypes.shape({
+        selectionType: PropTypes.string,
+        rangeType: PropTypes.string,
+        wvlContains: PropTypes.string,
+        wvlMin: PropTypes.string,
+        wvlMax: PropTypes.string,
+    }).isRequired,
+    filterDefinitionsLabel: PropTypes.node,
+    filterDefinitions: PropTypes.arrayOf(PropTypes.shape({
+        name: PropTypes.string,
+        options: PropTypes.arrayOf(PropTypes.shape({ value: PropTypes.string, label: PropTypes.string }))
+    })),
+    fixedSelectionType: PropTypes.oneOf(['filter', 'numerical']),
+    fixedRangeType: PropTypes.oneOf(['contains', 'overlaps']),
+    slotProps: PropTypes.shape({
+        selectionType: PropTypes.object,
+        rangeType: PropTypes.object,
+        wvlContains: PropTypes.object,
+        wvlMin: PropTypes.object,
+        wvlMax: PropTypes.object,
+        wvlRange: PropTypes.object,
+        wvlUnits: PropTypes.object,
+        filterDefOptionsGroup: PropTypes.object,
+        numericalWvlOptions: PropTypes.object,
+        filterBandsWvlOptions: PropTypes.object,
+    })
+};
+
+
+export function ObsCoreWavelengthSearch({ initArgs, serviceId, slotProps, useSIAv2 }) {
+    const filterDefinitions = getDataServiceOption('filterDefinitions', serviceId, []);
+    const fdDefsKeys = filterDefinitions.length ? filterDefinitions.map((fd) => 'filter' + fd.name) : [];
+    const fldKeys = Object.values(obsCoreWvlFieldKeys);
+
+    const { makeFldObj } = useContext(FieldGroupCtx);
+    const { setConstraintFragment } = useContext(ConstraintContext);
+    const [constraintResult, setConstraintResult] = useState({});
+    useFieldGroupRerender([...fldKeys, ...fdDefsKeys, ...collapsibleCheckHeaderKeys]); // force rerender on any change
+
+    const updatePanelStatus = makePanelStatusUpdater(checkHeaderCtl.isPanelActive(), panelValue);
+
+    useEffect(() => {
+        const fldObj = makeFldObj([...fdDefsKeys, ...fldKeys]);
+        const constraints = makeWavelengthConstraints(filterDefinitions, fldObj);
+        updatePanelStatus(constraints, constraintResult, setConstraintResult, useSIAv2);
     });
 
     useEffect(() => {
-        setConstraintFragment(panelPrefix, constraintResult);
-        return () => setConstraintFragment(panelPrefix, '');
+        setConstraintFragment?.(panelPrefix, constraintResult);
+        return () => setConstraintFragment?.(panelPrefix, '');
     }, [constraintResult]);
 
-    useFieldGroupWatch([...fdDefsKeys,
-    // 'obsCoreWavelengthContains', 'obsCoreWavelengthMinRange', 'obsCoreWavelengthMaxRange', 'obsCoreWavelengthUnits' ],
-            'obsCoreWavelengthContains', 'obsCoreWavelengthMinRange', 'obsCoreWavelengthMaxRange' ],
-        (valAry,isInit) => {
-            !isInit && valAry.some((v)=>v) && checkHeaderCtl.setPanelActive(true);
-        });
-
-    const units= (
-        <Stack direction='row' alignItems='center'>
-            <Divider orientation='vertical' />
-            <ListBoxInputField fieldKey='obsCoreWavelengthUnits'
-                               options={ [
-                                   {label: 'microns', value: 'um'},
-                                   {label: 'nanometers', value: 'nm'},
-                                   {label: 'angstroms', value: 'angstrom'},
-                               ]}
-                               slotProps={{ input: {
-                                       variant:'plain',
-                                       sx:{minHeight:'unset'}
-                                   } }}
-                               initialState={{ value: initArgs?.urlApi?.obsCoreWavelengthUnits || 'nm' }}
-                               multiple={false}
-                               {...slotProps?.obsCoreWavelengthUnits} />
-        </Stack>
-    );
-
-
+    useFieldGroupWatch([...fdDefsKeys, obsCoreWvlFieldKeys.wvlContains, obsCoreWvlFieldKeys.wvlMin, obsCoreWvlFieldKeys.wvlMax],
+        (valAry, isInit) => {
+        !isInit && valAry.some((v) => v) && checkHeaderCtl.setPanelActive(true);
+    });
 
     return (
-        <CollapsibleCheckHeader title={panelTitle} helpID={tapHelpId(panelPrefix)}
-                                message={constraintResult?.simpleError??''} initialStateOpen={false}>
-            <Stack {...{spacing: 2, width: SpatialWidth, justifyContent: 'flex-start'}}>
+        <CollapsibleCheckHeader
+            title={panelTitle}
+            helpID={tapHelpId(panelPrefix)}
+            message={constraintResult?.simpleError ?? ''}
+            initialStateOpen={false}
+        >
+            <Stack {...{ spacing: 2, width: SpatialWidth, justifyContent: 'flex-start', ...slotProps?.root }}>
                 <ForceFieldGroupValid forceValid={!checkHeaderCtl.isPanelActive()}>
-                    {hasFilters && <RadioGroupInputField
-                        fieldKey={'obsCoreWavelengthSelectionType'}
-                        options={[{label: 'By Filter Bands', value: 'filter'}, {label: 'By Wavelength', value: 'numerical'}]}
-                        orientation='horizontal'
-                        label={'Query Type:'}
-                        {...slotProps?.obsCoreWavelengthSelectionType}
-                    />}
-                    {hasFilters && selectionType === 'filter' &&
-                        <Stack spacing={1}>
-                            <Typography>Require coverage at the approximate center of these filters:</Typography>
-                            <Stack spacing={.5} style={{marginLeft: LeftInSearch}}>
-                                {filterDefinitions.map((filterDefinition) => {
-                                    return (
-                                        <CheckboxGroupInputField
-                                            key={'filter' + filterDefinition.name + 'Key'}
-                                            fieldKey={'filter' + filterDefinition.name}
-                                            options={filterDefinition.options}
-                                            alignment='horizontal'
-                                            label={filterDefinition.name}
-                                            {...slotProps?.obsCoreFilterDefinitions}
-                                        />);
-                                })}
-                            </Stack>
-                        </Stack>
-                    }
-                    {useNumerical &&
-                        <Stack spacing={1}>
-                            <div style={{display: 'flex'}}>
-                                <ListBoxInputField fieldKey='obsCoreWavelengthRangeType'
-                                                   options={[
-                                                       {label: 'contains', value: 'contains'},
-                                                       {label: 'overlaps', value: 'overlaps'},
-                                                   ]}
-                                                   initialState={{value: initArgs?.urlApi?.obsCoreWavelengthRangeType || 'contains'}}
-                                                   label='Select observations whose wavelength coverage'
-                                                   orientation='vertical'
-                                                   multiple={false}
-                                                   {...slotProps?.obsCoreWavelengthRangeType}
-                                />
-                            </div>
-                            {rangeType === 'contains' &&
-                                <div style={{display: 'flex'}}>
-                                    <ValidationField fieldKey='obsCoreWavelengthContains'
-                                                     size={SmallFloatNumericWidth}
-                                                     inputStyle={{overflow: 'auto', height: 16}}
-                                                     placeholder='enter wavelength'
-                                                     sx={{'& .MuiInput-root': {'paddingInlineEnd': 0,}}}
-                                                     validator={floatValidator(0, 100e15, 'Wavelength')}
-                                                     endDecorator={units}
-                                                     initialState={{value: initArgs?.urlApi?.obsCoreWavelengthContains || ''}}/>
-                                </div>
-                            }
-                            {rangeType === 'overlaps' &&
-                                <Stack direction='row' spacing={1} alignItems='center'>
-                                    <ValidationField {...{
-                                        fieldKey: 'obsCoreWavelengthMinRange',
-                                        sx: {'& .MuiInput-root': {'width': 100}},
-                                        validator: minimumPositiveFloatValidator('Min Wavelength'),
-                                        placeholder: '-Inf',
-                                        initialState: {value: initArgs?.urlApi?.obsCoreWavelengthMinRange},
-                                    }}/>
-                                    <Typography level='body-md'>to</Typography>
-                                    <ValidationField {...{
-                                        fieldKey: 'obsCoreWavelengthMaxRange',
-                                        sx: {'& .MuiInput-root': {'width': 100}},
-                                        validator: maximumPositiveFloatValidator('Max Wavelength'),
-                                        placeholder: '+Inf',
-                                        initialState: {value: initArgs?.urlApi?.obsCoreWavelengthMaxRange}
-                                    }}/>
-                                    {units}
-                                </Stack>
-                            }
-                        </Stack>
-                    }
-                    <DebugObsCore {...{constraintResult}}/>
+                    <WavelengthOptions {...{initArgs,
+                        fieldKeys: obsCoreWvlFieldKeys,
+                        filterDefinitionsLabel: 'Require coverage at the approximate center of these filters:',
+                        filterDefinitions,
+                        ...slotProps?.wavelengthOptions}}/>
+                    <DebugObsCore {...{ constraintResult }} />
                 </ForceFieldGroupValid>
             </Stack>
         </CollapsibleCheckHeader>
@@ -255,12 +306,10 @@ export function ObsCoreWavelengthSearch({initArgs, serviceLabel, slotProps,useSI
 
 ObsCoreWavelengthSearch.propTypes = {
     initArgs: PropTypes.object,
-    serviceLabel: PropTypes.string,
+    serviceId: PropTypes.string,
     useSIAv2: PropTypes.bool,
     slotProps: PropTypes.shape({
-        obsCoreWavelengthUnits: PropTypes.object,
-        obsCoreFilterDefinitions: PropTypes.object,
-        obsCoreWavelengthSelectionType: PropTypes.object,
-        obsCoreWavelengthRangeType: PropTypes.object,
+        root: PropTypes.object,
+        wavelengthOptions: PropTypes.shape({...omit(WavelengthOptions.propTypes, ['fieldKeys'])})
     })
 };

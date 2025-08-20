@@ -63,6 +63,7 @@ public class ServerParams {
     public static final String PLOT_ID = "plotId";
     public static final String POLLING = "polling";
     public static final String EMAIL = "email";
+    public static final String NOTIF_ENABLED = "notifEnabled";
     public static final String ATTRIBUTE = "attribute";
     public static final String FILE = "file";
     public static final String PLOT_EXTERNAL = "PlotExternal";
@@ -137,8 +138,9 @@ public class ServerParams {
     public static final String ADD_JOB = "addBgJob";
     public static final String REMOVE_JOB = "removeBgJob";
     public static final String CANCEL= "cancel";
-    public static final String SET_EMAIL= "setEmail";
-    public static final String RESEND_EMAIL= "resendEmail";
+    public static final String ARCHIVE= "archive";
+    public static final String SET_BG_INFO = "setBgInfo";
+    public static final String SET_JOB_NOTIF= "setBgJobNotif";
     public static final String CREATE_DOWNLOAD_SCRIPT= "createDownoadScript";
     public static final String UWS_JOB_INFO= "uwsJobInfo";
 
@@ -167,6 +169,7 @@ public class ServerParams {
     public static final String USER_TARGET_WORLD_PT = "UserTargetWorldPt";
 
     public static final String PACKAGE_REQUEST = "packageRequest";
+    public static final String DOWNLOAD_SCRIPT_REQUEST = "downloadScriptRequest";
     public static final String TABLE_SEARCH = "tableSearch";
     public static final String QUERY_TABLE = "queryTable";
     public static final String SELECTED_VALUES = "selectedValues";
@@ -177,7 +180,9 @@ public class ServerParams {
 
     public static final String INIT_APP = "CmdInitApp";
     public static final String JSON_PROPERTY= "CmdJsonProperty";
+    public static final String TEXT_FILE= "CmdTextFile";
     public static final String LOGOUT = "CmdLogout";
+    public static final String MAX_FILE_SIZE = "maxFileSize";
     public static final String TILE_SIZE = "tileSize";
     public static final String DATA_COMPRESS = "dataCompress";
     public static final String POINT_SIZE= "pointSize";

@@ -16,6 +16,7 @@ import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.table.io.IpacTableException;
 import edu.caltech.ipac.util.CollectionUtil;
 import edu.caltech.ipac.table.DataType;
+import edu.caltech.ipac.util.FormatUtil;
 import edu.caltech.ipac.util.StringUtils;
 
 import java.io.File;
@@ -23,8 +24,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.List;
 import java.util.SortedSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static edu.caltech.ipac.firefly.data.TableServerRequest.FF_SESSION_ID;
 import static edu.caltech.ipac.util.StringUtils.applyIfNotEmpty;
@@ -39,7 +38,7 @@ public interface SearchProcessor<Type> {
 
     String getUniqueID(ServerRequest request);
     Type getData(ServerRequest request) throws DataAccessException;
-    default FileInfo writeData(OutputStream out, ServerRequest request, TableUtil.Format format, TableUtil.Mode mode) throws DataAccessException {
+    default FileInfo writeData(OutputStream out, ServerRequest request, FormatUtil.Format format, TableUtil.Mode mode) throws DataAccessException {
         return null;
     };
     boolean doCache();
@@ -102,28 +101,4 @@ public interface SearchProcessor<Type> {
         File getDataFile(TableServerRequest request) throws IpacTableException, IOException, DataAccessException;
     }
 
-    class SynchronizedAccess {
-        private final ConcurrentHashMap<String, ReentrantLock> activeRequests = new ConcurrentHashMap<>();
-
-        /**
-         * Acquires a lock associated with the given ID. If the lock does not already exist, it is created.
-         *
-         * @param id the identifier for the lock
-         * @return a {@code Runnable} that, when executed, releases the lock and removes it from the active requests
-         */
-        public Runnable lock(String id) {
-            ReentrantLock lock = activeRequests.computeIfAbsent(id, k -> new ReentrantLock());
-            Logger.getLogger().trace("waiting %s: %s\n".formatted(id, lock));
-            lock.lock();
-            Logger.getLogger().trace("got lock %s: %s\n".formatted(id, lock));
-            return () -> {
-                try {
-                    lock.unlock();              // Ensure lock is released even if an exception occurs
-                } finally {
-                    if (!lock.isLocked()) activeRequests.remove(id);  // Remove the lock from activeRequests if no threads are using it
-                    Logger.getLogger().trace("unlock %s: %s\n".formatted(id, lock));
-                }
-            };
-        }
-    }
 }

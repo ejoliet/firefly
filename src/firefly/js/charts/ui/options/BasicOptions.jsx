@@ -115,11 +115,13 @@ export function basicFieldReducer({chartId, activeTrace}) {
         } else {
             let fieldKey = undefined;
             if (action.type === VALUE_CHANGE) {
-                // when field changes, clear the label and unit
                 fieldKey = get(action.payload, 'fieldKey');
                 ['x','y'].forEach((a) => {
                     if (fieldKey === `_tables.data.${activeTrace}.${a}`) {
-                        inFields = updateSet(inFields, [`layout.${a}axis.title.text`, 'value'], undefined);
+                        // if needed in other chart types, uncomment the following line and only disable it for spectrum
+                        // (because spectrumReducer changes axes labels as _tables.data changes, and they need to be persisted)
+                        // inFields = updateSet(inFields, [`layout.${a}axis.title.text`, 'value'], undefined);
+
                         inFields = updateSet(inFields, [`fireflyLayout.${a}axis.min`, 'value'], undefined);
                         inFields = updateSet(inFields, [`fireflyLayout.${a}axis.max`, 'value'], undefined);
                         inFields = updateSet(inFields, [`__${a}reset`, 'value'], 'true');
@@ -246,12 +248,12 @@ function XyRatio({groupKey, Xyratio, Stretch, xNoLog}) {
 
     if (xNoLog) return null;
     return (
-        <Stack spacing={.5}>
+        <Stack spacing={0.5}>
             <Typography level='body-sm'>
                 Enter display aspect ratio below.<br/>
                 Leave it blank to use all available space.
             </Typography>
-            <Stack spacing={2} direction={'row'}>
+            <Stack spacing={1}>
                 <Xyratio/>
                 {showStretch && <Stretch/>}
             </Stack>

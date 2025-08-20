@@ -70,10 +70,11 @@ const initApiAddedServiceOnce= once((initArgs) => {
  * @param {TapBrowserState} tapBrowserState
  * @return {boolean} true if the field are valid to doa search
  */
-function validateAutoSearch(fields, initArgs, tapBrowserState) {
+export function validateAutoSearch(fields, initArgs, tapBrowserState) {
     const {urlApi = {}} = initArgs;
     if (urlApi.adql) return true;
-    if (!getAdqlQuery(tapBrowserState, false)) return false; // if we can't build a query then we are not initialized yet
+    // disable column constraints otherwise we will get recursion error because they aren't ready by the time we execute a urlApi search
+    if (!getAdqlQuery(tapBrowserState, '', false)) return false; // if we can't build a query then we are not initialized yet
     const {valid, where} = getHelperConstraints(tapBrowserState);
     if (!valid) return false;
     const notWhereArgs = ['MAXREC', 'execute', 'schema', 'service', 'table'];
@@ -102,7 +103,7 @@ function getInitServiceUrl(tapBrowserState,initArgs,tapOps, lockedServiceUrl,loc
 }
 
 export function TapSearchPanel({initArgs= {}, titleOn=false,
-                                   lockService=false, lockedServiceUrl, lockedServiceName, lockObsCore=false,
+                                   lockService=false, lockedServiceUrl, lockedServiceName, lockedTableName, lockObsCore=false,
                                    lockedSchemaName,
                                    obsCoreLockTitle,
                                    groupKey=DEFAULT_TAP_PANEL_GROUP_KEY }) {
@@ -110,13 +111,13 @@ export function TapSearchPanel({initArgs= {}, titleOn=false,
     return (
         <FieldGroup groupKey={groupKey} keepState={true} key={groupKey} sx={{width: 1, height: 1}}>
             <TapSearchPanelImpl {...{initArgs, titleOn, lockService, obsCoreLockTitle, lockedServiceUrl,
-                lockedSchemaName, lockedServiceName, lockObsCore}}/>
+                lockedSchemaName, lockedServiceName, lockedTableName, lockObsCore}}/>
         </FieldGroup>
     );
 }
 
 function TapSearchPanelImpl({initArgs= {}, titleOn=true, lockService=false, lockedServiceUrl, lockedServiceName,
-                                lockedSchemaName,
+                                lockedSchemaName, lockedTableName,
                                 obsCoreLockTitle, lockObsCore}) {
     const {setVal,getVal,setFld,groupKey}= useContext(FieldGroupCtx);
     const [getTapBrowserState,setTapBrowserState]= useFieldGroupMetaState(defTapBrowserState);
@@ -153,8 +154,10 @@ function TapSearchPanelImpl({initArgs= {}, titleOn=true, lockService=false, lock
         }
         setVal(ADQL_QUERY_KEY, '');
         setFld(ADQL_QUERY_KEY, {placeholder: '', value: ''});
-        const serviceUrl= selectedOption?.value;
-        setServiceUrl(serviceUrl);
+        if (!lockedServiceUrl) {
+            const serviceUrl= selectedOption?.value;
+            setServiceUrl(serviceUrl);
+        }
         setObsCoreTableModel(undefined);
         setSrvNameKey(getServiceNamesAsKey());
         setTapBrowserState({...getTapBrowserState(), serviceUrl});
@@ -191,7 +194,7 @@ function TapSearchPanelImpl({initArgs= {}, titleOn=true, lockService=false, lock
     return (
         <Box width={1} height={1}>
             <ConstraintContext.Provider value={ctx}>
-                <FormPanel  onSuccess={(request) => onTapSearchSubmit(request, serviceUrl, tapState)}
+                <FormPanel  onSuccess={(request) => onTapSearchSubmit({request, serviceUrl, tapBrowserState: tapState})}
                             cancelText=''
                             help_id = {tapHelpId('form')}
                             slotProps={{
@@ -208,7 +211,7 @@ function TapSearchPanelImpl({initArgs= {}, titleOn=true, lockService=false, lock
                             }}>
 
                     <TapSearchPanelComponents {...{
-                        servicesShowing, setServicesShowing, lockService, lockObsCore, obsCoreLockTitle,
+                        servicesShowing, setServicesShowing, lockService, lockObsCore, lockedTableName, obsCoreLockTitle,
                         lockedSchemaName, srvNameKey,
                         initArgs, selectBy, setSelectBy, serviceUrl, onTapServiceOptionSelect, titleOn, tapOps, obsCoreEnabled}} />
                 </FormPanel>
@@ -224,6 +227,7 @@ TapSearchPanel.propTypes= {
     lockedServiceUrl: string,
     lockedServiceName: string,
     lockedSchemaName: string,
+    lockedTableName: string,
     obsCoreLockTitle: string,
     lockService: bool,
     lockObsCore: bool,
@@ -236,7 +240,7 @@ TapSearchPanel.propTypes= {
 
 function TapSearchPanelComponents({initArgs, serviceUrl, servicesShowing, setServicesShowing, onTapServiceOptionSelect,
                                       lockService, lockObsCore, obsCoreLockTitle, tapOps,
-                                      lockedSchemaName, titleOn=true, selectBy, setSelectBy}) {
+                                      lockedSchemaName, lockedTableName, titleOn=true, selectBy, setSelectBy}) {
 
     const serviceLabel= getServiceLabel(serviceUrl);
     const [obsCoreTableModel, setObsCoreTableModel] = useState();
@@ -273,7 +277,7 @@ function TapSearchPanelComponents({initArgs, serviceUrl, servicesShowing, setSer
                 <ServiceWarning {...{error,serviceUrl}}/> :
                 <TapViewType  {...{
                     serviceUrl, serviceLabel, selectBy, initArgs, lockService,
-                    lockObsCore, obsCoreLockTitle, obsCoreTableModel, lockedSchemaName,
+                    lockObsCore, obsCoreLockTitle, obsCoreTableModel, lockedSchemaName, lockedTableName,
                     servicesShowing, setServicesShowing, hasObsCoreTable, setSelectBy, setError
                 }} />
             }

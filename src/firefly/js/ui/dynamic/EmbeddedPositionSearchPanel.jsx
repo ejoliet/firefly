@@ -1,10 +1,9 @@
 import {Box, Sheet, Stack, Typography} from '@mui/joy';
-import React, {Fragment, useContext, useEffect, useState} from 'react';
-import {oneOf, bool, string, number, arrayOf, object, func, shape, elementType} from 'prop-types';
-import {defaultsDeep} from 'lodash';
+import React, {useContext, useEffect, useState} from 'react';
+import PropTypes, {oneOf, bool, string, number, arrayOf, object, func, shape, elementType, node} from 'prop-types';
+import {defaultsDeep, isString} from 'lodash';
 import CoordinateSys from '../../visualize/CoordSys.js';
-import {CONE_AREA_OPTIONS, CONE_AREA_OPTIONS_UPLOAD, CONE_CHOICE_KEY, POLY_CHOICE_KEY, UPLOAD_CHOICE_KEY
-} from '../../visualize/ui/CommonUIKeys.js';
+import {CONE_CHOICE_KEY, POLY_CHOICE_KEY, UPLOAD_CHOICE_KEY} from '../../visualize/ui/CommonUIKeys.js';
 import {HiPSTargetView} from '../../visualize/ui/TargetHiPSPanel.jsx';
 import {showInfoPopup} from '../PopupUtil';
 import {RadioGroupInputField} from '../RadioGroupInputField.jsx';
@@ -14,14 +13,17 @@ import {DEF_TARGET_PANEL_KEY, TargetPanel} from '../TargetPanel.jsx';
 import {CONE_AREA_KEY} from './DynamicDef.js';
 import {DEF_AREA_EXAMPLE, PolygonField} from './DynComponents.jsx';
 
-import {UploadTableSelectorPosCol} from 'firefly/ui/UploadTableSelectorPosCol';
+import {UploadTableSelector, UploadTableSelectorPosCol} from 'firefly/ui/UploadTableSelector';
 import {showUploadTableChooser} from 'firefly/ui/UploadTableChooser';
 import {CollapsibleGroup, CollapsibleItem} from 'firefly/ui/panel/CollapsiblePanel';
 import {FormPanel} from 'firefly/ui/FormPanel';
-import {parseWorldPt} from 'firefly/visualize/Point';
-import {formatWorldPtToString} from 'firefly/visualize/ui/WorldPtFormat';
+import {formatWorldPtToStringSimple} from 'firefly/visualize/ui/WorldPtFormat';
 import {getFieldGroupResults} from 'firefly/fieldGroup/FieldGroupUtils';
 import {FieldGroupCtx} from 'firefly/ui/FieldGroup';
+import {getPreference} from 'firefly/core/AppDataCntlr';
+import {MR_EQJ2000_HMS, MR_FIELD_HIPS_MOUSE_READOUT1} from 'firefly/visualize/MouseReadoutCntlr';
+import {getEqTypeFromMR} from 'firefly/visualize/ui/MouseReadoutUIUtil';
+import {toMaxFixed} from 'firefly/util/MathUtil';
 
 
 const DEFAULT_FOV_DEG= 30;
@@ -51,25 +53,27 @@ export const emptyHeaderSx = {
  * EmbeddedPositionSearchPanel - Stack of:
  *   - `hipsTargetView` slot - HiPSTargetView
  *   - `searchRoot` slot - embedded Sheet that contains a Collapsible, containing:
- *      - `formPanel` slot - FormPanel with CompleteBtn, containing:
+ *      - `formPanel` slot^ - FormPanel with CompleteBtn, containing:
  *          - *State: collapsible is open*:
- *              - `spatialSearch` slot - a wrapper with radio options for search types:
+ *              - `formTitle` slot - Typography
+ *              - `spatialSearch` slot^ - a wrapper with radio options for search types:
  *                  - *State: Cone*:
  *                      - `targetPanel` slot - TargetPanel
  *                      - `sizeInput` slot - SizeInputFields
  *                  - *State: Polygon*:
  *                      - `polygonField` slot - PolygonField
  *                  - *State: Upload*:
- *                      - UploadTableSelectorPosCol
+ *                      - `uploadTableSelector` slot^ - UploadTableSelectorPosCol
  *                      - `sizeInput` slot - SizeInputFields
  *              - `children` prop
  *          - *State: collapsible is closed*:
- *              - `searchSummary` slot - summary text
+ *              - `searchSummary` slot^ - summary text
  *
- * Note: Not all of these slots can be replaced by another component, check if `component` is defined in the `slotProps`
- * of a corresponding component in `EmbeddedPositionSearchPanel.propTypes`.
+ * Note: slots marked with `^` can be overridden by another component (also indicated by the `component` prop defined in
+ * the `slotProps` of a corresponding component in `EmbeddedPositionSearchPanel.propTypes`).
  *
  * @param p
+ * @param p.initArgs
  * @param p.initSelectToggle initially selected option in spatialSearch's radio toggle (cone, polygon or multi-object)
  * @param p.nullAllowed
  * @param p.insetSpacial
@@ -78,11 +82,13 @@ export const emptyHeaderSx = {
  * @param p.usePolygon whether to use Polygon search type in spatialSearch
  * @param p.slotProps props to control the slots mentioned above. See propTypes.slotProps for details.
  * @param p.doSearch function to execute when panel is submitted
+ * @param p.formTitle title of the form panel when collapsible is open (optional)
  * @param p.children additional components to be wrapped inside the embedded search form (when collapsible is open)
  *
  */
 export function EmbeddedPositionSearchPanel({
-                                                initSelectToggle= CONE_CHOICE_KEY,
+                                                initArgs={},
+                                                initSelectToggle,
                                                 nullAllowed= false,
                                                 insetSpacial=true,
                                                 usePosition= true,
@@ -90,41 +96,65 @@ export function EmbeddedPositionSearchPanel({
                                                 usePolygon= true,
                                                 slotProps={},
                                                 doSearch,
+                                                formTitle,
                                                 children
                                             } ) {
+
+    const {targetKey=DEF_TARGET_PANEL_KEY}= slotProps.targetPanel ?? {};
+    const {polygonKey=DEFAULT_POLYGON_KEY, }= slotProps.polygonField ?? {};
+    const {sizeKey= DEFAULT_SIZE_KEY, min= 1 / 3600, max= 1, enabled:sizeEnabled=true}= slotProps.sizeInput ?? {};
 
     const {groupKey}= useContext(FieldGroupCtx);
     const {searchTypeKey=CONE_AREA_KEY}= slotProps.spatialSearch ?? {};
 
     const [getSearchTypeOp, setSearchTypeOp] = useFieldGroupValue(searchTypeKey);
+    const [, setPolygon] = useFieldGroupValue(polygonKey);
+    const [, setSize] = useFieldGroupValue(sizeKey);
     const [getUploadInfo, setUploadInfo]= useFieldGroupValue('uploadInfo');
     const uploadInfo= getUploadInfo() || undefined;
 
     const [isHovered, setIsHovered] = useState(true);
     const [isSearchPanel, setIsSearchPanel] = useState(false);
+    const {urlApi:{polygon:polygonInit,radiusInArcSec:radiusInArcSecInit}={}}= initArgs;
+
+    useEffect(() => {
+        if (polygonInit) {
+            setSearchTypeOp(POLY_CHOICE_KEY);
+            setPolygon(polygonInit);
+        }
+        if (radiusInArcSecInit) setSize(radiusInArcSecInit/3600);
+    }, [polygonInit,radiusInArcSecInit]);
 
     //conditionally show UploadTableChooser only when uploadInfo is empty - TAP like behavior
     useEffect(() => {
         if (doGetSearchTypeOp() === UPLOAD_CHOICE_KEY) {
-            if (!uploadInfo.columns) showUploadTableChooser(setUploadInfo);
+            if (!uploadInfo?.columns) showUploadTableChooser(setUploadInfo);
             else setUploadInfo(uploadInfo);
         }
     }, [uploadInfo]);
 
-    if (!usePolygon && !usePosition && !useUpload) return false;
-    const doToggle= usePosition && usePolygon;
-    const initToggle= initSelectToggle;
+    const searchTypes = [
+        {key: CONE_CHOICE_KEY, use: usePosition, label: 'Cone'},
+        {key: POLY_CHOICE_KEY, use: usePolygon, label: 'Polygon'},
+        {key: UPLOAD_CHOICE_KEY, use: useUpload, label: 'Multi-object'},
+    ];
+
+    const enabledSearchTypes = searchTypes.filter((searchType)=>searchType.use);
+    if (enabledSearchTypes.length===0) return false;
+    const doToggle= enabledSearchTypes.length > 1;
+    const initToggle= initSelectToggle ?? enabledSearchTypes[0].key;
+    const searchTypeToggleOptions = enabledSearchTypes.map(({label, key:value})=>({label, value}));
 
     const doGetSearchTypeOp= () => {
         if (doToggle) return getSearchTypeOp() ?? initToggle;
-        if (usePolygon) return POLY_CHOICE_KEY;
-        if (useUpload) return UPLOAD_CHOICE_KEY;
-        return CONE_CHOICE_KEY;
+        return initToggle;
     };
 
-    const {targetKey=DEF_TARGET_PANEL_KEY}= slotProps.targetPanel ?? {};
-    const {polygonKey=DEFAULT_POLYGON_KEY, }= slotProps.polygonField ?? {};
-    const {sizeKey= DEFAULT_SIZE_KEY, min= 1 / 3600, max= 1}= slotProps.sizeInput ?? {};
+
+    if (useUpload && !sizeEnabled && enabledSearchTypes.length===2) {
+        // because in this case, 'Cone' or 'Polygon' label won't make sense
+        searchTypeToggleOptions[0].label = 'Single Object';
+    }
 
     const {
         hipsUrl= DEFAULT_HIPS,
@@ -134,6 +164,7 @@ export function EmbeddedPositionSearchPanel({
         mocList= undefined,
         sRegion= undefined,
         toolbarHelpId= undefined,
+        showHelpLines=true,
         coordinateSys : csysStr = 'EQ_J2000',
         sx:hipsTargetViewSx={},
     }= slotProps.hipsTargetView ?? {};
@@ -141,7 +172,7 @@ export function EmbeddedPositionSearchPanel({
     const defFormPanelProps= slotProps.formPanel ? {
         help_id: 'embeddedDefaultSearchPanelHelp',
         cancelText:'',
-        completeText:'Submit', groupKey,
+        completeText:'Search', groupKey,
         onError:() => showInfoPopup('Fix errors and search again', 'Error'),
     } : {};
 
@@ -151,7 +182,6 @@ export function EmbeddedPositionSearchPanel({
         overflow: 'auto',
     };
 
-    const sizeEnabled= slotProps?.sizeInput?.enabled ?? true;
     return (
         <Stack key='targetGroup' alignItems='center' height='100%' paddingBottom={insetSpacial ? 0 : 20}
            onMouseDown={() => {
@@ -163,10 +193,10 @@ export function EmbeddedPositionSearchPanel({
                     hipsUrl, centerPt:initCenterPt, hipsFOVInDeg, mocList,
                     coordinateSys: CoordinateSys.parse(csysStr) ?? CoordinateSys.EQ_J2000,
                     sRegion, plotId,
-                    minSize: min, maxSize: max, toolbarHelpId,
-                    whichOverlay: doGetSearchTypeOp(), setWhichOverlay: doToggle ? setSearchTypeOp : undefined,
+                    minSize: min, maxSize: max, toolbarHelpId, showHelpLines,
+                    getWhichOverlay: doGetSearchTypeOp, setWhichOverlay: doToggle ? setSearchTypeOp : undefined,
                     targetKey,
-                    sizeKey: sizeEnabled ? sizeKey : undefined,
+                    sizeKey: sizeEnabled ? sizeKey : undefined, //to draw radius only when size input is enabled
                     polygonKey,
                     sx: {minHeight: 300, alignSelf: 'stretch', flexGrow:1, ...hipsTargetViewSx}
                 }}/>
@@ -197,7 +227,7 @@ export function EmbeddedPositionSearchPanel({
                 <CollapsibleGroup variant={'plain'}>
                     <CollapsibleItem {...{
                         componentKey:'embedSearchPanel', isOpen:true, title:'Please select a search type',
-                        header: (isOpen) => (<Header {...{isOpen, doSearch, targetKey, sizeKey, polygonKey, searchTypeKey, slotProps}}/>),
+                        header: (isOpen) => (<Header {...{isOpen, doSearch, targetKey, sizeKey, polygonKey, searchTypeKey, searchTypeToggleOptions, slotProps}}/>),
                         slotProps: {
                             header: {
                                 sx: emptyHeaderSx,
@@ -208,7 +238,8 @@ export function EmbeddedPositionSearchPanel({
                                 }
                             },
                             content: {
-                                sx: { '& .MuiAccordionDetails-content.Mui-expanded': { padding: 0 } }
+                                // '>' to prevent the style defined here from bleeding into child collapsibles
+                                sx: { '>.MuiAccordionDetails-content.Mui-expanded': { padding: 0 } }
                             }
                         } }}>
                         <Slot component={slotProps.formPanel ? FormPanel : Box}
@@ -217,9 +248,18 @@ export function EmbeddedPositionSearchPanel({
                               })}
                               {...defFormPanelProps}
                         >
+                            {formTitle && (
+                                isString(formTitle)
+                                    ? <Typography level='title-lg' color='neutral' mb={1}
+                                                  sx={{textAlign: 'center', ...slotProps?.formTitle?.sx}}
+                                                  {...slotProps?.formTitle}>
+                                        {formTitle}
+                                    </Typography>
+                                    : formTitle
+                            )}
                             <Slot component={SpatialSearch} slotProps={slotProps.spatialSearch}
                                   {...{rootSlotProps:slotProps,insetSpacial,uploadInfo, setUploadInfo, searchTypeOp:doGetSearchTypeOp(),
-                                      doToggle,initToggle, nullAllowed, useUpload}}
+                                      doToggle,initToggle, nullAllowed, searchTypeToggleOptions}}
                             />
                             {children}
                         </Slot>
@@ -239,6 +279,8 @@ EmbeddedPositionSearchPanel.propTypes= {
     usePolygon: bool,
     useUpload: bool,
     doSearch: func,
+    formTitle: node,
+    initArgs: shape({ searchParams: object, urlApi: object, }),
     slotProps: shape({ // all slotProps are optional except for formPanel.onSuccess
         formPanel : shape({
             onSuccess: func,  // note- onSuccess is required for this panel to function like a FormPanel
@@ -255,10 +297,12 @@ EmbeddedPositionSearchPanel.propTypes= {
             hipsFOVInDeg: number,
             sRegion: string,
             toolbarHelpId: string,
+            showHelpLines: bool,
             sx: object,
             initCenterPt: object,
             coordinateSys: oneOf(['EQ_J2000','GALACTIC']),
         }),
+        formTitle: object,
         targetPanel: shape({
             targetKey: string,
             targetPanelExampleRow1: arrayOf(string),
@@ -278,6 +322,10 @@ EmbeddedPositionSearchPanel.propTypes= {
             initValue: number,
             sx: object,
         }),
+        uploadTableSelector: shape({
+            component: elementType,
+            ...UploadTableSelector.propTypes
+        }),
         searchSummary: shape({
             component: elementType,
             getSummaryInfo: func,
@@ -285,16 +333,17 @@ EmbeddedPositionSearchPanel.propTypes= {
         spatialSearch: shape({
             component: elementType,
             searchTypeKey: string,
+            children: PropTypes.node,
             sx: object
         } )
     }),
 };
 
-const Header = function({isOpen, slotProps={}, targetKey, sizeKey, polygonKey, searchTypeKey}) {
+const Header = function({isOpen, slotProps={}, targetKey, sizeKey, polygonKey, searchTypeKey, searchTypeToggleOptions}) {
     const {groupKey} = useContext(FieldGroupCtx);
     const reqObj = getFieldGroupResults(groupKey,true);
 
-    useFieldGroupRerender([targetKey,sizeKey,polygonKey,searchTypeKey]);
+    useFieldGroupRerender([targetKey,sizeKey,polygonKey,searchTypeKey, searchTypeToggleOptions]);
 
     return (
         isOpen ?
@@ -303,14 +352,15 @@ const Header = function({isOpen, slotProps={}, targetKey, sizeKey, polygonKey, s
                 <FormPanel
                     onSuccess={slotProps?.formPanel.onSuccess}
                     direction='row'
-                    sx={{width:1}}
+                    sx={{width:1, alignItems: 'center', justifyContent:'space-between'}}
                     slotProps={{
-                        searchBar: {p:0, justifyContent: 'right'},
+                        searchBar: {p:0},
                     }}
+                    completeText={slotProps?.formPanel.completeText}
                     cancelText=''>
                     <Stack {...{width:'100%', alignItems:'center'}}>
                         <Slot {...{component:SearchSummary, slotProps:slotProps.searchSummary, request:reqObj,
-                            targetKey, sizeKey, polygonKey, searchTypeKey}}/>
+                            targetKey, sizeKey, polygonKey, searchTypeKey, searchTypeToggleOptions}}/>
                     </Stack>
                 </FormPanel>
             </Stack>
@@ -318,52 +368,58 @@ const Header = function({isOpen, slotProps={}, targetKey, sizeKey, polygonKey, s
 };
 
 
-function SearchSummary({request, targetKey, sizeKey, polygonKey, searchTypeKey, getSummaryInfo}) {
-    let {searchType, target, radius, polyCoords} = getSummaryInfo?.(request) ?? {};
-    searchType ??= request?.[searchTypeKey] === CONE_CHOICE_KEY ? 'Cone' : (request?.[searchTypeKey] === POLY_CHOICE_KEY  ? 'Polygon' : 'Multi-Object');
-    target ??= request?.[targetKey];
-    radius ??= request?.[sizeKey];
-    polyCoords ??= request?.[polygonKey];
+function SearchSummary({request, targetKey, sizeKey, polygonKey, searchTypeKey, searchTypeToggleOptions, getSearchType}) {
+    let {value: searchTypeValue, label: searchTypeLabel} = getSearchType?.(request) ?? {};
+    searchTypeValue ??= request?.[searchTypeKey];
+    if (!searchTypeValue) return false; //since searchTypeValue determines all the following summary info to be displayed
 
-    const userEnterWorldPt= () =>  parseWorldPt(target);
-    const coords = searchType === 'Cone' ? formatWorldPtToString(userEnterWorldPt()) : polyCoords;
+    searchTypeLabel ??= searchTypeToggleOptions.find(({value})=>value===searchTypeValue)?.label ?? searchTypeValue;
 
-    //in case of Multi-Object, get the fileName & rows
-    const fileName = searchType === 'Multi-Object' ? request?.uploadInfo?.fileName : undefined;
-    const rows = searchType === 'Multi-Object' ? request?.uploadInfo?.totalRows : undefined;
+    const target = request?.[targetKey];
+    const polyCoords = request?.[polygonKey];
+    const coordPref = getPreference(MR_FIELD_HIPS_MOUSE_READOUT1, MR_EQJ2000_HMS);
+    const coords = searchTypeValue === POLY_CHOICE_KEY ? polyCoords
+        : formatWorldPtToStringSimple(target, getEqTypeFromMR(coordPref)); // for cone, point, etc.
 
-    const keyVal = (k, v, isLast, key) => (
-        <Fragment key={key+''}>
-            <Typography component='span' color={'primary'}>{k}: </Typography> {v}
-            {!isLast && ', '}
-        </Fragment>
-    );
+    const radius = request?.[sizeKey]; // in degrees
+    const fileName = request?.uploadInfo?.fileName;
+    const rows = request?.uploadInfo?.totalRows;
 
-    //Label/Key & Value pairs do display, calculating here to determine easily where the last comma should be
-    const keyValuePairs = [
-        { k: 'Search Type', v: searchType },
-        ...(radius && searchType === 'Cone' ? [{ k: 'Search Radius', v: radius }] : []),
-        ...(coords && searchType !== 'Multi-Object' ? [{ k: 'Coordinates', v: coords }] : []),
-        ...(fileName && rows && searchType === 'Multi-Object' ? [
-            { k: 'File Name', v: fileName },
-            { k: 'Rows', v: rows }
-        ] : [])
-    ];
+    const summaryFragments = [];
+    if (radius && searchTypeValue === CONE_CHOICE_KEY) {
+        summaryFragments.push(`${toMaxFixed(radius, 6).toString()}° at `);
+    }
+    if (coords && searchTypeValue !== UPLOAD_CHOICE_KEY) {
+        summaryFragments.push(coords);
+    }
+    if (fileName && rows && searchTypeValue === UPLOAD_CHOICE_KEY) {
+        summaryFragments.push(`${rows} rows in '${fileName}'`);
+    }
 
     return (
         <Stack>
             <Typography color={'neutral'} level='body-md'>
-                {keyValuePairs.map((pair, index) =>
-                    keyVal(pair.k, pair.v, index === keyValuePairs.length - 1, index)
-                )}
+                <Typography component='span' color={'primary'}>{searchTypeLabel}: </Typography>
+                {summaryFragments.join('') || 'NIL'}
             </Typography>
         </Stack>
     );
 }
 
+SearchSummary.propTypes = {
+    request: object,
+    targetKey: string,
+    sizeKey: string,
+    polygonKey: string,
+    searchTypeKey: string,
+    searchTypeToggleOptions: arrayOf(shape({value: string, label: string})),
+    getSearchType: func, // for customizing the logic of how searchType.value and searchType.label is determined
+};
+
+
 function SpatialSearch({rootSlotProps: slotProps, insetSpacial, uploadInfo, setUploadInfo, searchTypeOp, doToggle,
-                           initToggle, nullAllowed, useUpload}) {
-    const { searchTypeKey=CONE_AREA_KEY, sx } = slotProps.spatialSearch ?? {};
+                           initToggle, nullAllowed, searchTypeToggleOptions}) {
+    const { searchTypeKey=CONE_AREA_KEY, children, sx } = slotProps.spatialSearch ?? {};
 
     return (
         <Stack spacing={0.5} sx={{pt: insetSpacial ? 0 : 1, ...sx}}>
@@ -371,8 +427,9 @@ function SpatialSearch({rootSlotProps: slotProps, insetSpacial, uploadInfo, setU
                 sx:{alignSelf: 'center'},
                 fieldKey: searchTypeKey, orientation: 'horizontal',
                 tooltip: 'Chose type of search', initialState: {value: initToggle},
-                options: useUpload ? CONE_AREA_OPTIONS_UPLOAD : CONE_AREA_OPTIONS
+                options: searchTypeToggleOptions
             }} />}
+            {children}
             {searchTypeOp === CONE_CHOICE_KEY && <ConeOp {...{slotProps,nullAllowed}}/> }
             {searchTypeOp === POLY_CHOICE_KEY && <PolyOp {...{slotProps}}/> }
             {searchTypeOp === UPLOAD_CHOICE_KEY && <UploadOp {...{slotProps,uploadInfo,setUploadInfo}}/>}
@@ -388,6 +445,7 @@ function ConeOp({slotProps,nullAllowed}) {
         max= 1,
         initValue= DEFAULT_INIT_SIZE_VALUE,
         enabled= true,
+        sx={},
     }= slotProps.sizeInput ?? {};
     const {
         targetKey=DEF_TARGET_PANEL_KEY,
@@ -408,7 +466,7 @@ function ConeOp({slotProps,nullAllowed}) {
                 fieldKey: sizeKey, showFeedback: true, nullAllowed: false,
                 label: 'Search Radius',
                 initialState: {unit: 'arcsec', value: initValue+'', min, max},
-                sx: {'.ff-Input': {width: 1}},
+                sx: {'.ff-Input': {width: 1}, ...sx},
                 slotProps: {
                     feedback:{sx: {alignSelf:'center'} },
                 }
@@ -438,27 +496,24 @@ function UploadOp({slotProps, uploadInfo, setUploadInfo}) {
         sizeKey= DEFAULT_SIZE_KEY,
         min= 1 / 3600,
         max= 1,
-        initValue= DEFAULT_INIT_SIZE_VALUE
+        initValue= DEFAULT_INIT_SIZE_VALUE,
+        enabled= true,
+        sx,
     }= slotProps.sizeInput ?? {};
 
     return (
         <Stack pb={0.5}>
-            <UploadTableSelectorPosCol {...{uploadInfo, setUploadInfo,
-                slotProps: {
-                    centerColsInnerStack: {sx: {ml: 1, pt: 1.5}}
-                }
-            }}/>
-            <SizeInputFields {...{
+            <Slot component={UploadTableSelectorPosCol} //can be overridden by a custom component based on UploadTableSelector
+                  {...{uploadInfo, setUploadInfo, ...slotProps?.uploadTableSelector}}/>
+            {enabled && <SizeInputFields {...{
                 fieldKey: sizeKey, showFeedback: true, nullAllowed: false,
                 label: 'Search Radius',
-                initialState: {unit: 'arcsec', value: initValue+'', min, max},
-                sx: {'.ff-Input': {width: 1}, pt:0.5},
+                initialState: {unit: 'arcsec', value: initValue + '', min, max},
+                sx: {'.ff-Input': {width: 1}, pt: 0.5, ...sx},
                 slotProps: {
-                    feedback:{sx: {alignSelf:'center'} },
+                    feedback: {sx: {alignSelf: 'center'}},
                 }
-            }} />
+            }} />}
         </Stack>
-
-        );
-
+    );
 }

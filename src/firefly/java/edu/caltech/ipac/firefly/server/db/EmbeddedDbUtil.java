@@ -3,11 +3,11 @@
  */
 package edu.caltech.ipac.firefly.server.db;
 
+import edu.caltech.ipac.firefly.core.Util;
 import edu.caltech.ipac.firefly.data.ServerEvent;
 import edu.caltech.ipac.firefly.data.ServerRequest;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.data.table.SelectionInfo;
-import edu.caltech.ipac.firefly.server.RequestOwner;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.db.spring.JdbcFactory;
 import edu.caltech.ipac.firefly.server.events.FluxAction;
@@ -26,19 +26,15 @@ import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.validation.constraints.NotNull;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.sql.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.*;
 import java.util.Date;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static edu.caltech.ipac.firefly.core.Util.Try;
 import static edu.caltech.ipac.firefly.server.ServerContext.SHORT_TASK_EXEC;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_FILE_PATH;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_FILE_TYPE;
@@ -46,12 +42,18 @@ import static edu.caltech.ipac.firefly.server.db.DbAdapter.NULL_TOKEN;
 import static edu.caltech.ipac.firefly.server.db.DbAdapter.ignoreCols;
 import static edu.caltech.ipac.firefly.server.db.DbInstance.USE_REAL_AS_DOUBLE;
 import static edu.caltech.ipac.table.DataGroup.ROW_IDX;
+import static edu.caltech.ipac.table.DataGroup.ROW_NUM;
 import static edu.caltech.ipac.table.TableMeta.DERIVED_FROM;
+import static edu.caltech.ipac.table.TableUtil.fixCname;
 import static edu.caltech.ipac.util.StringUtils.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 
 /**
+ *  Using duckdb appender greatly improve performance when ingesting large volume of data.
+ *  But, direct BLOB support is not available.  Therefore, we will serialize Java object
+ *  into base64 string for storage.
+ *
  * @author loi
  * @version $Id: DbInstance.java,v 1.3 2012/03/15 20:35:40 loi Exp $
  */
@@ -152,11 +154,11 @@ public class EmbeddedDbUtil {
         int cIdx = idx+1;      // ResultSet index starts from 1
         Object val = rs.getObject(cIdx);
         if (val == null)         return null;
-        if (clz.isInstance(val)) return val;
-
         if (isAry) {
             if (val instanceof Array)   return val;    // we will assume the data type matches
-            return deserialize(val.toString());        // handles base64 encoded Java serialized objects
+            return Try.it(()-> Util.deserialize(val.toString())).get();        // handles base64 encoded Java serialized objects; ignore errors
+        } else if (clz.isInstance(val)) {
+            return val;
         } else if (clz == String.class) {
             if (val instanceof Blob b) {
                 return new String(b.getBytes(1, (int) b.length()), UTF_8);   // handles binary UTF-8 encoded string
@@ -189,15 +191,12 @@ public class EmbeddedDbUtil {
         List<DataType> cols = new ArrayList<>();
         boolean useRealAsDouble = dbInstance.getBoolProp(USE_REAL_AS_DOUBLE, false);
         for (int i = 1; i <= rsmd.getColumnCount(); i++) {
-            String cname = rsmd.getColumnLabel(i);
-            JDBCType type = JDBCType.valueOf(rsmd.getColumnType(i));
-            boolean isArray = type == JDBCType.ARRAY;
-            if (isArray) {
-                String typeDesc = rsmd.getColumnTypeName(i).replace("[]", "");
-                type = JDBCType.valueOf(typeDesc);
-            }
-            Class clz = convertToClass(type, useRealAsDouble);
-            DataType dt = new DataType(cname, clz);
+            String type = rsmd.getColumnTypeName(i);
+            boolean isArray = JDBCType.valueOf(rsmd.getColumnType(i)) == JDBCType.ARRAY;
+            if (isArray) type = type.replace("[]", "");
+            Class clz = jdbcTypeToJava(type, useRealAsDouble);
+
+            DataType dt = new DataType(rsmd.getColumnLabel(i), clz);
             if (isArray)    dt.setArraySize("*");
             cols.add(dt);
         }
@@ -243,13 +242,14 @@ public class EmbeddedDbUtil {
         if (cols != null && cols.length > 0) {
             ArrayList<String> colsAry = new ArrayList<>(Arrays.asList(cols));
             if (!colsAry.contains(DataGroup.ROW_NUM)) {
-                // add ROW_NUM into the returned results if not asked
+                //add ROW_NUM into the returned results if not asked
                 colsAry.add(DataGroup.ROW_NUM);
                 cols = colsAry.toArray(new String[colsAry.size()]);
             }
         }
         MappedData results = new MappedData();
         DataGroup data = getSelectedData(searchRequest, selRows, cols);
+
         for (DataObject row : data) {
             int idx = row.getIntData(DataGroup.ROW_NUM);
             for (DataType dt : data.getDataDefinitions()) {
@@ -293,9 +293,6 @@ public class EmbeddedDbUtil {
     }
 
     public static void enumeratedValuesCheckBG(DbAdapter dbAdapter, DataGroupPart results, TableServerRequest treq) {
-        RequestOwner owner = ServerContext.getRequestOwner();
-        ServerEvent.EventTarget target = new ServerEvent.EventTarget(ServerEvent.Scope.SELF, owner.getEventConnID(),
-                owner.getEventChannel(), owner.getUserKey());
         SHORT_TASK_EXEC.submit(() -> {
             enumeratedValuesCheck(dbAdapter, results, treq);
             DataGroup updates = new DataGroup(null, results.getData().getDataDefinitions());
@@ -304,7 +301,7 @@ public class EmbeddedDbUtil {
             changes.remove("totalRows");        //changes contains only the columns with 0 rows.. we don't want to update totalRows
 
             FluxAction action = new FluxAction(FluxAction.TBL_UPDATE, changes);
-            ServerEventManager.fireAction(action, target);
+            ServerEventManager.fireAction(action, ServerEvent.Scope.SELF);
         });
     }
     public static void enumeratedValuesCheck(DbAdapter dbAdapter, DataGroupPart results, TableServerRequest treq) {
@@ -410,42 +407,12 @@ public class EmbeddedDbUtil {
 //  But, direct BLOB support is not available.  Therefore, we will serialize Java object
 //  into base64 string for storage.
 //====================================================================
-
-    public static String serialize(Object obj) {
-        if (obj == null) return null;
-        try {
-            ByteArrayOutputStream bstream = new ByteArrayOutputStream();
-            ObjectOutputStream ostream = new ObjectOutputStream(bstream);
-            ostream.writeObject(obj);
-            ostream.flush();
-            byte[] bytes =  bstream.toByteArray();
-            return Base64.getEncoder().encodeToString(bytes);
-        } catch (Exception e) {
-            logger.warn(e);
-            return null;
-        }
-    }
-
     public static Object deserialize(ResultSet rs, String cname) {
-        return getSafe(() -> deserialize(rs.getString(cname)));
+        return Try.it(() -> Util.deserialize(rs.getString(cname))).get();
     }
     public static Object deserialize(ResultSet rs, int cidx) {
-        return getSafe(() -> deserialize(rs.getString(cidx)));
+        return Try.it(() -> Util.deserialize(rs.getString(cidx))).get();
     }
-
-    public static Object deserialize(String base64) {
-        try {
-            if (base64 == null) return null;
-            byte[] bytes = Base64.getDecoder().decode(base64);
-            ByteArrayInputStream bstream = new ByteArrayInputStream(bytes);
-            ObjectInputStream ostream = new ObjectInputStream(bstream);
-            return ostream.readObject();
-        } catch (Exception e) {
-            logger.warn(e);
-            return null;
-        }
-    }
-
 //====================================================================
 //  privates functions
 //====================================================================
@@ -458,31 +425,33 @@ public class EmbeddedDbUtil {
         return  null;
     }
 
-    private static List<Class> onlyCheckTypes = Arrays.asList(String.class, Integer.class, Long.class, Character.class, Boolean.class, Short.class, Byte.class);
-    private static List<String> excludeColNames = Arrays.asList(DataGroup.ROW_IDX, DataGroup.ROW_NUM);
+    private static final List<Class> onlyCheckTypes = Arrays.asList(String.class, Integer.class, Long.class, Character.class, Boolean.class, Short.class, Byte.class);
+    private static final List<String> excludeColNames = Arrays.asList(DataGroup.ROW_IDX, DataGroup.ROW_NUM);
     private static boolean maybeEnums(DataType dt) {
         return onlyCheckTypes.contains(dt.getDataType()) && !excludeColNames.contains(dt.getKeyName());
 
     }
 
-    static Class convertToClass(JDBCType type, boolean useRealAsDouble) {
+    static Class jdbcTypeToJava(String type, boolean useRealAsDouble) {
         return switch (type) {
-            case CHAR, VARCHAR, LONGVARCHAR -> String.class;
-            case TINYINT    -> Byte.class;
-            case SMALLINT   -> Short.class;
-            case INTEGER    -> Integer.class;
-            case BIGINT     -> Long.class;
-            case FLOAT  -> Float.class;
-            case REAL -> useRealAsDouble ? Double.class : Float.class;
-            case DOUBLE, NUMERIC, DECIMAL   -> Double.class;
-            case BIT, BOOLEAN -> Boolean.class;
-            case DATE, TIME, TIMESTAMP  -> Date.class;
-            case BINARY, VARBINARY, LONGVARBINARY -> String.class;
+            case "CHAR", "VARCHAR", "LONGVARCHAR" -> String.class;
+            case "TINYINT"    -> Byte.class;
+            case "SMALLINT", "UTINYINT"   -> Short.class;
+            case "INTEGER", "USMALLINT"   -> Integer.class;
+            case "BIGINT", "UINTEGER"     -> Long.class;
+            case "FLOAT"      -> Float.class;
+            case "REAL"       -> useRealAsDouble ? Double.class : Float.class;
+            case "DOUBLE", "NUMERIC", "DECIMAL" -> Double.class;
+            case "BIT", "BOOLEAN" -> Boolean.class;
+            case "DATE", "TIME", "TIMESTAMP" -> Date.class;
+            case "BINARY", "VARBINARY", "LONGVARBINARY" -> String.class;
             default -> String.class;
         };
     }
 
     public static DataType[] makeDbCols(DataGroup dg) {
+        fixCname(dg, ROW_IDX);
+        fixCname(dg, ROW_NUM);
         DataType[] cols = new DataType[dg.getDataDefinitions().length + 2];
         if (dg.getDataDefintion(ROW_IDX) != null) {
             logger.error("Datagroup should not have ROW_IDX in it at the start.");
@@ -529,7 +498,7 @@ public class EmbeddedDbUtil {
                     for (int cidx = 0; cidx < cols.length; cidx++)  {
                         Object v = data.getData(cols[cidx].getKeyName(), ridx);
                         if (cIsAry.get(cidx)) {
-                            v = serialize(v);
+                            v = Util.serialize(v);
                         }
                         ps.setObject(cidx+1, v);
                     }

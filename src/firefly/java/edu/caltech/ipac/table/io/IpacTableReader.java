@@ -11,6 +11,7 @@ import edu.caltech.ipac.table.DataType;
 import edu.caltech.ipac.table.IpacTableDef;
 import edu.caltech.ipac.table.IpacTableUtil;
 import edu.caltech.ipac.table.TableUtil;
+import edu.caltech.ipac.util.FormatUtil;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -21,6 +22,9 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import static edu.caltech.ipac.firefly.core.FileAnalysisReport.TableDataType.NotSpecified;
+import static edu.caltech.ipac.firefly.core.FileAnalysisReport.TableDataType.Spectrum;
 
 /**
  * read in the file in IPAC table format
@@ -95,10 +99,11 @@ public final class IpacTableReader {
 
     public static FileAnalysisReport analyze(File infile, FileAnalysisReport.ReportType type) throws IOException {
         IpacTableDef meta = IpacTableUtil.getMetaInfo(infile);
-        FileAnalysisReport report = new FileAnalysisReport(type, TableUtil.Format.IPACTABLE.name(), infile.length(), infile.getPath());
+        FileAnalysisReport report = new FileAnalysisReport(type, FormatUtil.Format.IPACTABLE.name(), infile.length(), infile.getPath());
         FileAnalysisReport.Part part = new FileAnalysisReport.Part(FileAnalysisReport.Type.Table, String.format("IPAC Table (%d cols x %s rows)", meta.getCols().size(), meta.getRowCount()));
         part.setTotalTableRows(meta.getRowCount());
         report.addPart(part);
+        part.setTableDataType(SpectrumMetaInspector.isPossiblySpectrum(meta.getCols(),meta) ? Spectrum : NotSpecified);
         if (type.equals(FileAnalysisReport.ReportType.Details)) {
             part.setDetails(TableUtil.getDetails(0, meta));
         }

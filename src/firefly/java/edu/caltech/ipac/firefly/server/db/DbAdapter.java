@@ -212,6 +212,9 @@ public interface DbAdapter {
 //=====================================================================
 //  static functions for resolving or finding suitable database adapter
 //=====================================================================
+    static DbAdapter getAdapter() {
+        return getAdapter(DEF_DB_TYPE, (dbExt) -> null);
+    }
 
     static DbAdapter getAdapter(TableServerRequest treq, DbFileCreator dbFileCreator) {
         return getAdapter(treq.getMeta(TableServerRequest.TBL_FILE_TYPE), dbFileCreator);
@@ -271,12 +274,14 @@ public interface DbAdapter {
         int rowCnt = -1;
         int totalRows = -1;
         long memory = -1;
+        final long created = System.currentTimeMillis();
 
         public int tblCnt() { return tblCnt; }
         public int colCnt() { return colCnt;}
         public int rowCnt() { return rowCnt; }
         public int totalRows() { return totalRows;}
         public long memory() { return memory;}
+        public long created() { return created;}
     }
 
     /**
@@ -345,8 +350,13 @@ public interface DbAdapter {
         public void setCompact(boolean compact) { isCompact = compact;}
         public boolean isCompact() { return isCompact; }
 
-        public void updateStats() { this.dbStats = dbAdapter.getDbStats(); }
         public DbStats getDbStats() { return dbStats == null ? new DbStats() : dbStats; }
+
+        public void updateStats() {
+            if (dbStats == null || dbStats.created < lastAccessed) {
+                this.dbStats = dbAdapter.getDbStats();
+            }
+        }
     }
 
     /**

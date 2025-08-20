@@ -43,7 +43,7 @@ import ImagePlotCntlr, {
 import MultiViewCntlr, {getMultiViewRoot, getViewer} from '../MultiViewCntlr.js';
 import {PlotAttribute} from '../PlotAttribute.js';
 import {onPlotComplete} from '../PlotCompleteMonitor';
-import {DEFAULT_COVERAGE_PLOT_ID, getDrawLayersByType, isDrawLayerVisible} from '../PlotViewUtil';
+import {DEFAULT_COVERAGE_PLOT_ID, getDrawLayersByType, isDrawLayerAttached, isDrawLayerVisible} from '../PlotViewUtil';
 import {getDrawLayerById, primePlot} from '../PlotViewUtil.js';
 import {makeWorldPt, pointEquals} from '../Point.js';
 import {computeCentralPtRadiusAverage} from '../VisUtil.js';
@@ -346,7 +346,10 @@ async function updateCoverage(tbl_id, viewerId, preparedTables, options, tblCatI
         if (covType===CoverageType.X) {
             dispatchEnableHpxIndex({tbl_id});
             await onOrderDataReady(tbl_id);
-             preparedTables[tbl_id] = table;
+            preparedTables[tbl_id] = table;
+        }
+        if (covType===CoverageType.REGION) {
+            dispatchEnableHpxIndex({tbl_id});
         }
         const usesRadians= isTableUsingRadians(table);
 
@@ -515,7 +518,10 @@ function initRequest(r,viewerId,plotId, overlayPos, wp) {
 function getBestOrderCoverageSize(hpxIndex) {
     const orderData = hpxIndex?.orderData;
     if (!orderData) return 8;
-    for (let i= DATA_NORDER; i>8; i--) {
+
+    const start= DATA_NORDER-1;
+
+    for (let i= start; i>8; i--) {
         if (getPixelCount(orderData,i)<20) return i;
     }
     for (let i= 8; i>MIN_NORDER; i--) {
@@ -607,7 +613,12 @@ function makeOverlayCoverageDrawing() {
                     if (layer && (tableRemoved || tbl_id===affectedTblId)) {
                         drawingOptions[cId] = layer.drawingDef;    // drawingDef and selectOption is stored as layer based
                         selectOps[cId] = layer.selectOption;
-                        visibleMap[cId]= plot ? isDrawLayerVisible(layer, plot.plotId) : true;
+                        if (plot && isDrawLayerAttached(layer,plot.plotId)) {
+                            visibleMap[cId]= isDrawLayerVisible(layer, plot.plotId);
+                        }
+                        else {
+                            visibleMap[cId]= true;
+                        }
                         dispatchDestroyDrawLayer(cId);
                     }
                 });

@@ -195,8 +195,11 @@ function makeDoUpload(file, type, isFromURL, fileAnalysis) {
     };
 }
 
+const getUploadUrl= (fileOrUrl) =>
+    isString(fileOrUrl) ? fileOrUrl?.trim() : fileOrUrl?.name ? fileOrUrl.name.trim() : undefined;
+
 function doUpload(isFromURL, fileOrUrl, fileAnalysis, params={}) {
-    if (isFromURL && !validateUrl('',fileOrUrl).valid) {
+    if (isFromURL && !validateUrl('',getUploadUrl(fileOrUrl)).valid) {
         return Promise.resolve({status:404,message:'bad Url'});
     }
     const faFunction= isFunction(fileAnalysis) && fileAnalysis;

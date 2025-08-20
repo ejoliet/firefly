@@ -5,7 +5,13 @@
 import {fill, isString} from 'lodash';
 import {sprintf} from '../../externalSource/sprintf';
 import {
-    STATUS_NAN, STATUS_UNAVAILABLE, STATUS_UNDEFINED, STATUS_VALUE, TYPE_DECIMAL_INT, TYPE_EMPTY, TYPE_FLOAT
+    MR_ECL1950, MR_ECLJ2000, MR_EQB1950, MR_EQB1950_DCM, MR_EQJ2000_DCM,
+    MR_EQJ2000_HMS, MR_FIELD_HIPS_MOUSE_READOUT1, MR_FIELD_HIPS_MOUSE_READOUT2, MR_FIELD_IMAGE_MOUSE_READOUT1,
+    MR_FIELD_IMAGE_MOUSE_READOUT2, MR_FITS_IP, MR_WL, MR_ZERO_IP,
+    MR_GALACTIC, MR_HEALPIX_NORDER, MR_HEALPIX_PIXEL, MR_PIXEL_SIZE, MR_SPIXEL_SIZE, MR_SUPER_GALACTIC, MR_WCS_COORDS,
+    STATUS_NAN, STATUS_UNAVAILABLE, STATUS_UNDEFINED, STATUS_VALUE, TYPE_DECIMAL_INT, TYPE_EMPTY, TYPE_FLOAT,
+    MR_BAND_WIDTH, EQ_TYPE, MR_WL_RED, MR_WL_GREEN, MR_WL_BLUE, MR_BAND_WIDTH_GREEN, MR_BAND_WIDTH_RED,
+    MR_BAND_WIDTH_BLUE
 } from '../MouseReadoutCntlr.js';
 import {visRoot} from '../ImagePlotCntlr.js';
 import {convertCelestial} from '../VisUtil';
@@ -15,47 +21,71 @@ import CoordinateSys from '../CoordSys.js';
 import {showMouseReadoutOptionDialog} from './MouseReadoutOptionPopups.jsx';
 import {getFormattedWaveLengthUnits, primePlot} from '../PlotViewUtil';
 import {showInfoPopup} from '../../ui/PopupUtil';
+import {getBixPix, getBScale, getBZero} from 'firefly/visualize/FitsHeaderUtil';
 
 
 const myFormat= (v,precision) => !isNaN(v) ? sprintf(`%.${precision}f`,v) : '';
 
 
 const labelMap = {
-    eqj2000hms: 'EQ-J2000:',
-    eqj2000DCM: 'EQ-J2000:',
-    eclJ2000: 'ECL-J2000:',
-    eclB1950: 'ECL-B1950:',
-    galactic: 'Gal:',
-    superGalactic: 'SGal:',
-    eqb1950: 'Eq-B1950:',
-    eqb1950DCM: 'Eq-B1950:',
-    wcsCoords: 'WCS-Coords:',
-    fitsIP: 'Image Pixel:',
-    zeroIP: '0 Based Pix:',
-    pixelSize: 'Pixel Size:',
-    sPixelSize: 'Screen Pixel Size:',
-    healpixPixel: 'Pixel: ',
-    healpixNorder: 'Norder: ',
-    wl: 'Wavelength: ',
+    [MR_EQJ2000_HMS]: 'EQ-J2000:',
+    [MR_EQJ2000_DCM]: 'EQ-J2000:',
+    [MR_ECLJ2000]: 'ECL-J2000:',
+    [MR_ECL1950]: 'ECL-B1950:',
+    [MR_GALACTIC]: 'Gal:',
+    [MR_SUPER_GALACTIC]: 'SGal:',
+    [MR_EQB1950]: 'Eq-B1950:',
+    [MR_EQB1950_DCM]: 'Eq-B1950:',
+    [MR_WCS_COORDS]: 'WCS-Coords:',
+    [MR_FITS_IP]: 'Image Pixel:',
+    [MR_ZERO_IP]: '0 Based Pix:',
+    [MR_PIXEL_SIZE]: 'Pixel Size:',
+    [MR_SPIXEL_SIZE]: 'Screen Pixel Size:',
+    [MR_HEALPIX_PIXEL]: 'Pixel: ',
+    [MR_HEALPIX_NORDER]: 'Norder: ',
+    [MR_WL]: 'Wavelength: ',
+    [MR_WL_RED]: 'R Wavelength: ',
+    [MR_WL_GREEN]: 'G Wavelength: ',
+    [MR_WL_BLUE]: 'B Wavelength: ',
+    [MR_BAND_WIDTH]: 'bandwidth: ',
+    [MR_BAND_WIDTH_RED]: 'R bandwidth: ',
+    [MR_BAND_WIDTH_GREEN]: 'G bandwidth: ',
+    [MR_BAND_WIDTH_BLUE]: 'B bandwidth: ',
 };
 
 const coordOpTitle= 'Choose readout coordinates';
+
+export const getEqTypeFromMR = (readoutKey) => readoutKey.toUpperCase().startsWith('EQ')
+    ? (readoutKey.toUpperCase().endsWith('DCM') ? EQ_TYPE.DCM : EQ_TYPE.HMS)
+    : undefined; // undefined type if not Equatorial readout
+
+export const getFluxRadix = (readoutPref, primePlot) => {
+    // From FITS 4.00 (https://fits.gsfc.nasa.gov/standard40/fits_standard40aa-le.pdf), p. 14-15, Table 11 and section 4.4.2.5
+    const isFluxInt = getBixPix(primePlot)>0 && getBScale(primePlot)===1 && (getBZero(primePlot)===0
+            // OR if bZero was used as follows for representation of unsigned-integer data
+            || (getBixPix(primePlot)===8 && getBZero(primePlot)===-128)
+            || (getBixPix(primePlot)===16 && getBZero(primePlot)===32768)
+            || (getBixPix(primePlot)===32 && getBZero(primePlot)===2147483648)
+        );
+    return Number(isFluxInt ? readoutPref.intFluxValueRadix : readoutPref.floatFluxValueRadix);
+};
 
 export function getNonFluxDisplayElements(readoutData, readoutPref, isHiPS= false) {
     const objList= getNonFluxReadoutElements(readoutData,  readoutPref, isHiPS);
 
     const {imageMouseReadout1, imageMouseReadout2, imageMouseNoncelestialReadout1, imageMouseNoncelestialReadout2,
-        hipsMouseReadout1, hipsMouseReadout2, pixelSize, healpixPixel, healpixNorder, wl} = objList;
+        hipsMouseReadout1, hipsMouseReadout2, pixelSize, healpixPixel, healpixNorder, wl, bandWidth,
+        wlRED, bandWidthRED, wlGREEN, bandWidthGREEN, wlBLUE, bandWidthBLUE} = objList;
 
 
-    let readout1, readout2, healpixPixelReadout, healpixNorderReadout, waveLength;
+    let readout1, readout2, healpixPixelReadout, healpixNorderReadout, waveLength, bandWidthField= undefined;
     let showReadout1PrefChange, showReadout2PrefChange, showWavelengthFailed;
 
     if (isHiPS) {
         readout1= {...hipsMouseReadout1, label: labelMap[readoutPref.hipsMouseReadout1]};
         readout2= {...hipsMouseReadout2, label: labelMap[readoutPref.hipsMouseReadout2]};
-        showReadout1PrefChange= () => showMouseReadoutOptionDialog('hipsMouseReadout1', readoutPref.hipsMouseReadout1, readoutPref.mouseReadoutValueCopy, coordOpTitle);
-        showReadout2PrefChange= () => showMouseReadoutOptionDialog('hipsMouseReadout2', readoutPref.hipsMouseReadout2, readoutPref.mouseReadoutValueCopy, coordOpTitle);
+        showReadout1PrefChange= () => showMouseReadoutOptionDialog(MR_FIELD_HIPS_MOUSE_READOUT1, readoutPref[MR_FIELD_HIPS_MOUSE_READOUT1], readoutPref.mouseReadoutValueCopy, coordOpTitle);
+        showReadout2PrefChange= () => showMouseReadoutOptionDialog(MR_FIELD_HIPS_MOUSE_READOUT2, readoutPref[MR_FIELD_HIPS_MOUSE_READOUT2], readoutPref.mouseReadoutValueCopy, coordOpTitle);
         healpixPixelReadout= {...healpixPixel, label: labelMap.healpixPixel};
         healpixNorderReadout= {...healpixNorder, label: labelMap.healpixNorder};
     }
@@ -70,8 +100,8 @@ export function getNonFluxDisplayElements(readoutData, readoutPref, isHiPS= fals
         if (isCelestial) {
             readout1 = {...imageMouseReadout1, label: labelMap[readoutPref.imageMouseReadout1]};
             readout2= {...imageMouseReadout2, label: labelMap[readoutPref.imageMouseReadout2]};
-            showReadout1PrefChange= () => showMouseReadoutOptionDialog('imageMouseReadout1', readoutPref.imageMouseReadout1, readoutPref.mouseReadoutValueCopy, coordOpTitle);
-            showReadout2PrefChange= () => showMouseReadoutOptionDialog('imageMouseReadout2', readoutPref.imageMouseReadout2, readoutPref.mouseReadoutValueCopy, coordOpTitle);
+            showReadout1PrefChange= () => showMouseReadoutOptionDialog(MR_FIELD_IMAGE_MOUSE_READOUT1, readoutPref[MR_FIELD_IMAGE_MOUSE_READOUT1], readoutPref.mouseReadoutValueCopy, coordOpTitle);
+            showReadout2PrefChange= () => showMouseReadoutOptionDialog(MR_FIELD_IMAGE_MOUSE_READOUT2, readoutPref[MR_FIELD_IMAGE_MOUSE_READOUT2], readoutPref.mouseReadoutValueCopy, coordOpTitle);
         } else {
             const wcsCoordLabel = createWCSCoordsLabel(plotId);
             const wcsCoordOptionTitle = wcsCoordLabel && wcsCoordLabel.substring(0, wcsCoordLabel.length - 1);
@@ -90,19 +120,30 @@ export function getNonFluxDisplayElements(readoutData, readoutPref, isHiPS= fals
             showReadout2PrefChange= () => showMouseReadoutOptionDialog('imageMouseNoncelestialReadout2', readoutPref.imageMouseNoncelestialReadout2, undefined, coordOpTitle, wcsCoordOptionTitle);
         }
 
-
-        if (wl?.value) {
-            waveLength= {...wl, label:labelMap.wl};
-            showWavelengthFailed= readoutItems.wl.failReason ? () => showInfoPopup(readoutItems.wl.failReason) : undefined;
-        }
     }
 
-    return {
-        readout1, readout2, waveLength, showWavelengthFailed,
+    const retval= {
+        readout1, readout2,
         showReadout1PrefChange, showReadout2PrefChange, healpixPixelReadout, healpixNorderReadout,
         pixelSize: {...pixelSize, label: labelMap[readoutPref.pixelSize]},
         showPixelPrefChange:() => showMouseReadoutOptionDialog('pixelSize', readoutPref.pixelSize, undefined, 'Choose pixel size'),
     };
+
+    if (!isHiPS && wl?.value) {
+        retval.waveLength= {...wl, label:labelMap[MR_WL]};
+        retval.showWavelengthFailed= readoutData.readoutItems.wl.failReason ? () => showInfoPopup(readoutData.readoutItems.wl.failReason) : undefined;
+        if (wlRED) retval.waveLengthRED= {...wlRED, label:labelMap[MR_WL_RED]};
+        if (wlGREEN) retval.waveLengthGREEN= {...wlGREEN, label:labelMap[MR_WL_GREEN]};
+        if (wlBLUE) retval.waveLengthBLUE= {...wlBLUE, label:labelMap[MR_WL_BLUE]};
+    }
+    if (!isHiPS && bandWidth?.value) {
+        retval.bandWidth= {...bandWidth, label:labelMap[MR_BAND_WIDTH]};
+        if (bandWidthRED) retval.bandWidthRED= {...bandWidthRED, label:labelMap[MR_BAND_WIDTH_RED]};
+        if (bandWidthGREEN) retval.bandWidthGREEN= {...bandWidthGREEN, label:labelMap[MR_BAND_WIDTH_GREEN]};
+        if (bandWidthBLUE) retval.bandWidthBLUE= {...bandWidthBLUE, label:labelMap[MR_BAND_WIDTH_BLUE]};
+    }
+
+    return retval;
 }
 
 
@@ -140,50 +181,55 @@ export function getReadoutElement(readoutItems, readoutKey, plotId, copyPref) {
 
     const wp= readoutItems?.worldPt?.value;
     switch (readoutKey) {
-        case 'pixelSize':
+        case MR_PIXEL_SIZE:
             return {value:makePixelReturn(readoutItems.pixel)};
-        case 'sPixelSize':
+        case MR_SPIXEL_SIZE:
             return {value:makePixelReturn(readoutItems.screenPixel)};
-        case 'eqj2000hms':
+        case MR_EQJ2000_HMS:
             return makeCoordReturn(wp, CoordinateSys.EQ_J2000, copyPref, true);
-        case 'eqj2000DCM' :
+        case MR_EQJ2000_DCM:
             return makeCoordReturn(wp, CoordinateSys.EQ_J2000, copyPref);
-        case 'galactic' :
+        case MR_GALACTIC:
             return makeCoordReturn(wp, CoordinateSys.GALACTIC, copyPref);
-        case 'superGalactic' :
+        case MR_SUPER_GALACTIC :
             return makeCoordReturn(wp, CoordinateSys.SUPERGALACTIC, copyPref);
-        case 'supergalactic' :
-            return makeCoordReturn(wp, CoordinateSys.SUPERGALACTIC, copyPref);
-        case 'eqb1950' :
+        case MR_EQB1950:
             return makeCoordReturn(wp, CoordinateSys.EQ_B1950, copyPref, true);
-        case 'eqb1950DCM':
+        case MR_EQB1950_DCM:
             return makeCoordReturn(wp, CoordinateSys.EQ_B1950, copyPref);
-        case 'eclJ2000' :
+        case MR_ECLJ2000:
             return makeCoordReturn(wp, CoordinateSys.ECL_J2000, copyPref, false);
-        case 'eclB1950' :
+        case MR_ECL1950:
             return makeCoordReturn(wp, CoordinateSys.ECL_B1950, copyPref, false);
-        case 'wcsCoords' :
+        case MR_WCS_COORDS:
             const plot = primePlot(visRoot(), plotId);
             const unit = plot?.projection?.header?.cunit1 || '';
             return {value:makeNoncelestialCoordReturn(wp, unit)};
-        case 'fitsIP' :
+        case MR_FITS_IP:
             return {value:makeImagePtReturn(readoutItems?.fitsImagePt?.value)};
-        case 'zeroIP' :
+        case MR_ZERO_IP:
             return {value:makeImagePtReturn(readoutItems?.zeroBasedImagePt?.value)};
-        case 'healpixPixel' :
+        case MR_HEALPIX_PIXEL:
             const {healpixPixel}= readoutItems;
-            return {value: (healpixPixel && healpixPixel.value) ? `${healpixPixel.value}` : ''};
-        case 'healpixNorder' :
+            return {value: (healpixPixel && healpixPixel.value) ? `${healpixPixel.value.toString(16)}` : ''};
+        case MR_HEALPIX_NORDER:
             const {healpixNorder}= readoutItems;
             return {value: (healpixNorder && healpixNorder.value) ? `${healpixNorder.value}` : ''};
-        case 'wl' :
-            const {wl}= readoutItems;
-            if (!wl) return {value:undefined};
-            return {value:makeWLReturn(wl.value, getFormattedWaveLengthUnits(wl.unit))};
+        case MR_WL:
+        case MR_WL_RED:
+        case MR_WL_GREEN:
+        case MR_WL_BLUE:
+        case MR_BAND_WIDTH:
+        case MR_BAND_WIDTH_RED:
+        case MR_BAND_WIDTH_GREEN:
+        case MR_BAND_WIDTH_BLUE:
+            return makeWlEntry(readoutItems[readoutKey]);
     }
 
     return {value:''};
 }
+
+const makeWlEntry= (obj) => obj ? {value:makeWLReturn(obj.value, getFormattedWaveLengthUnits(obj.unit))} : {};
 
 /**
  * Label for non-celestial coordinates readout item.
@@ -222,7 +268,9 @@ function getFluxValueByType(readoutType,radix,valueBase10,valueBase16,unit,label
     }
 }
 
-function makeFluxEntry({valueBase10, valueBase16, readoutType,status,unit='',title:label,precision=6},radix=10) {
+function makeFluxEntry(obj,radix=10) {
+    if (!obj) return {value: '', label: '', unit:''};
+    const {valueBase10, valueBase16, readoutType,status,unit='',title:label,precision=6}= obj;
     const is16= radix===16;
     switch (status) {
         case STATUS_UNAVAILABLE: return {value: 'unavailable', label, unit:''};
@@ -246,9 +294,9 @@ export function getFluxInfo(sndReadout, radix=10){
     const fluxObj = [];
     const {REDFlux, GREENFlux, BLUEFlux, nobandFlux}= sndReadout.readoutItems;
     if (sndReadout.threeColor){
-        REDFlux && fluxObj.push(REDFlux);
-        GREENFlux && fluxObj.push(GREENFlux);
-        BLUEFlux && fluxObj.push(BLUEFlux);
+        fluxObj.push(REDFlux);
+        fluxObj.push(GREENFlux);
+        fluxObj.push(BLUEFlux);
     }
     else if (nobandFlux){
         fluxObj.push(nobandFlux);

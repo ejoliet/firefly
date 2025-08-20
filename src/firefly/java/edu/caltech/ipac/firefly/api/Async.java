@@ -4,6 +4,7 @@
 
 package edu.caltech.ipac.firefly.api;
 
+import edu.caltech.ipac.firefly.core.background.JobUtil;
 import edu.caltech.ipac.firefly.server.RequestOwner;
 import edu.caltech.ipac.firefly.server.ServerCommandAccess;
 import edu.caltech.ipac.firefly.server.ServerContext;
@@ -17,11 +18,13 @@ import edu.caltech.ipac.firefly.core.background.JobManager;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 
+import static edu.caltech.ipac.firefly.core.background.JobManager.JOB_LIST_DEFAULT_LIMIT;
 import static edu.caltech.ipac.firefly.data.ServerParams.JOB_ID;
 import static edu.caltech.ipac.util.StringUtils.*;
-import static edu.caltech.ipac.firefly.core.background.JobManager.toJson;
 
 /**
  * Follows UWS pattern for async job processing.
@@ -40,7 +43,7 @@ import static edu.caltech.ipac.firefly.core.background.JobManager.toJson;
 public class Async extends BaseHttpServlet {
 
     static private final Logger.LoggerImpl logger = Logger.getLogger();
-
+    static private String ASYNC_URL = null;
 
     protected void processRequest(HttpServletRequest req, HttpServletResponse res) throws Exception {
 
@@ -54,7 +57,7 @@ public class Async extends BaseHttpServlet {
             if (jobId == null) {
                 if (params.size() == 0) {
                     // list all jobs for current user;          /CmdSrv/async
-                    listUserJob(res);
+                    listUserJob(res, params);
                 } else {
                     // submit job with given cmd parameters;    /CmdSrv/async?cmd=xxx
                     submitJob(res, params);
@@ -93,25 +96,50 @@ public class Async extends BaseHttpServlet {
 //
 //====================================================================
 
-    private static void listUserJob(HttpServletResponse res) throws Exception {
-        // list all jobs for current user; /CmdSrv/async
+    /**
+     * List all jobs for current user sorted by creation time. Returns a JSON array of job info.
+     * @param res
+     * @param params
+     * @throws Exception
+     */
+    private static void listUserJob(HttpServletResponse res, SrvParam params) throws Exception {
+        int last = params.getOptionalInt("LAST", JOB_LIST_DEFAULT_LIMIT);
+        List<String > phase = params.getOptionalList("PHASE");
+        String after = params.getOptional("AFTER");
         List<JobInfo> list = JobManager.list();
-        sendResponse(JobManager.toJsonJobList(list), res);
+        list.sort(
+                Comparator.comparing(
+                        JobInfo::getCreationTime,
+                        Comparator.nullsFirst(Comparator.naturalOrder())
+                ).reversed()
+        );
+        if (phase != null && !phase.isEmpty()) {
+            list.removeIf(info -> !phase.contains(info.getPhase().name()));
+        }
+        if (after != null) {
+            list.removeIf(info -> info.getCreationTime().compareTo(Instant.parse(after)) < 0);
+        }
+        boolean overflow = false;
+        if (list.size() > last) {
+            overflow = true;
+            list = list.subList(0, last);
+        }
+        sendResponse(JobUtil.toJsonJobList(list, overflow), res);
     }
 
     private static void submitJob(HttpServletResponse res, SrvParam params) throws Exception {
         Job job = ServerCommandAccess.getCmdJob(params);
         if (job != null) {
             JobInfo info = JobManager.submit(job);
-            res.setHeader("Location", getAsyncUrl() + info.getJobId());
-            res.setStatus(301);
+            res.setHeader("Location", getAsyncUrl() + info.getMeta().getJobId());
+            res.setStatus(303);
         } else {
             sendErrorResponse(404, null, "Command not found: " + params.getCommandKey(), res);
         }
     }
 
     private static void getJobInfo(HttpServletResponse res, String jobId) throws Exception {
-        sendResponse(toJson(JobManager.getJobInfo(jobId)), res);
+        sendResponse(JobUtil.toJson(JobManager.getJobInfo(jobId)), res);
     }
 
     private static void updateJob(HttpServletResponse res, SrvParam params, String jobId) throws Exception {
@@ -129,7 +157,7 @@ public class Async extends BaseHttpServlet {
         String phase = req.getParameter("PHASE");
         if (String.valueOf(phase).equals("ABORT")) {
             JobInfo fi = JobManager.abort(jobId, "Abort by user");
-            sendResponse(toJson(fi), res);
+            sendResponse(JobUtil.toJson(fi), res);
         }
     }
 
@@ -143,7 +171,7 @@ public class Async extends BaseHttpServlet {
         SrvParam params = info.getSrvParams();
         Job job = ServerCommandAccess.getCmdJob(params);
         if (job != null && job.getType() == Job.Type.SEARCH) {
-            job.setJobId(info.getJobId());
+            job.setJobId(info.getMeta().getJobId());
             String json = job.run();
             sendResponse(json, res);
         }
@@ -154,8 +182,9 @@ public class Async extends BaseHttpServlet {
             info = new JobInfo("NULL");
         }
         res.setStatus(code);
+        info.setPhase(JobInfo.Phase.ERROR);
         info.setError(new JobInfo.Error(code, message));
-        sendResponse(toJson(info), res);
+        sendResponse(JobUtil.toJson(info), res);
     }
 
     private static void sendResponse(String json, HttpServletResponse res) throws Exception {
@@ -168,10 +197,13 @@ public class Async extends BaseHttpServlet {
     }
 
     static public String getAsyncUrl() {
-        RequestOwner ro = ServerContext.getRequestOwner();
-        String spath = ro.getRequestAgent().getServletPath();     // from config =>  /CmdSrv/async
-        spath = spath == null ? "" : spath.substring(1);
-        return ro.getBaseUrl() + spath + "/";
+        if (ASYNC_URL == null) {
+            RequestOwner ro = ServerContext.getRequestOwner();
+            String spath = ro.getRequestAgent().getServletPath();     // from config =>  /CmdSrv/async
+            spath = spath == null ? "" : spath.substring(1);
+            ASYNC_URL = ro.getBaseUrl() + spath + "/";
+        }
+        return ASYNC_URL;
     }
 
 

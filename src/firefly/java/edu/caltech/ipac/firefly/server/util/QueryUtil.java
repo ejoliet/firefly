@@ -8,6 +8,7 @@ import edu.caltech.ipac.astro.net.TargetNetwork;
 import edu.caltech.ipac.astro.target.IpacTableTargetsParser;
 import edu.caltech.ipac.astro.target.TargetFixedSingle;
 import edu.caltech.ipac.firefly.core.EndUserException;
+import edu.caltech.ipac.firefly.core.background.JobUtil;
 import edu.caltech.ipac.firefly.data.CatalogRequest;
 import edu.caltech.ipac.firefly.data.DecimateInfo;
 import edu.caltech.ipac.firefly.data.DownloadRequest;
@@ -101,17 +102,21 @@ public class QueryUtil {
      * @return
      */
     public static File getTempDir(TableServerRequest tsr) {
-        File rootDir = tsr == null || tsr.getJobId() == null ? ServerContext.getTempWorkDir() : ServerContext.getPermWorkDir();
-        File tempDir = new File(rootDir, getSessPrefix(tsr));
-        if (!tempDir.exists()) tempDir.mkdirs();
+        File tempDir;
+        if (tsr != null && !isEmpty(tsr.getJobId())) {
+            tempDir = JobUtil.getJobWorkDir(tsr.getJobId());
+        } else {
+            tempDir = new File(ServerContext.getTempWorkDir(), getSessPrefix(tsr));
+        }
+        tempDir.mkdirs();
         return tempDir;
     }
 
     /**
-     * returns a hierarchical temporary directory.
+     * returns a temporary directory based on a user's session ID.
      * @return
      */
-    public static File getTempDir(ServerRequest req) {
+    public static File getSessDir(TableServerRequest req) {
         File tempDir = new File(ServerContext.getTempWorkDir(), getSessPrefix(req));
         if (!tempDir.exists()) tempDir.mkdirs();
         return tempDir;

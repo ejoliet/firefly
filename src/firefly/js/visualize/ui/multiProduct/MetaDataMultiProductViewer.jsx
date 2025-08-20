@@ -3,12 +3,10 @@
  */
 
 import {bool, string, object} from 'prop-types';
-import React, {memo} from 'react';
-import {dispatchComponentStateChange, getComponentState} from '../../../core/ComponentCntlr';
+import React, {memo, useContext} from 'react';
 import {setFactoryTemplateOptions, getDefaultFactoryOptions} from '../../../metaConvert/DataProductsFactory.js';
 import {startDataProductsWatcher} from '../../../metaConvert/DataProductsWatcher.js';
-import {SD_CUTOUT_KEY, SD_DEFAULT_SPACIAL_CUTOUT_SIZE} from '../../../metaConvert/vo/ServDescProducts';
-import {getObsCoreOption} from '../../../ui/tap/TableSearchHelpers';
+import {StatefulTabsCtx} from '../../../ui/panel/TabPanel';
 import {MultiProductViewer} from './MultiProductViewer.jsx';
 
 const startedWatchers=[];
@@ -18,13 +16,6 @@ function startWatcher(dpId, options) {
     setFactoryTemplateOptions(dpId, options);
     startDataProductsWatcher({ dataTypeViewerId:dpId, factoryKey:dpId});
     startedWatchers.push(dpId);
-    const defOps= getDefaultFactoryOptions();
-    const key= options.dataProductsComponentKey ?? defOps.dataProductsComponentKey;
-    if (!getComponentState(key,{})[SD_CUTOUT_KEY]) {
-        dispatchComponentStateChange(key,{
-            [SD_CUTOUT_KEY]: (getObsCoreOption('cutoutDefSizeDeg') ?? SD_DEFAULT_SPACIAL_CUTOUT_SIZE)
-        } );
-    }
 }
 
 
@@ -37,7 +28,9 @@ export const MetaDataMultiProductViewer= memo(({
                                                    viewerId='DataProductsType', dataProductTableId,
                                                    autoStartWatcher=true, enableExtraction= false, noProductMessage,
                                                    dataProductsFactoryOptions= getDefaultFactoryOptions()}) => {
-    autoStartWatcher && setTimeout(() => startWatcher(viewerId,dataProductsFactoryOptions),5);
+    const {statefulTabComponentKey} = useContext(StatefulTabsCtx);
+    autoStartWatcher && setTimeout(() =>
+        startWatcher(viewerId, {...dataProductsFactoryOptions, statefulTabComponentKey}),5);
     return (<MultiProductViewer {...{viewerId, metaDataTableId:dataProductTableId,
         noProductMessage, enableExtraction, factoryKey:viewerId}}/>);
 });

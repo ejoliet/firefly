@@ -23,6 +23,7 @@
  *
  * @prop {string} displayType one of 'image', 'message', 'promise', 'table', 'png', 'download, 'xyplot', 'analyze'
  * @prop {String} [name]
+ * @prop {String} [dropDownText]
  * @prop {String} menuKey - unique key of this item
  * @prop {Function} [activate] - function to plot 'image', 'table', 'xyplot', require for those
  * @prop {Function} [imageActivate] (only used with CHOICE_CTI) function to plot 'image', used when there is already an activate for a table
@@ -33,9 +34,10 @@
  * @prop {String} [message] - (used with type message) required it type is 'message' or 'promise'
  * @prop {boolean} [isWorkingState]- (used with type message) if defined this means we are in a transitive/loading state. expect regular updates
  * @prop {boolean} complexMessage - (used with type message) - use with message display type. indicates it is a complex message with more functionality
- * @prop {Array.<String>} (used with type message, only when complexMessage is true) detailMsgAry
+ * @prop {Array.<String>} detailMsgAry - (used with type message, only when complexMessage is true)
  * @prop {String} resetMenuKey (used with type message)
  * @prop {boolean} singleDownload - (used with type message) (menu with dpdtDownload as first item in array is required) (also set to true with DPtypes.DOWNLOAD_MENU_ITEM) give a message with a file to download
+ * @prop {Object} fileMenu
  *
  * @prop {Promise} [promise] - (used with type promise) required it type is 'promise'
  *
@@ -74,7 +76,9 @@ export const DPtypes= {
     CHOICE_CTI: 'chartTable',
     DOWNLOAD: 'download',
     DOWNLOAD_MENU_ITEM: 'download-menu-item',
+    EXTRACT: 'extract',
     PNG: 'png',
+    TXT: 'txt',
     ANALYZE: 'analyze',
     UNSUPPORTED: 'unsupported',
 };
@@ -144,12 +148,11 @@ export const dpdtSendToBrowser= (url, serDefParams) => {
  * @param {String} message
  * @param {String} titleStr download title str
  * @param {String} url download url
- * @param {String} [fileType]
+ * @param {String} [loadInBrowserMsg]
  * @return {DataProductsDisplayType}
  */
-export const dpdtMessageWithDownload= (message,titleStr, url,fileType=undefined) => {
-    const singleDownload= Boolean(titleStr && url);
-    return dpdtMessage(message,singleDownload ?[dpdtDownload(titleStr,url,'download-0',fileType)] : undefined,{singleDownload} );
+export const dpdtMessageWithDownload= (message,titleStr, url, loadInBrowserMsg=undefined) => {
+    return dpdtMessage(message, [dpdtDownload(titleStr,url,'download-0',undefined, {loadInBrowserMsg})]);
 };
 
 export const dpdtMessageWithError= (message,detailMsgAry) => {
@@ -180,13 +183,17 @@ export const dpdtMessageWithError= (message,detailMsgAry) => {
  * @param [p.url]
  * @param [p.semantics]
  * @param [p.size]
+ * @param [p.dlData]
+ * @param [p.serDef]
+ * @param [p.enableCutout]
+ * @param [p.pixelBasedCutout]
  * @return {DataProductsDisplayType}
  */
 export function dpdtImage({name, activate, extraction, menuKey='image-0', extractionText='Pin Image',
                               request, override, interpretedData, requestDefault, enableCutout, pixelBasedCutout,
-                              url, semantics,size, serDef }) {
+                              dropDownText, url, semantics,size, serDef, dlData, gridForceRowSize }) {
     return { displayType:DPtypes.IMAGE, name, activate, extraction, menuKey, extractionText, enableCutout, pixelBasedCutout,
-        request, override, interpretedData, requestDefault,url, semantics,size,serDef};
+        dropDownText, request, override, interpretedData, requestDefault,url, semantics,size,serDef, dlData, gridForceRowSize};
 }
 
 /**
@@ -220,6 +227,7 @@ export function dpdtChartTable(name, activate, extraction, menuKey='chart-table-
  *
  * @param {object} p
  * @param {String} p.name
+ * @param {String} p.dropDownText
  * @param {function} p.activate
  * @param {String} p.url
  * @param {ServiceDescriptorDef} p.serDef
@@ -229,15 +237,17 @@ export function dpdtChartTable(name, activate, extraction, menuKey='chart-table-
  * @param {String} p.activeMenuLookupKey
  * @param {WebPlotRequest} p.request
  * @param {String} [p.sRegion]
- * @param {String} [p.prodTypeHint]
  * @param {String} [p.serviceDefRef]
  * @param {boolean} [p.allowsInput]
  * @param {String} [p.standardID]
  * @param {String} [p.ID]
+ * @param {DatalinkData} [p.dlData]
+ * @param {DatalinkData} [p.cutoutToFullWarning]
  * @return {DataProductsDisplayType}
  */
 export function dpdtAnalyze({
                              name,
+                             dropDownText,
                              activate,
                              url,
                              serDef= undefined,
@@ -247,15 +257,16 @@ export function dpdtAnalyze({
                              activeMenuLookupKey,
                              request,
                              sRegion,
-                             prodTypeHint= 'unknown',
                              serviceDefRef,
                              allowsInput= false,
                              standardID,
-                             ID }) {
+                             ID,
+                             cutoutToFullWarning,
+                             dlData}) {
     return { displayType:DPtypes.ANALYZE,
-        name, url, activate, serDef, menuKey, semantics,
-        size, activeMenuLookupKey, request, sRegion, prodTypeHint,
-        serviceDefRef, allowsInput, standardID, ID,
+        name, dropDownText, url, activate, serDef, menuKey, semantics,
+        size, activeMenuLookupKey, request, sRegion,
+        cutoutToFullWarning, serviceDefRef, allowsInput, standardID, ID, dlData
     };
 }
 
@@ -272,8 +283,12 @@ export function dpdtDownload(name, url, menuKey='download-0', fileType, extra={}
     return { displayType:DPtypes.DOWNLOAD, name, url, menuKey, fileType, ...extra};
 }
 
+export function dpdtExtract(name, activate, menuKey='extract-0') {
+    return { displayType:DPtypes.EXTRACT, name, activate, menuKey};
+}
+
 export function dpdtDownloadMenuItem(name, url, menuKey='download-0', fileType, extra={}) {
-    return { displayType:DPtypes.DOWNLOAD_MENU_ITEM, name, url, menuKey, singleDownload: true, fileType, ...extra};
+    return { displayType:DPtypes.DOWNLOAD_MENU_ITEM, name, url, menuKey, fileType, ...extra};
 }
 
 /**
@@ -286,6 +301,10 @@ export function dpdtDownloadMenuItem(name, url, menuKey='download-0', fileType, 
  */
 export function dpdtPNG(name, url, menuKey='png-0', extra={}) {
     return { displayType:DPtypes.PNG, name, url, menuKey, ...extra};
+}
+
+export function dpdtText(name, url, menuKey='text-0', extra={}) {
+    return { displayType:DPtypes.TXT, name, url, menuKey, ...extra};
 }
 
 /**

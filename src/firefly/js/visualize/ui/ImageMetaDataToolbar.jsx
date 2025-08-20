@@ -3,7 +3,7 @@
  */
 
 import React, {Component} from 'react';
-import PropTypes from 'prop-types';
+import PropTypes, {element} from 'prop-types';
 import {omit} from 'lodash';
 import {flux} from '../../core/ReduxFlux.js';
 import shallowequal from 'shallowequal';
@@ -49,10 +49,15 @@ export class ImageMetaDataToolbar extends Component {
 
     render() {
         const {activeTable}= this.state;
-        const {visRoot, viewerId, viewerPlotIds, layoutType, dlAry, makeDropDown, serDef, factoryKey, enableCutout, pixelBasedCutout= false}= this.props;
+        const {visRoot, viewerId, viewerPlotIds, layoutType, dlAry, makeDropDown, serDef, factoryKey, enableCutout,
+            cutoutToFullWarning, containerElement,
+            enableCutoutFullSwitching= false, pixelBasedCutout= false}= this.props;
         return (
             <ImageMetaDataToolbarView activePlotId={visRoot.activePlotId} viewerId={viewerId}  serDef={serDef}
                                       enableCutout={enableCutout} pixelBasedCutout={pixelBasedCutout}
+                                      cutoutToFullWarning={cutoutToFullWarning}
+                                      containerElement={containerElement}
+                                      enableCutoutFullSwitching={enableCutoutFullSwitching}
                                       viewerPlotIds={viewerPlotIds} layoutType={layoutType} dlAry={dlAry}
                                       activeTable={activeTable} makeDataProductsConverter={makeDataProductsConverter}
                                       makeDropDown={makeDropDown} factoryKey={factoryKey} />
@@ -70,6 +75,9 @@ ImageMetaDataToolbar.propTypes= {
     factoryKey: PropTypes.string,
     makeDropDown: PropTypes.func,
     enableCutout: PropTypes.bool,
+    enableCutoutFullSwitching: PropTypes.bool,
     pixelBasedCutout: PropTypes.bool,
+    cutoutToFullWarning: PropTypes.string,
+    containerElement: PropTypes.any,
     serDef: PropTypes.object
 };

@@ -92,6 +92,9 @@ export const PlotAttribute= {
     /** true if there is extraction data */
     EXTRACTION_DATA: 'EXTRACTION_DATA',
 
+    /** true if image should not center on row target */
+    IGNORE_PAN_BY_TABLE_ROW: 'IGNORE_PAN_BY_TABLE_ROW',
+
     /**
      * This will probably an object {pt: point}
      * @See ./Point.js
@@ -137,10 +140,12 @@ export const PlotAttribute= {
 
 
     /** A source datalink (or similar) table row that was used to construct this plot */
-    RELATED_TABLE_ROW : 'DATALINK_TABLE_ROW',
+    RELATED_TABLE_ROW : 'RELATED_TABLE_ROW',
 
     /** A source datalink (or similar) table id related that was used to construct this plot */
-    RELATED_TABLE_ID : 'DATALINK_TABLE_ID',
+    RELATED_TABLE_ID : 'RELATED_TABLE_ID',
+
+    RELATED_GRID_IMAGE_COUNT : 'RELATED_GRID_IMAGE_COUNT',
 
     /** an array of table ids used by coverage or other representation of these tables */
     VISUALIZED_TABLE_IDS : 'VISUALIZED_TABLE_IDS',
@@ -155,5 +160,7 @@ export const PlotAttribute= {
     USER_SEARCH_RADIUS_DEG: 'USER_SEARCH_RADIUS_DEG',
 
     /** an object warnings: {key: string, warning:string} */
-    USER_WARNINGS: 'USER_WARNINGS'
+    USER_WARNINGS: 'USER_WARNINGS',
+
+    USER_PINNED_IMAGE: 'USER_PINNED_IMAGE',
 };

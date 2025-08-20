@@ -321,7 +321,7 @@ const SaveRestoreRow= ({sx,image,hips,mi,pv,enabled}) => (
                        onClick={() => dispatchRestoreDefaults({plotId:pv.plotId})}/>
         <InfoButton tip={image ? 'Show FITS header' : (hips ? 'Show HiPS properties' : '')}
                        enabled={enabled} visible={mi.directFileAccessData}
-                       onClick={(element) => showPlotInfoPopup(pv, element )} />
+                       onClick={(element) => setTimeout( () => showPlotInfoPopup(pv, element ))} />
     </Stack>
 );
 
@@ -388,7 +388,7 @@ const LayersRow= ({style,image, pv,mi,enabled, modalEndInfo}) => (
         <SimpleLayerOnOffButton plotView={pv} typeId={NorthUpCompass.TYPE_ID}
                                 tip='Show the directions of Equatorial J2000 North and East'
                                 iconOff={COMPASS_OFF} visible={mi.northArrow} />
-        <SimpleLayerOnOffButton plotView={pv} typeId={WebGrid.TYPE_ID} tip='Add grid layer to the image'
+        <SimpleLayerOnOffButton plotView={pv} typeId={WebGrid.TYPE_ID} tip='Add coordinate grid layer to the image'
                                 iconOff={GRID_OFF}
                                 plotTypeMustMatch={true} visible={mi.grid} />
         <DistanceButton plotView={pv} typeId={DistanceTool.TYPE_ID}

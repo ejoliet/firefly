@@ -1,11 +1,11 @@
-import {isEmpty} from 'lodash';
+import {isEmpty, isUndefined} from 'lodash';
 import {hasRowAccess} from '../../tables/TableUtil.js';
 import {getSearchTarget, makeWorldPtUsingCenterColumns} from '../../voAnalyzer/TableAnalysis.js';
 import {getServiceDescriptors, isDataLinkServiceDesc} from '../../voAnalyzer/VoDataLinkServDef.js';
 import {getActiveMenuKey} from '../DataProductsCntlr.js';
 import {dpdtFromMenu, dpdtSimpleMsg} from '../DataProductsType.js';
 import {
-    createGridResult, datalinkDescribeThreeColor, getDatalinkRelatedGridProduct, getDatalinkSingleDataProduct, makeDlUrl
+    createGridResult, datalinkDescribeThreeColor, getDatalinkRelatedImageGridProduct, getDatalinkSingleDataProduct, makeDlUrl
 } from './DatalinkProducts.js';
 import {createServDescMenuRet} from './ServDescProducts.js';
 
@@ -21,23 +21,22 @@ const DEF_MAX_PLOTS= 8;
  * @return {DataProductsConvertType}
  */
 export function makeServDescriptorConverter(table,converterTemplate,options={}) {
-    if (!table) return converterTemplate;
-    const descriptors = getServiceDescriptors(table);
-    if (!descriptors || !findDataLinkServeDescs(descriptors)?.length) return converterTemplate;
+    if (!table || !findDataLinkServeDescs(getServiceDescriptors(table))?.length) return converterTemplate;
 
-    const canRelatedGrid= options.allowImageRelatedGrid?? false;
-    const threeColor= converterTemplate.threeColor && options?.allowImageRelatedGrid;
-    const allowServiceDefGrid= options.allowServiceDefGrid?? false;
+    const {hasRelatedBands=false, maxPlots, initialLayout}= converterTemplate;
+    const threeColor= isUndefined(converterTemplate.threeColor) ? hasRelatedBands : converterTemplate.threeColor;
+    const canGrid= converterTemplate.canGrid ?? hasRelatedBands;
     //------
     const baseRetOb = {
         ...converterTemplate,
-        initialLayout: options?.dataLinkInitialLayout ?? 'single',
+        initialLayout: initialLayout ?? 'single',
         describeThreeColor: (threeColor) ? describeServDefThreeColor : undefined,
         threeColor,
-        canGrid: canRelatedGrid || allowServiceDefGrid,
-        maxPlots: canRelatedGrid ? DEF_MAX_PLOTS : 1,
-        hasRelatedBands: canRelatedGrid,
-        converterId: `ServiceDef-${table.tbl_id}`
+        canGrid: Boolean(canGrid),
+        maxPlots: maxPlots ?? 1,
+        hasRelatedBands,
+        converterId: `ServiceDef-${table.tbl_id}`,
+        relatedGridImageOrder: options.relatedGridImageOrder
     };
     return baseRetOb;
 }
@@ -64,32 +63,38 @@ export async function getServiceDescSingleDataProduct(table, row, activateParams
 
     const descriptors= getServiceDescriptors(table);
     if (!descriptors) return dpdtSimpleMsg('Could not find any service descriptors');
-    if (!hasRowAccess(table, row)) return dpdtSimpleMsg('You do not have access to these data.');
+    if (!hasRowAccess(table, row)) return dpdtSimpleMsg('You do not have access to this data.');
+    const dlDescriptors= findDataLinkServeDescs(descriptors);
 
     const positionWP= getSearchTarget(table.request,table) ?? makeWorldPtUsingCenterColumns(table,row);
 
+    const byRow= dlDescriptors?.length;
 
-    const activeMenuLookupKey= `${descriptors[0].accessURL}--${table.tbl_id}--${row}`;
+    const activeMenuLookupKey= byRow
+        ? `${descriptors[0].accessURL}--${table.tbl_id}--${row}`
+        : `${descriptors[0].accessURL}--${table.tbl_id}--allRows`;
     const menu= createServDescMenuRet({descriptors,positionWP,table,row,
         activateParams,activeMenuLookupKey, options});
     const activeMenuKey= getActiveMenuKey(activateParams.dpId, activeMenuLookupKey);
     let index= menu.findIndex( (m) => m.menuKey===activeMenuKey);
     if (index<0) index= 0;
 
-    const dlTableUrl= makeDlUrl(findDataLinkServeDescs(descriptors)[0],table, row);
+    const dlTableUrl= makeDlUrl(dlDescriptors[0],table, row);
     if (dlTableUrl) {
         return getDatalinkSingleDataProduct({dlTableUrl, options, sourceTable:table, row,
             activateParams, titleStr:'',
             additionalServiceDescMenuList:!isEmpty(menu)?menu:undefined});
     }
     else {
-        return dpdtFromMenu(menu,index,activeMenuLookupKey,true);
+        // there will be no menu if the there is only one service descriptor, and it is not datalink
+        // no menu is a common case.
+        return menu.length===1 ? menu[0] : dpdtFromMenu(menu,index,activeMenuLookupKey,true);
     }
 }
 
 export async function getServiceDescGridDataProduct(table, plotRows, activateParams, options) {
     const pAry= plotRows.map( (pR) => getServiceDescSingleDataProduct(table,pR.row,activateParams,options, false));
-    return createGridResult(pAry,activateParams,table,plotRows);
+    return createGridResult(pAry,activateParams,table,plotRows,options);
 }
 
 export async function getServiceDescRelatedDataProduct(table, row, threeColorOps, highlightPlotId, activateParams, options) {
@@ -98,7 +103,7 @@ export async function getServiceDescRelatedDataProduct(table, row, threeColorOps
     if (!hasRowAccess(table, row)) return dpdtSimpleMsg('You do not have access to these data.');
     const dlTableUrl= makeDlUrl(findDataLinkServeDescs(descriptors)[0],table, row);
     if (!dlTableUrl) return dpdtSimpleMsg('a datalink service descriptors return images is required for related grid');
-    return getDatalinkRelatedGridProduct({dlTableUrl, activateParams,table,row,threeColorOps, titleStr:'',options});
+    return getDatalinkRelatedImageGridProduct({dlTableUrl, activateParams,table,row,threeColorOps, titleStr:'',options});
 }
 
 
@@ -107,5 +112,6 @@ export async function getServiceDescRelatedDataProduct(table, row, threeColorOps
 
 
 
-export const findDataLinkServeDescs= (sdAry) => sdAry?.filter( (serDef) => isDataLinkServiceDesc(serDef));
+export const findDataLinkServeDescs= (sdAry=[]) =>
+    sdAry?.filter( (serDef) => isDataLinkServiceDesc(serDef) ?? []);
 

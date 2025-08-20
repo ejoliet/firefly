@@ -9,10 +9,8 @@ package edu.caltech.ipac.firefly.server.servlets;
  */
 
 
-import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.util.QueryUtil;
 import edu.caltech.ipac.firefly.server.util.multipart.MultiPartData;
-import edu.caltech.ipac.util.cache.Cache;
 import edu.caltech.ipac.util.cache.CacheManager;
 import edu.caltech.ipac.util.cache.StringKey;
 import org.apache.commons.fileupload.FileItem;
@@ -64,7 +62,7 @@ public class MultipartDataUtil {
                 item.write(uf);
                 data.addFile(fieldName, uf, fileName, contentType);
                 StringKey fileKey= new StringKey(fileName, System.currentTimeMillis());
-                CacheManager.getCache(Cache.TYPE_TEMP_FILE).put(fileKey, uf);
+                CacheManager.getLocal().put(fileKey, uf);
             }
         }
         return data;

@@ -4,6 +4,7 @@ cd /opt/work/${work_dir}
 gradle -Penv=${env} ${project}:bAD
 gradle -Penv=${env} ${project}:dev &
 
+mkdir -p ${CATALINA_HOME}/webapps-ref
 # extract all war files into tomcat's webapps; mod log4j to have log sent to stdout as well
 cd ${CATALINA_HOME}/webapps
 for n in *.war; do \
@@ -14,4 +15,5 @@ for n in *.war; do \
 done
 
 cd ${CATALINA_HOME}
-${CATALINA_HOME}/launchTomcat.sh
+#${CATALINA_HOME}/launchTomcat.sh
+python3 ${CATALINA_HOME}/entrypoint.py

@@ -11,7 +11,7 @@ import {getFieldGroupResults} from '../../fieldGroup/FieldGroupUtils.js';
 import {getJsonProperty} from '../../rpc/CoreServices.js';
 import {makeFileRequest, MAX_ROW, META} from '../../tables/TableRequestUtil.js';
 import {dispatchTableFetch, dispatchTableHighlight} from '../../tables/TablesCntlr.js';
-import {getCellValue, getColumnIdx, getTblById, onTableLoaded,} from '../../tables/TableUtil.js';
+import {getCellValue, getColumnIdx, getTblById, isFullyLoaded, onTableLoaded,} from '../../tables/TableUtil.js';
 import {Logger} from '../../util/Logger.js';
 import {makeSearchOnce, toBoolean} from '../../util/WebUtil.js';
 import CoordSys from '../../visualize/CoordSys.js';
@@ -23,19 +23,17 @@ import {pointEquals} from '../../visualize/Point.js';
 import {CONE_CHOICE_KEY} from '../../visualize/ui/CommonUIKeys.js';
 import {isHiPS} from '../../visualize/WebPlot.js';
 import {UserZoomTypes} from '../../visualize/ZoomUtil.js';
-import {cisxAdhocServiceUtype, standardIDs} from '../../voAnalyzer/VoConst.js';
-import {getStandardId, getUtype} from '../../voAnalyzer/VoDataLinkServDef';
 import {FieldGroup} from '../FieldGroup.jsx';
 import {showInfoPopup} from '../PopupUtil.jsx';
 import {useStoreConnector} from '../SimpleComponent.jsx';
-import {analyzeQueries, handleSearch} from './DLGenAnalyzeSearch.js';
+import {analyzeQueries, getCisxUI, getCisxUIUCD, getCisxUIValue, handleSearch} from './DLGenAnalyzeSearch.js';
 import {SideBarAnimation, SideBarTable} from './DLuiDecoration.jsx';
 import {DLuiServDescPanel, DLuiTabView} from './DLuiServDescPanel.jsx';
 import {CIRCLE, POINT, POSITION, RANGE} from './DynamicDef.js';
-import {convertRequest, findTargetFromRequest} from './DynamicUISearchPanel.jsx';
+import {convertRequest, DEFER_TO_CONTEXT, findTargetFromRequest} from './DynamicUISearchPanel.jsx';
 import {getSpacialSearchType, hasValidSpacialSearch} from './DynComponents.jsx';
 import {confirmDLMenuItem} from './FetchDatalinkTable.js';
-import {getStandardIdType, ingestInitArgs, makeFieldDefs, makeSearchAreaInfo} from './ServiceDefTools.js';
+import {getStandardIdType, ingestInitArgs, makeSearchAreaInfo, sdToFieldDefAry} from './ServiceDefTools.js';
 
 
 export const DL_UI_LIST= 'DL_UI_LIST';
@@ -128,8 +126,8 @@ export function DLGeneratedDropDown({initArgs={},
     const currentIdx= useStoreConnector(() => getTblById(registryTblId)?.highlightedRow ?? -1);
     const [url,setUrl]= useState();
     const [searchAttributes,setSearchAttributes]= useState({});
-    const {makeRegistryRequest,findUrlInReg,getCollectionUrl,getCollectionAttributes}=
-        { ...defaultRegistrySearchDef, ...registrySearchDef};
+    const {makeRegistryRequest,findUrlInReg,getCollectionUrl,getCollectionAttributes,
+        defaultMaxMOCFetchDepth, dataServiceId}= { ...defaultRegistrySearchDef, ...registrySearchDef};
 
     registryData[name] ??= { regLoaded: false, hasRegistry:true, regLoading: false, loadedTblIdCache:undefined, savedUrl: undefined};
 
@@ -191,8 +189,8 @@ export function DLGeneratedDropDown({initArgs={},
         );
     }
 
-    return (<DLGeneratedDropDownTables {...{registryTblId,regLoaded, loadedTblIds, setLoadedTblIds, url,
-        searchAttributes, groupKey, slotProps, findUrlInReg, initArgs, hasRegistry}}/>);
+    return (<DLGeneratedDropDownTables {...{registryTblId,regLoaded, loadedTblIds, setLoadedTblIds, url, dataServiceId,
+        searchAttributes, groupKey, slotProps, findUrlInReg, initArgs, hasRegistry,defaultMaxMOCFetchDepth}}/>);
 }
 
 DLGeneratedDropDown.propTypes= {
@@ -230,7 +228,8 @@ DLGeneratedDropDown.propTypes= {
 
 
 function DLGeneratedDropDownTables({registryTblId, regLoaded, loadedTblIds, setLoadedTblIds, url, hasRegistry,
-                                       searchAttributes, groupKey, slotProps, findUrlInReg, initArgs}) {
+                                       searchAttributes, groupKey, slotProps, dataServiceId,
+                                       findUrlInReg, initArgs, defaultMaxMOCFetchDepth}) {
 
     const [sideBarShowing, setSideBarShowing]= useState(true);
     const currentTblId= loadedTblIds?.[url];
@@ -265,7 +264,9 @@ function DLGeneratedDropDownTables({registryTblId, regLoaded, loadedTblIds, setL
     const qAna= analyzeQueries(currentTblId);
     return (
         <Sheet sx={{display:'flex', flexDirection: 'row', width:1, height:1, minWidth:800, minHeight:400}}>
-            <DLGeneratedTableSearch {...{currentTblId, qAna, groupKey, initArgs, sideBar, regHasUrl, url, regLoaded,slotProps, sideBarShowing, setSideBarShowing}}/>
+            <DLGeneratedTableSearch {...{currentTblId, qAna, groupKey, initArgs, sideBar, regHasUrl, url,
+                regLoaded,slotProps, sideBarShowing, dataServiceId,
+                setSideBarShowing, defaultMaxMOCFetchDepth}}/>
         </Sheet>
     );
 }
@@ -277,7 +278,8 @@ const executeInitTargetOnce= makeSearchOnce(false);
 
 
 function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar, regHasUrl, url,
-                                    sideBarShowing, slotProps, regLoaded, setSideBarShowing}) {
+                                    sideBarShowing, slotProps, regLoaded, dataServiceId:inDataServiceId,
+                                    setSideBarShowing, defaultMaxMOCFetchDepth}) {
     const [,setCallId]= useState('none');
     const [{onClick},setClickFuncImpl]= useState({});
     const tabsKey= 'Tabs-'+currentTblId;
@@ -287,6 +289,7 @@ function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar
         if (obj?.onClick && !onClick) setClickFuncImpl(obj);
     };
 
+    const dataServiceId= getCisxUIValue(qAna, 'data_service_id') ?? inDataServiceId;
 
     useEffect(() => {
         if (initArgs?.urlApi?.execute && onClick && matchUrl) {
@@ -300,7 +303,7 @@ function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar
         }
     }, [onClick, initArgs?.urlApi?.callId, matchUrl]);
 
-    const fdAry= makePrimarySearchFieldDefAry(qAna,initArgs);
+    const fdAry= makePrimarySearchFieldDefAry(qAna,initArgs,defaultMaxMOCFetchDepth);
 
     const searchObjFds= fdAry
         ?.map((fds,idx) => {
@@ -315,6 +318,7 @@ function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar
     useEffect(() => { // on table change: recenter hips if no target entered, change hips if new one is specified
         if (!currentTblId) return;
         const request= getFieldGroupResults(groupKey);
+        if (!searchObjFds) return;
         const fds= searchObjFds.length===1 ?
             searchObjFds[0].fds :
             searchObjFds.find(({ID}) => ID===request[tabsKey])?.fds;
@@ -323,7 +327,13 @@ function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar
 
     const isAllSky= toBoolean(getCisxUI(qAna)?.find( (e) => e.name==='data_covers_allsky')?.value);
     const docRows= qAna?.urlRows.filter( ({semantic}) => semantic?.toLowerCase().endsWith('documentation'));
-    const submitSearch= (request) => doSubmitSearch(request,docRows,qAna,fdAry,searchObjFds,tabsKey);
+
+    const submitSearch= (request,siaCtx) =>
+        doSubmitSearch(request,siaCtx,dataServiceId, docRows,qAna,fdAry,searchObjFds,tabsKey);
+
+
+    let dlLoadError= false;
+    if (!qAna && isFullyLoaded(currentTblId)) dlLoadError= true;
 
     return (
         <Sheet sx={{width:1,height:1}}>
@@ -333,12 +343,12 @@ function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar
                     <FieldGroup groupKey={groupKey} keepState={true} style={{width:'100%'}}>
                         {(regLoaded && qAna) ? searchObjFds.length===1 ?
                                 <DLuiServDescPanel{...{initArgs, setSideBarShowing, sideBarShowing, fds:searchObjFds[0].fds,
-                                    setClickFunc, submitSearch, isAllSky, qAna, slotProps,
+                                    setClickFunc, submitSearch, isAllSky, qAna, slotProps,dataServiceId,
                                     sx:{width:1,height:1}, desc:searchObjFds[0].desc, docRows}} /> :
                                 <DLuiTabView{...{initArgs, tabsKey, setSideBarShowing, sideBarShowing, searchObjFds, qAna,
-                                    docRows, isAllSky, setClickFunc, submitSearch, slotProps}}/>
+                                    docRows, isAllSky, setClickFunc, submitSearch, slotProps, dataServiceId}}/>
                             :
-                            <NotLoaded {...{regHasUrl,regLoaded,url}}/>
+                            <NotLoaded {...{regHasUrl,regLoaded,url,dlLoadError}}/>
                         }
                     </FieldGroup>
                 </Stack>
@@ -357,68 +367,59 @@ function DLGeneratedTableSearch({currentTblId, qAna, groupKey, initArgs, sideBar
  * @param {Array.<FieldDef>} fieldDefAry
  */
 function alignHiPS(currentTblId, qAna, groupKey, fieldDefAry) {
-    if (!currentTblId) return;
     const plot= primePlot(visRoot(),HIPS_PLOT_ID);
-    if (!isHiPS(plot)) return;
-    if (!getCisxUI(qAna).length) return;
+    if (!currentTblId || !isHiPS(plot) || !getCisxUI(qAna).length) return; // probably init is not complete, return
+
     const request= getFieldGroupResults(groupKey); // todo: this might not be right, there might be an array of field groups
     const tgt= findTargetFromRequest(request,fieldDefAry);
-    if (tgt) return;
+    if (tgt) return; // user has already entered a target, don't recenter, just return
 
-    const cisxUI= getCisxUI(qAna);
-    const raStr= cisxUI.find( (e) => e.name==='hips_initial_ra')?.value;
-    const decStr= cisxUI.find( (e) => e.name==='hips_initial_dec')?.value;
-    const ucdStr= cisxUI.find( (e) => e.name==='hips_initial_ra')?.UCD;
-    const fovStr= cisxUI.find( (e) => e.name==='hips_initial_fov')?.value;
+    const raStr=  getCisxUIValue(qAna, 'hips_initial_ra');
+    const decStr= getCisxUIValue(qAna, 'hips_initial_dec');
+    const ucdStr= getCisxUIUCD(qAna, 'hips_initial_ra');
+    const fov= Number(getCisxUIValue(qAna, 'hips_initial_fov'));
+
     const coordSys= ucdStr==='pos.galactic.lon' ? CoordSys.GALACTIC : CoordSys.EQ_J2000;
     const centerProjPt= makeWorldPt(raStr, decStr, coordSys);
     if (!centerProjPt) return;
     dispatchChangeCenterOfProjection({plotId:HIPS_PLOT_ID, centerProjPt});
-    const fov= Number(fovStr);
     const pv= getPlotViewById(visRoot(),HIPS_PLOT_ID);
     if (!fov || !pv) return;
     const MIN_FOV_SIZE= .0025; // 9 arcsec - minimum fov for initial size
-    const cleanFov= Math.max(fov,MIN_FOV_SIZE);
-    const level= getHiPSZoomLevelForFOV(pv,cleanFov);
+    const level= getHiPSZoomLevelForFOV(pv,Math.max(fov,MIN_FOV_SIZE));
     if (level) dispatchZoom({plotId:pv.plotId, userZoomType: UserZoomTypes.LEVEL, level});
 }
 
 
-/**
- * @param {QueryAnalysis|ServiceDescriptorDef} qAnaOrSd - accept a QueryAnalysis or a ServiceDescriptorDef
- * @return {CISXui|Array} ui parameters or an empty array
- */
-function getCisxUI(qAnaOrSd) {
-    if (!qAnaOrSd) return [];
-    if (qAnaOrSd.primarySearchDef) { // is QueryAnalysis
-        return qAnaOrSd.primarySearchDef[0]?.serviceDef?.cisxUI ?? [];
-    }
-    else if (qAnaOrSd.accessURL) { // is ServiceDescriptorDef
-        return qAnaOrSd.cisxUI ?? [];
-    }
-    return [];
-}
+
 /**
  * map the primarySearchDef (a SearchDefinition) array in QueryAnalysis to an array of FieldDef arrays.
  * Usually there is only one primarySearchDef
  *
  * @param {QueryAnalysis} qAna - the description of all the searches to do for this table
  * @param {Object} initArgs
+ * @param {number} defaultMaxMOCFetchDepth
  * @return {Array.<Array.<FieldDef>>}
  */
-function makePrimarySearchFieldDefAry(qAna, initArgs) {
+function makePrimarySearchFieldDefAry(qAna, initArgs, defaultMaxMOCFetchDepth) {
     return qAna?.primarySearchDef.map( (fd) => {
         const {serviceDef}= fd; //todo handle case with only an access url
         if (!serviceDef) return;
-        const standId= getStandardId(serviceDef);
-        const utype= getUtype(serviceDef);
-        let fdEntryAry;
-        if (utype===cisxAdhocServiceUtype && standId.startsWith(standardIDs.tap) && serviceDef.cisxTokenSub) {
-            fdEntryAry= makeFieldDefs(serviceDef.cisxTokenSub, undefined, makeSearchAreaInfo(getCisxUI(serviceDef)), false);
-        }
-        else {
-            fdEntryAry= makeFieldDefs(serviceDef.serDefParams, undefined, makeSearchAreaInfo(getCisxUI(serviceDef)), true);
-        }
+        // const standId= getStandardId(serviceDef);
+        // const utype= getUtype(serviceDef);
+        // let fdEntryAry;
+        // TODO: figure out how to better do TAP support
+        // if (utype===cisxAdhocServiceUtype && standId.startsWith(standardIDs.tap) && serviceDef.cisxTokenSub) {
+        //     fdEntryAry= sdParamsToFieldDefAry({
+        //         serDefParams:serviceDef.cisxTokenSub,
+        //         searchAreaInfo:makeSearchAreaInfo(getCisxUI(serviceDef), defaultMaxMOCFetchDepth),
+        //         hidePredefinedStringFields:false});
+        // }
+        // else {
+        const fdEntryAry= sdToFieldDefAry({
+                serviceDef, searchAreaInfo:makeSearchAreaInfo(getCisxUI(serviceDef), defaultMaxMOCFetchDepth)
+            });
+        // }
         if (!isEmpty(initArgs.urlApi)) {
             const originalWp= fdEntryAry.find((fd) => fd.type===POSITION)?.initValue ?? fdEntryAry.find((fd) => fd.type===CIRCLE)?.targetDetails?.centerPt;
             const initFdEntryAry= ingestInitArgs(fdEntryAry,initArgs.urlApi);
@@ -442,16 +443,17 @@ function findInitWp(initFdEntryAry) {
         initFdEntryAry.find((fd) => fd.type===CIRCLE)?.targetDetails?.centerPt;
 }
 
-const NotLoaded= ({regHasUrl,regLoaded, url}) => (
-    (regHasUrl || !regLoaded) ?
-        (<Box sx={{position:'relative', width:1, height:1}}> <Skeleton/> </Box>) :
-        (<Typography level='title-lg' color='warning' sx={{alignSelf:'center', pl:5}}>
+const NotLoaded= ({regHasUrl,regLoaded, url, dlLoadError}) => (
+    ((regHasUrl || !regLoaded) && !dlLoadError) ?
+        (<Box sx={{position:'relative', width:1, height:1}}><Skeleton/></Box>) :
+        (<Typography level='title-lg' color='warning' sx={{alignSelf:'center', ml:10, mt: 10}}>
             {`No collections to load from: ${url}`}
         </Typography>)
 );
 
 
-const doSubmitSearch= (r,docRows,qAna,fdAry,searchObjFds,tabsKey) => {
+
+function doSubmitSearch(r,siaCtx,dataServiceId, docRows,qAna,fdAry,searchObjFds,tabsKey)  {
     const {fds, standardID, idx}=
         searchObjFds.length===1 ? searchObjFds[0] : searchObjFds.find(({ID}) => ID===r[tabsKey]) ?? {};
 
@@ -463,16 +465,34 @@ const doSubmitSearch= (r,docRows,qAna,fdAry,searchObjFds,tabsKey) => {
         return false;
     }
 
-    const convertedR= convertRequest(r,fds,getStandardIdType(standardID));
+    const outReq= convertRequest(r,fds,getStandardIdType(standardID));
+    const requestKeyCnt= Object.keys(outReq).length;
+    const convertedR= Object.fromEntries(Object.entries(outReq).filter(([k,v]) => v!==DEFER_TO_CONTEXT));
     const selectedConcurrent= r.searchOptions ?? '';
 
+
+    let siaContraints= [];
+    if (siaCtx) {
+        const cAry= [...siaCtx.values()];
+        const anyErrorStr= cAry.find( (c) => c.constraintErrors.length)?.constraintErrors[0];
+        if (anyErrorStr) {
+            showInfoPopup(anyErrorStr);
+            return false;
+        }
+        siaContraints= cAry.map( (f) =>  f.siaConstraints).filter( (c) => c?.length).flat();
+    }
+
     const numKeys= [...new Set(fds.map( ({key}) => key))].length;
-    if (Object.keys(convertedR).length<numKeys) {
+    if (requestKeyCnt<numKeys) {
         showInfoPopup('Please enter all of the fields', 'Error');
         return false;
     }
+
+
+
     const extraMeta = docRows?.[0] ? {[META.doclink.url]: docRows[0].accessUrl, [META.doclink.desc]: docRows[0].desc} : {};
-    handleSearch(convertedR,qAna,fdAry, idx, extraMeta, selectedConcurrent);
+    extraMeta[MetaConst.DATA_SERVICE_ID]= dataServiceId;
+    handleSearch(convertedR,siaContraints, qAna,fdAry, idx, extraMeta, selectedConcurrent);
     return true;
-};
+}
 
