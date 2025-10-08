@@ -165,6 +165,7 @@ export function EmbeddedPositionSearchPanel({
         sRegion= undefined,
         toolbarHelpId= undefined,
         showHelpLines=true,
+        selectionHelpText= undefined,
         coordinateSys : csysStr = 'EQ_J2000',
         sx:hipsTargetViewSx={},
     }= slotProps.hipsTargetView ?? {};
@@ -190,10 +191,11 @@ export function EmbeddedPositionSearchPanel({
            sx={{alignSelf: 'stretch', position: 'relative'}}>
             <HiPSTargetView
                 {...{
+                    key: groupKey,
                     hipsUrl, centerPt:initCenterPt, hipsFOVInDeg, mocList,
                     coordinateSys: CoordinateSys.parse(csysStr) ?? CoordinateSys.EQ_J2000,
                     sRegion, plotId,
-                    minSize: min, maxSize: max, toolbarHelpId, showHelpLines,
+                    minSize: min, maxSize: max, toolbarHelpId, showHelpLines, selectionHelpText,
                     getWhichOverlay: doGetSearchTypeOp, setWhichOverlay: doToggle ? setSearchTypeOp : undefined,
                     targetKey,
                     sizeKey: sizeEnabled ? sizeKey : undefined, //to draw radius only when size input is enabled
@@ -298,6 +300,7 @@ EmbeddedPositionSearchPanel.propTypes= {
             sRegion: string,
             toolbarHelpId: string,
             showHelpLines: bool,
+            selectionHelpText: string,
             sx: object,
             initCenterPt: object,
             coordinateSys: oneOf(['EQ_J2000','GALACTIC']),
@@ -456,6 +459,7 @@ function ConeOp({slotProps,nullAllowed}) {
         <Stack>
             <TargetPanel {...{
                 sx:{width:DEFAULT_TARGET_PANEL_WIDTH, ...slotProps.targetPanel?.sx},
+                key:targetKey,
                 fieldKey:targetKey, nullAllowed,
                 targetPanelExampleRow1, targetPanelExampleRow2,
                 slotProps: {

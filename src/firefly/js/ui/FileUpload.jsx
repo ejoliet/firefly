@@ -158,10 +158,13 @@ function doUrlAnalysis(value, fireValueChange, type, fileAnalysis) {
 
 function handleChange(ev, fireValueChange, type, fileAnalysis) {
     let file = ev?.target?.files?.[0];
-    let displayValue = ev?.target?.value;
-    if (ev.type === 'drop') { //drag drop files - instead of picking file from 'Choose File'
-        file = Array.from(ev.dataTransfer.files)[0];
-        displayValue = file?.name;
+    let displayValue;
+    if (ev) {
+        displayValue = ev.target?.value;
+        if (ev.type === 'drop') { //drag drop files - instead of picking file from 'Choose File'
+            file = Array.from(ev.dataTransfer.files)[0];
+            displayValue = ev.transferIsUrl ?  ev?.dataTransfer?.files?.[0] : file?.name;
+        }
     }
     fireValueChange({
         displayValue,
@@ -199,7 +202,8 @@ const getUploadUrl= (fileOrUrl) =>
     isString(fileOrUrl) ? fileOrUrl?.trim() : fileOrUrl?.name ? fileOrUrl.name.trim() : undefined;
 
 function doUpload(isFromURL, fileOrUrl, fileAnalysis, params={}) {
-    if (isFromURL && !validateUrl('',getUploadUrl(fileOrUrl)).valid) {
+    if (isFromURL && isString(fileOrUrl)) fileOrUrl= fileOrUrl?.trim();
+    if (isFromURL && !fileOrUrl?.toLowerCase().startsWith('s3://') && !validateUrl('',getUploadUrl(fileOrUrl)).valid) {
         return Promise.resolve({status:404,message:'bad Url'});
     }
     const faFunction= isFunction(fileAnalysis) && fileAnalysis;

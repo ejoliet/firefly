@@ -23,7 +23,7 @@ import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import javax.validation.constraints.NotNull;
 import java.io.ByteArrayOutputStream;
 import java.io.UnsupportedEncodingException;
@@ -166,7 +166,7 @@ public class OidcAdapter implements SsoAdapter {
 
         Token token = null;
         try {
-            LOGGER.briefDebug("auth token:" + results);
+            LOGGER.debug("auth token:" + results);
 
             JSONParser parser = new JSONParser();
             JSONObject ans = (JSONObject) parser.parse(results.toString());
@@ -195,7 +195,7 @@ public class OidcAdapter implements SsoAdapter {
 
         if (HttpServices.getData(url, results).isError()) return null;
         try {
-            LOGGER.briefDebug("user_info:" + results);
+            LOGGER.debug("user_info:" + results);
             JSONParser parser = new JSONParser();
             JSONObject ans = (JSONObject) parser.parse(results.toString());
             String email = getString(ans, EMAIL, "");

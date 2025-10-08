@@ -213,12 +213,16 @@ export function AdvancedADQL({adqlKey, defAdqlKey, serviceUrl, capabilities, sty
             const keys = keysInfo?.tableData?.data?.filter((row) => row[0] === keyId);
 
             targetTable  = maybeQuote(targetTable, true);
-            let val = ` INNER JOIN ${targetTable} ON `;
+            let val = '';
             keys.forEach((row, idx) => {
                 const fromColumn   = maybeQuote(fixCname(row[4], row[1]));
                 const targetColumn = maybeQuote(fixCname(row[5], row[2]));
                 val += `${idx>0 ? ' AND' : ''} ${fromColumn} = ${targetColumn}`;
             });
+            if ( keys.length > 1 ) {
+                val = '( ' + val + ' )';
+            }
+            val = ` INNER JOIN ${targetTable} ON ` + val;
             insertAtCursor(textArea, val, adqlKey, groupKey, prismLiveRef.current);
         }
     };
@@ -530,18 +534,21 @@ async function addAvailKeyNodes({serviceUrl, title, cols, treeData, setTreeData}
     });
 }
 
-function JoinNode({targetTable, keyId, desc, treeData, setTreeData}) {
+function JoinNode({ targetTable, keyId, desc, treeData, setTreeData }) {
+    const text = `${targetTable} [${keyId}]${desc ?? ''}`;
 
     const jumpTo = useCallback(() => {
         const nodeKey = searchNodeBy(treeData, (n) => n.title === targetTable);
-        if (nodeKey) {
-            const nTree = updateSet(treeData, 'expandedKeys', treeData.expandedKeys.push(nodeKey));
-            setTreeData(nTree);
-        }
-    });
-    // <img src={INFO_ICO} onClick={jumpTo} style={{height:16, verticalAlign:'middle'}}/>  // can't get it to work.
-    return <div>{targetTable} [{keyId}]{desc}</div>;
+        if (!nodeKey) return;
+        const nTree = updateSet(treeData, 'expandedKeys', treeData.expandedKeys.push(nodeKey));
+        setTreeData(nTree);
+    }, [treeData, setTreeData, targetTable]);
+
+    return (
+        <span title={text}>{text}</span>
+    );
 }
+
 
 function addChildNodes(data, key, children) {
     for (let idx = 0; idx < data.length; idx++) {

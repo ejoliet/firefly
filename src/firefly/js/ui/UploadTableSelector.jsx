@@ -16,6 +16,7 @@ import {FilterInfo} from 'firefly/tables/FilterInfo';
 import {dispatchTableFilter} from 'firefly/tables/TablesCntlr';
 import {onTableLoaded} from 'firefly/tables/TableUtil';
 
+export const MISSING_COLS_HEADER_MSG = 'Unspecified Column(s)';
 const TAB_COLUMNS_DEFAULT_MSG='These are the recommended columns to use for a spatial search on this table; changing them could cause the query to fail.';
 const TAB_COLUMNS_USER_MSG = 'User-specified coordinate columns may or may not work depending on the configuration of the database being queried.';
 const TAB_COLUMNS_EMPTY_MSG = 'Unable to identify coordinate columns for spatial searches; spatial searches are disabled. It is possible to designate coordinate ' +
@@ -222,11 +223,11 @@ UploadTableSelector.propTypes = {
 export function ColumnMappingPanel({cols, columnFieldValues, columnFields, panelKey,
                                        headerTitle='Mapped Columns:', getHeaderColumnMapping, headerPostTitle = '',
                                        openPreMessage='', sx, slotProps, children}) {
-    const defaultColumnMapping = (colValues) => colValues?.every((val) => !val)
-        ? 'unset'
+    const defaultColumnMapping = (colValues) => colValues?.some((val) => !val)
+        ? <Typography color='warning'>{MISSING_COLS_HEADER_MSG}</Typography>
         : colValues.length===2 && colValues[0]===colValues[1]
             ? colValues[0]
-            : colValues?.map((val) => val || 'unset').join(', ');
+            : colValues.join(', ');
 
     const panelHeader= (
         <Stack {...{direction:'row', alignItems:'baseline', spacing:1}}>
@@ -296,7 +297,6 @@ export const MappedColumnFld = ({cols, fieldKey, name, ...props}) => (
                // use following defaults if not present in props
                label={name}
                orientation={'vertical'}
-               validator={getColValidator(cols, true, false)}
                {...props}/>
 );
 
@@ -307,15 +307,30 @@ export const MappedColumnFld = ({cols, fieldKey, name, ...props}) => (
  * @param cols {Columns} - all column options for the ColumnFld
  * @param colTblId {string} - id of the column selection table that appears in a popup when the search button is clicked on a ColumnFld
  * @param ucd {string} - UCD to filter by
+ * @param operator {string} filter type (like, in, etc.)
  */
-export function filterMappedColFldTbl(cols, colTblId, ucd) {
+export function filterMappedColFldTbl(cols, colTblId, ucd, operator = 'like') {
     onTableLoaded(colTblId).then((tbl) => {
-        const colsWithUcd = cols.filter((col) => { if (col.ucd) {return col.ucd.includes(ucd);} });
+        const ucdList = ucd.split(',').map((s) => s.trim()).filter(Boolean);
+        const colsWithUcd = cols.filter((col) =>
+            col.ucd && ucdList.some((u) => col.ucd.includes(u))
+        );
         if (colsWithUcd.length > 1) {
             if (!tbl) return;
             const filterInfo = tbl?.request?.filters;
             const filterInfoCls = FilterInfo.parse(filterInfo);
-            const ucdFilter = `like '%${ucd}%'`;
+            let ucdFilter;
+            if (operator === 'like') {
+                //build LIKE expression: like '%ucd1%' OR like '%ucd2%' ...
+                ucdFilter = ucdList.map((ucd) => `like '%${ucd}%'`).join(' OR ');
+            } else if (operator === 'in') {
+                //build IN expression: in ('ucd1','ucd2','ucd3')
+                const quoted = ucdList.map((ucd) => `'${ucd}'`).join(', ');
+                ucdFilter = `in (${quoted})`;
+            } else {
+                console.warn(`Unsupported filter type: ${operator}`);
+                return;
+            }
             filterInfoCls.setFilter('UCD', ucdFilter);
             const newRequest = {tbl_id: tbl.tbl_id, filters: filterInfoCls.serialize()};
             dispatchTableFilter(newRequest);
@@ -371,11 +386,13 @@ export function UploadTableSelectorPosCol(props) {
 
 export function CenterColumns({lonCol,latCol, sx, cols, lonKey, latKey, openKey,
                                   doQuoteNonAlphanumeric, headerTitle='Position Columns:',
-                                  headerPostTitle = '', posDefaultOpenMsg='', setPosDefaultOpenMsg, slotProps}) {
+                                  headerPostTitle = '', posDefaultOpenMsg='', setPosDefaultOpenMsg, tableName, slotProps}) {
     const columnFields = positionColumnFields(
-        {fieldKey: lonKey, doQuoteNonAlphanumeric},
-        {fieldKey: latKey, doQuoteNonAlphanumeric}
-    );
+        {fieldKey: lonKey, doQuoteNonAlphanumeric, colTblId: 'posCol'+tableName, onSearchBtnClicked: () =>
+                filterMappedColFldTbl(cols, 'posCol'+tableName, 'pos.eq.ra, pos.eq.ra;meta.main, pos.galactic.lon, pos.galactic.lon;meta.main, pos.ecliptic.lon, pos.ecliptic.lon;meta.main, pos.eq;meta.main,', 'in')},
+        {fieldKey: latKey, doQuoteNonAlphanumeric, colTblId: 'posCol'+tableName, onSearchBtnClicked: () =>
+                filterMappedColFldTbl(cols, 'posCol'+tableName, 'pos.eq.dec, pos.eq.dec;meta.main, pos.galactic.lat, pos.galactic.lat;meta.main, pos.ecliptic.lat, pos.ecliptic.lat;meta.main, pos.eq;meta.main', 'in')}
+    ); //colTblId: posCol+tableName is to give the col select popups for each table a unique tblId, otherwise it may lead to bugs with different tables sharing the same tblId
 
     const customSlotProps = defaultsDeep({openPreMessage: {level: 'body-sm'}}, slotProps, selectorPosColSlotProps.columnMappingPanel.slotProps);
 

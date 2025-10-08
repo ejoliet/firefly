@@ -13,15 +13,14 @@ import edu.caltech.ipac.firefly.messaging.JsonHelper;
 import edu.caltech.ipac.firefly.server.events.FluxAction;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
 import edu.caltech.ipac.firefly.server.security.SsoAdapter;
+import edu.caltech.ipac.firefly.server.util.LockingRetrieve;
 import edu.caltech.ipac.firefly.server.util.Logger;
-import edu.caltech.ipac.firefly.server.visualize.imageretrieve.URLFileRetriever;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.FileUtil;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
-import redis.clients.jedis.Jedis;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,6 +40,7 @@ public class AppServerCommands {
 
         public String doCommand(SrvParam params) throws Exception {
             String spaName = params.getRequired(SPA_NAME);
+            ServerContext.getRequestOwner().extendUserKeyExpiry();
 
             // check for alerts
             AlertsMonitor.checkAlerts(true);
@@ -57,8 +57,8 @@ public class AppServerCommands {
             action.setValue(bgInfo.notifEnabled(), "notifEnabled");
             ServerEventManager.fireAction(action, ServerEvent.Scope.SELF);
 
-            // check for redis connection
-            if (RedisService.getFailSince() != null)  RedisService.updateConnectionStatus(true);
+            // send redis connection status
+            RedisService.sendConnectionStatus();
 
             return "true";
         }
@@ -71,7 +71,7 @@ public class AppServerCommands {
             JSONObject obj= new JSONObject();
             JSONArray retAry= new JSONArray();
             retAry.add(obj);
-            var fileInfo= new URLFileRetriever().getFile(sp.getRequired(ServerParams.URL));
+            var fileInfo= LockingRetrieve.downloadWithCacheMsg(sp.getRequired(ServerParams.URL));
             if (fileInfo.getResponseCode() != 200) {
                 obj.put("success", false);
                 obj.put("error", "Error retrieving file, status: "+fileInfo.getResponseCode());
@@ -171,8 +171,8 @@ public class AppServerCommands {
 
             String backToUrl = params.getRequired(ServerParams.BACK_TO_URL);
 
-            SsoAdapter ssoAdapter = ServerContext.getRequestOwner().getSsoAdapter();
             UserInfo info = requestOwner.getUserInfo();
+            LOG.debug("GetUserInfo: " + info);
 
             JSONObject data = new JSONObject();
             data.put(UserInfo.GUEST, info.isGuestUser());
@@ -181,9 +181,12 @@ public class AppServerCommands {
                 data.put(UserInfo.FIRSTNAME, info.getFirstName());
                 data.put("loginName", info.getLoginName());
             }
-            data.put("login_url", ssoAdapter.getLoginUrl(backToUrl));
-            data.put("logout_url", ssoAdapter.getLogoutUrl(backToUrl));
-            data.put("profile_url", ssoAdapter.getProfileUrl(backToUrl));
+            SsoAdapter ssoAdapter = requestOwner.getSsoAdapter();
+            if (ssoAdapter != null) {
+                data.put("login_url", ssoAdapter.getLoginUrl(backToUrl));
+                data.put("logout_url", ssoAdapter.getLogoutUrl(backToUrl));
+                data.put("profile_url", ssoAdapter.getProfileUrl(backToUrl));
+            }
             JSONObject map = new JSONObject();
             map.put( "success", true);
             map.put("data", data);

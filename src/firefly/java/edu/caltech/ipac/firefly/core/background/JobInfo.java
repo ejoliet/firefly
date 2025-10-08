@@ -21,8 +21,9 @@ import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 
 
 /**
- * Value object containing information of a Job
- *
+ * Represents a Job value object persisted in Redis as JSON string.
+ * Modifying this data structure may require additional logic in the JobManager
+ * to migrate previously persisted data.
  * Date: 9/29/21
  *
  * @author loi
@@ -207,7 +208,7 @@ public class JobInfo implements Serializable {
         this.ownerId = uws.ownerId;
         this.phase = uws.phase;
         this.quote = uws.quote;
-        this.creationTime = uws.creationTime;
+        ifNotNull(uws.creationTime).apply(t -> this.creationTime = t);      // job should have a creation time.  don't overwrite if null.
         this.startTime = uws.startTime;
         this.endTime = uws.endTime;
         this.executionDuration = uws.executionDuration;

@@ -104,9 +104,14 @@ public class URLDownload {
         return null;
     }
 
-    public static String getSugestedFileName(URLConnection conn) {
+    public static String getSuggestedFileName(URLConnection conn) {
         if (conn == null) return null;
         String disposition = conn.getHeaderField("Content-disposition");
+        if (disposition == null) return null;
+        return getSuggestedFileName(disposition);
+    }
+
+    public static String getSuggestedFileName(String disposition) {
         if (disposition == null) return null;
         String[] strs = disposition.split(";");
         if (strs.length != 2) return null;
@@ -249,7 +254,7 @@ public class URLDownload {
             netCopy(makeAnyInStream(conn, false), out, conn, 0, null);
             byte[] results = out.toByteArray();
             logCompletedDownload(conn.getURL(), results.length);
-            return new HttpResultInfo(results,getResponseCode(conn),conn.getContentType(),getSugestedFileName(conn));
+            return new HttpResultInfo(results,getResponseCode(conn),conn.getContentType(), getSuggestedFileName(conn));
         } catch (SSLException e) {
             return new HttpResultInfo(null,495,null,null);
         } catch (IOException e) {
@@ -272,7 +277,7 @@ public class URLDownload {
             ((HttpURLConnection)conn).setRequestMethod("HEAD");
             logHeader(url.toString(), null, conn, conn.getRequestProperties());
             Set<Map.Entry<String,List<String>>> hSet = getResponseCode(conn)==-1 ? null : conn.getHeaderFields().entrySet();
-            HttpResultInfo result= new HttpResultInfo(null,getResponseCode(conn),conn.getContentType(),getSugestedFileName(conn));
+            HttpResultInfo result= new HttpResultInfo(null,getResponseCode(conn),conn.getContentType(), getSuggestedFileName(conn));
 
             if (hSet!=null) {
                 for (Map.Entry<String, List<String>> e : hSet) {
@@ -360,7 +365,7 @@ public class URLDownload {
             Map<String, String> h= new HashMap<>();
             if (requestHeaders!=null) h.putAll(requestHeaders);
             if (ops.useCredentials) {
-                var inputs= HttpServiceInput.createWithCredential(url.toString());
+                var inputs= new HttpServiceInput(url.toString());
                 var credentials= inputs.getHeaders();
                 if (credentials!=null && credentials.size()>0) {
                     if (!credentials.keySet().stream().allMatch(h::containsKey)) h.putAll(credentials);
@@ -425,14 +430,14 @@ public class URLDownload {
             netCopy(makeAnyInStream(conn, ops.uncompress), makeOutStream(outfile), conn, ops.maxFileSize, ops.dl);
             long elapse = System.currentTimeMillis() - start;
             int responseCode = getResponseCode(conn);
-            outFileData = new FileInfo(outfile, getSugestedFileName(conn), responseCode,
+            outFileData = new FileInfo(outfile, getSuggestedFileName(conn), responseCode,
                     ResponseMessage.getHttpResponseMessage(responseCode), conn.getContentType());
             if (conn.getContentEncoding() != null)
                 outFileData.putAttribute("content-encoding", conn.getContentEncoding());
             logDownload(outFileData, conn.getURL().toString(), elapse);
 
             if (responseCode >= 300 && responseCode < 400) {
-                if (redirectCnt > 0 && (responseCode == 301 || responseCode == 302 || responseCode == 303)) {
+                if (redirectCnt > 0 && Arrays.asList(301,302,303,307,308).contains(responseCode)) {
                     return redirect(conn, outfile, reqProp, ops, redirectCnt - 1);
                 }
                 outFileData.putAttribute("Location", conn.getHeaderField("Location"));
@@ -529,7 +534,7 @@ public class URLDownload {
                 if (getResponseCode(urlConn) == HttpURLConnection.HTTP_NOT_MODIFIED) {
                     String urlStr= urlConn.getURL().toString();
                     _log.info(outfile.getName() + ": Not downloading, already have current version, from "+urlStr);
-                    retval = new FileInfo(outfile, getSugestedFileName(urlConn), HttpURLConnection.HTTP_NOT_MODIFIED,
+                    retval = new FileInfo(outfile, getSuggestedFileName(urlConn), HttpURLConnection.HTTP_NOT_MODIFIED,
                                      ResponseMessage.getHttpResponseMessage(HttpURLConnection.HTTP_NOT_MODIFIED));
                     retval.putAttribute(FileInfo.FILE_DOWNLOADED,false+"");
                 }
@@ -541,14 +546,13 @@ public class URLDownload {
         return retval;
     }
 
-
     public static void netCopy(DataInputStream in,
                                OutputStream out,
-                               URLConnection conn,
+                               long contentLength,
                                long maxSize,
                                DownloadListener dl) throws FailedRequestException, IOException {
         try {
-            Downloader downloader = new Downloader(in, out, conn.getContentLength());
+            Downloader downloader = new Downloader(in, out, contentLength);
             downloader.setMaxDownloadSize(maxSize);
             downloader.setDownloadListener(dl);
             downloader.download();
@@ -556,6 +560,17 @@ public class URLDownload {
             FileUtil.silentClose(in);
             FileUtil.silentClose(out);
         }
+
+    }
+
+
+
+    public static void netCopy(DataInputStream in,
+                               OutputStream out,
+                               URLConnection conn,
+                               long maxSize,
+                               DownloadListener dl) throws FailedRequestException, IOException {
+        netCopy(in,out,conn.getContentLength(),maxSize,dl);
     }
 
 
@@ -758,11 +773,10 @@ public class URLDownload {
         /**
          * convenience function
          * set no size limit,
-         * sets true: onlyIfModified, uncompress, use credentials
-         * set false: allowRedirect
+         * sets true: onlyIfModified, uncompress, use credentials, allowRedirect
          * @return Options
          */
-        public static Options def() {return new Options(true,true,0,false,true,0,null);}
+        public static Options def() {return new Options(true,true,0,true,true,0,null);}
 
         /**
          * convenience function

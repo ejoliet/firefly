@@ -5,6 +5,7 @@
 package edu.caltech.ipac.firefly.core.background;
 
 import edu.caltech.ipac.firefly.api.Async;
+import edu.caltech.ipac.firefly.core.RedisService;
 import edu.caltech.ipac.firefly.core.Util.Try;
 import edu.caltech.ipac.firefly.data.ServerEvent;
 import edu.caltech.ipac.firefly.data.userdata.UserInfo;
@@ -25,6 +26,7 @@ import edu.caltech.ipac.util.cache.StringKey;
 import org.apache.commons.lang.text.StrBuilder;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import redis.clients.jedis.Jedis;
 import redis.clients.jedis.params.ScanParams;
 
 import javax.annotation.Nonnull;
@@ -35,8 +37,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -44,9 +48,11 @@ import java.util.stream.Stream;
 
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotEmpty;
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
+import static edu.caltech.ipac.firefly.core.background.Job.Type.UWS;
 import static edu.caltech.ipac.firefly.core.background.JobInfo.*;
 import static edu.caltech.ipac.firefly.core.background.JobUtil.*;
 import static edu.caltech.ipac.firefly.data.ServerParams.EMAIL;
+import static edu.caltech.ipac.firefly.server.query.UwsJobProcessor.getUwsJobInfo;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 import static edu.caltech.ipac.firefly.core.background.Job.Type.PACKAGE;
 import static edu.caltech.ipac.firefly.core.background.JobInfo.Phase.*;
@@ -68,6 +74,7 @@ public class JobManager {
     private static final int WAIT_COMPLETE = AppProperties.getIntProperty("job.wait.complete", 1);              // wait for complete after submit in seconds
     private static final int MAX_PACKAGERS = AppProperties.getIntProperty("job.max.packagers", 10);             // maximum number of simultaneous packaging threads
     private static final int JOB_EXPIRY_HOURS = AppProperties.getIntProperty("job.expiry.hours", 24*14);        // Time in hours to keep a job after it has ended.  Default to 14 days.
+    private static final int JOB_ARCHIVED_EXPIRY_HOURS = AppProperties.getIntProperty("job.archived.expiry.hours", 24*14);   // Time in hours to keep an archived job after it has ended.  Default to 14 days.
     public static final int JOB_SCAN_BATCH_SIZE = AppProperties.getIntProperty("job.scan.batch_size", 10_000);   // batch size for scanning job keys in Redis.  Default to 10,000.  Larger value return more keys per call but use more CPU and memory per iteration.  this is a good size for larger redis store.
 
     private static final Logger.LoggerImpl LOG = Logger.getLogger();
@@ -79,7 +86,7 @@ public class JobManager {
     private static final CacheKey JOB_CACHE_VERSION_KEY = new StringKey("job.all.cache.version");
     private static final String JOB_CACHE_VERSION = "1.0";
 
-    static {
+    public static void init() {
         if (!isEmpty(COMPLETED_HANDLER)) {
             Class<?> clz = Try.it(() -> Class.forName(COMPLETED_HANDLER)).get();
             if (clz != null && JobCompletedHandler.class.isAssignableFrom(clz)) {
@@ -92,16 +99,25 @@ public class JobManager {
 
         Messenger.subscribe(JobEvent.TOPIC, new JobEventHandler());
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
-                    JobManager::checkJobs, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_INTERVAL, TimeUnit.SECONDS);   // check every 30 seconds
+                JobManager::checkJobs, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_INTERVAL, TimeUnit.SECONDS);   // check every 30 seconds
 
-
-        String jobCacheVersion = (String) CacheManager.getDistributed().get(JOB_CACHE_VERSION_KEY);
-        if (isEmpty(jobCacheVersion) || !jobCacheVersion.equals(JOB_CACHE_VERSION)) {
-            LOG.info("Migrating job cache keys to new format");
-            int count = migrateRedisKeys();
-            LOG.info("Migrated " + count + " job cache keys to new format");
-            CacheManager.getDistributed().put(JOB_CACHE_VERSION_KEY, JOB_CACHE_VERSION); // set the version
-        }
+        ScheduledExecutorService migrator = Executors.newSingleThreadScheduledExecutor();
+        migrator.scheduleWithFixedDelay(() -> {
+            try (Jedis jedis = RedisService.getConnection()) {
+                // run migration only when there's connection to Redis
+                LOG.info("Ensure job history is up to date");
+                String jobCacheVersion = (String) CacheManager.getDistributed().get(JOB_CACHE_VERSION_KEY);
+                if (isEmpty(jobCacheVersion) || !jobCacheVersion.equals(JOB_CACHE_VERSION)) {
+                    LOG.info("Migrating job history keys to new format");
+                    int count = migrateRedisKeys();
+                    LOG.info("Migrated "+ count + " job keys to new format");
+                    CacheManager.getDistributed().put(JOB_CACHE_VERSION_KEY, JOB_CACHE_VERSION);
+                }
+                migrator.shutdown(); // stop once successful
+            } catch (Exception e) {
+                LOG.debug("Job history check failed, retrying in 5s");
+            }
+        }, 0, 5, TimeUnit.SECONDS);
     }
 
     /**
@@ -109,9 +125,26 @@ public class JobManager {
      */
     public static List<JobInfo> list() {
         List<JobInfo> userJobs = JobManager.getUserJobs();      // Ensure getUserJobs() is called only once, since it may be expensive. List is updated and returned at the end.
+        Set<String> importedJobIds = new HashSet<>();
         UWS_HISTORY_SVCS.forEach(svc -> {
-            Try.it(() -> importJobHistories(svc, userJobs)).getOrElse(LOG::error);
+            Set<String> ids = Try.it(() -> importJobHistories(svc, userJobs)).getOrElse(LOG::error);
+            if (ids != null) importedJobIds.addAll(ids);
         });
+        // update all userJobs with active status
+        userJobs.forEach(ji -> {
+            if (ji.getMeta().getType() == UWS &&
+                    isActive(ji) &&
+                    !importedJobIds.contains(ji.getMeta().getJobId())) {
+                JobInfo uws = Try.it(() -> getUwsJobInfo(ji.getAux().getJobUrl())).get();
+                if (uws == null) {
+                    LOG.debug("Job no longer exists:" + ji.getAux().getJobUrl());
+                    ji.setError(new JobInfo.Error(404, "Job no longer exists"));
+                } else {
+                    mergeJobInfo(ji, uws, null, null);
+                }
+            }
+        });
+
         return userJobs;
     }
 
@@ -153,7 +186,7 @@ public class JobManager {
 
     public static JobInfo abort(String jobId, String reason) {
         JobInfo info = updateJobInfo(jobId, (ji) -> {
-            ji.setError(new JobInfo.Error(410, reason));
+            if (reason != null) ji.setError(new JobInfo.Error(500, reason));
             ji.setPhase(ABORTED);
         });
         if (info != null) {
@@ -164,7 +197,7 @@ public class JobManager {
 
     public static void removeJob(String jobId) {
         ifNotNull(getJobInfo(jobId)).apply(ji -> {
-            allJobInfos.remove(cacheKey(ji));
+            ji.setPhase(ARCHIVED);
             removeLocalJob(ji);
         });
     }
@@ -465,9 +498,8 @@ public class JobManager {
                 JobEvent.EventType type = Try.it(() -> JobEvent.EventType.valueOf(msg.getValue(null, JobEvent.TYPE))).get();
                 if (type == JobEvent.EventType.ABORTED) {
                     removeLocalJob(jobInfo);
-                } else {
-                    updateClient(jobInfo);        // update jobInfo to client
                 }
+                updateClient(jobInfo);        // update jobInfo to client
             });
         }
     }
@@ -542,6 +574,11 @@ public class JobManager {
             if (!job.getMeta().isMonitored() && job.getEndTime().plus(1, ChronoUnit.HOURS).isBefore(Instant.now())) {
                 LOG.info("Removing non-monitored job: " + k);
                 allJobInfos.remove(k);      // remove non-monitored job after 1 hour
+            } else if (job.getPhase() == ARCHIVED) {
+                if (job.getEndTime().plus(JOB_ARCHIVED_EXPIRY_HOURS, ChronoUnit.HOURS).isBefore(Instant.now())) {
+                    LOG.info("Removing expired archived job: " + k);
+                    allJobInfos.remove(k);
+                }
             } else if (!CLEANUP_PHASES_EXCLUDES.contains(job.getPhase()) && job.getEndTime().plus(JOB_EXPIRY_HOURS, ChronoUnit.HOURS).isBefore(Instant.now())) {
                 LOG.info("Removing expired job: " + k);
                 allJobInfos.remove(k);

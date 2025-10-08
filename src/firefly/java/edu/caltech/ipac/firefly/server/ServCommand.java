@@ -1,13 +1,14 @@
 package edu.caltech.ipac.firefly.server;
 
 import edu.caltech.ipac.firefly.core.EndUserException;
+import edu.caltech.ipac.firefly.core.RedisService;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import edu.caltech.ipac.firefly.server.util.Logger;
-import javax.servlet.ServletOutputStream;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * Date: 10/24/16
@@ -22,6 +23,7 @@ public abstract class ServCommand extends ServerCommandAccess.HttpCommand {
     public void processRequest(HttpServletRequest req, HttpServletResponse res, SrvParam sp) throws Exception {
         JSONObject json=new JSONObject();
         String jsonData;
+        RedisService.sendConnectionStatusIfFailed();
         try {
             String result = doCommand(new SrvParam(sp.getParamMap()));
 

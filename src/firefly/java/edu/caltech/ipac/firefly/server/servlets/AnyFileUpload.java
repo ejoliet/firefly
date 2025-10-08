@@ -10,9 +10,9 @@ import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.server.Counters;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.SrvParam;
+import edu.caltech.ipac.firefly.server.util.LockingRetrieve;
 import edu.caltech.ipac.firefly.server.util.StopWatch;
 import edu.caltech.ipac.firefly.server.util.multipart.UploadFileInfo;
-import edu.caltech.ipac.firefly.server.visualize.LockingVisNetwork;
 import edu.caltech.ipac.firefly.server.visualize.PlotServUtils;
 import edu.caltech.ipac.firefly.server.visualize.ProgressStat;
 import edu.caltech.ipac.firefly.server.visualize.imageretrieve.FileRetriever;
@@ -25,22 +25,25 @@ import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.util.cache.CacheManager;
 import edu.caltech.ipac.util.cache.StringKey;
 import edu.caltech.ipac.util.download.FailedRequestException;
-import org.apache.commons.fileupload.FileItemIterator;
-import org.apache.commons.fileupload.FileItemStream;
-import org.apache.commons.fileupload.disk.DiskFileItemFactory;
-import org.apache.commons.fileupload.servlet.ServletFileUpload;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import org.apache.commons.fileupload2.core.DiskFileItemFactory;
+import org.apache.commons.fileupload2.core.FileItemInput;
+import org.apache.commons.fileupload2.core.FileItemInputIterator;
+import org.apache.commons.fileupload2.jakarta.JakartaServletDiskFileUpload;
+import org.apache.commons.fileupload2.jakarta.JakartaServletFileUpload;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
 import java.io.File;
 import java.io.IOException;
-import java.net.URL;
 import java.util.Arrays;
 import java.util.List;
 
+import static edu.caltech.ipac.firefly.server.util.QueryUtil.getSessUploadDir;
+
 /**
  * Date: Feb 16, 2011
- *
  *  Possible Parameters:
  *  wcCmd
  *  URL - url string
@@ -50,7 +53,7 @@ import java.util.List;
  *  filename - string
  *  cacheKey
  *  fileAnalysis - one of "Brief", "Normal", "Details", "false"
- *  analyzerId - id string of pass to file analysis, ignored f fileAnalysis is not specified
+ *  analyzerId - id string of pass to file analysis, ignored if fileAnalysis is not specified
  *  >> posted file
  *
  * @author loi
@@ -63,20 +66,20 @@ public class AnyFileUpload extends BaseHttpServlet {
     private static final String WORKSPACE_PUT = "workspacePut";
     private static final String WS_CMD = "wsCmd";
     public  static final String ANALYZER_ID = "analyzerId";
+    public  static final String NAME = "name";
     /** use the hips cache hierarchy */
     public  static final String HIPS_CACHE = "hipsCache";
     /** load from a URL */
     private static final String URL = "URL";
     /** load from a WebPlotRequest */
     private static final String WEB_PLOT_REQUEST = "webPlotRequest";
+    private static final String FILE_ON_SERVER = "fileOnServer";
     /** run file analysis and return an analysis json object */
     private static final String FILE_ANALYSIS= "fileAnalysis";
 
     private static final List<String> allParams= Arrays.asList(
             FILE_NAME, CACHE_KEY, WORKSPACE_PUT, WS_CMD, ANALYZER_ID,HIPS_CACHE,
             WEB_PLOT_REQUEST, FILE_ANALYSIS, ServerParams.COMMAND);
-
-
 
     protected void processRequest(HttpServletRequest req, HttpServletResponse res) throws Exception {
         doFileUpload(req, res);
@@ -86,37 +89,41 @@ public class AnyFileUpload extends BaseHttpServlet {
 
         StopWatch.getInstance().start("doFileUpload");
 
-        FileItemStream uploadedItem = null;
+        FileItemInput uploadedItem = null;
 
         // processes the parameters...
         SrvParam sp = new SrvParam(req.getParameterMap());
 
-        if (ServletFileUpload.isMultipartContent(req)) {        // this is a multipart request.. extract params from parts
-            ServletFileUpload upload = new ServletFileUpload( new DiskFileItemFactory(64 * 1024, ServerContext.getUploadDir()));        // set factory to raise in-memory usage
-            for (FileItemIterator iter = upload.getItemIterator(req); iter.hasNext(); ) {
-                FileItemStream item = iter.next();
+        if (JakartaServletFileUpload.isMultipartContent(req)) {  // this is a multipart request... extract params from parts
+
+            DiskFileItemFactory factory = DiskFileItemFactory.builder()
+                    .setBufferSize(1024 * 1024).get();               // 1MB threshold before writing to disk
+
+            JakartaServletDiskFileUpload upload = new JakartaServletDiskFileUpload(factory);
+
+            FileItemInputIterator iter = upload.getItemIterator(req);
+            while (iter.hasNext()) {
+                FileItemInput item = iter.next();
                 if (item.isFormField()) {
-                    sp.setParam(item.getFieldName(), FileUtil.readFile(item.openStream()));
+                    sp.setParam(item.getFieldName(), FileUtil.readFile(item.getInputStream()));
                 } else {
                     uploadedItem = item;
-                    break;
-                    // file should be the last param.  param after file will be ignored.
+                    break;  // file should be the last param
                 }
-            }
-        }
+            }        }
 
-        // handle upload file request.. results in saved as an UploadFileInfo
+        // handle upload file request... results in saved as an UploadFileInfo
         String analysisType = sp.getOptional(FILE_ANALYSIS);
         boolean analyzeFile= analysisType != null && !analysisType.equalsIgnoreCase("false");
 
         try {
-            Result result= retrieveFile(sp,uploadedItem);
+            Result result= retrieveFile(sp, uploadedItem);
             UploadFileInfo uploadFileInfo = result.uploadFileInfo;
             FileInfo statusFileInfo= result.statusFileInfo;
             int responseCode= statusFileInfo.getResponseCode();
 
-            if (responseCode>=400) {
-                res.sendError(statusFileInfo.getResponseCode(), statusFileInfo.getResponseCodeMsg());
+            if (responseCode>=400 || responseCode<200) {
+                res.sendError(responseCode, statusFileInfo.getResponseCodeMsg());
                 return;
             }
 
@@ -124,7 +131,7 @@ public class AnyFileUpload extends BaseHttpServlet {
                 File f= uploadFileInfo.getFile();
                 String name= f.getName()+".gz";
                 File gzFile= new File(f.getParentFile(),name);
-                f.renameTo(gzFile);
+                var ignore= f.renameTo(gzFile);
                 FileUtil.gUnzipFile(gzFile,f,10240);
             }
 
@@ -144,7 +151,6 @@ public class AnyFileUpload extends BaseHttpServlet {
 
             // returns the fileCacheKey or full analysis json
             String returnVal= analyzeFile ? callAnalysis(sp,statusFileInfo,uploadFileInfo,fileCacheKey) : fileCacheKey;
-            if (responseCode>=400) throw new Exception(codeFailMsg(responseCode));
 
             sendReturnMsg(res, 200, null, returnVal);
             Counters.getInstance().increment(Counters.Category.Upload, uploadFileInfo.getContentType());
@@ -171,11 +177,11 @@ public class AnyFileUpload extends BaseHttpServlet {
         return (file!=null && responseCode!=200 && responseCode!=304);
     }
 
-
     private static UploadFileInfo makeUploadFileInfo(FileInfo statusFileInfo, String fname) {
         File file= statusFileInfo.getFile();
-        return new UploadFileInfo(ServerContext.replaceWithPrefix(file), file, fname!=null ? fname : file.getName(),
-                statusFileInfo.getContentType());
+        return new UploadFileInfo(ServerContext.replaceWithPrefix(file), file,
+                fname!=null ? fname : file.getName(),
+                statusFileInfo.getContentType(), statusFileInfo.getResponseCode());
     }
 
     private static void updateFeedback(String statusKey, long totalRead) {
@@ -190,7 +196,6 @@ public class AnyFileUpload extends BaseHttpServlet {
         } catch (Exception e) {
             return FileAnalysisReport.ReportType.Details;
         }
-
     }
 
     private static UploadFileInfo getFileFromWorkspace(SrvParam sp) throws IOException, FailedRequestException {
@@ -200,7 +205,6 @@ public class AnyFileUpload extends BaseHttpServlet {
         String fileName = params1.getRelPath().substring((params1.getRelPath().lastIndexOf("/") + 1));
         return new UploadFileInfo(rPathInfo, uf, fileName, null);
     }
-
 
     private static String callAnalysis(SrvParam sp, FileInfo statusFileInfo,
                                        UploadFileInfo uploadFileInfo, String fileCacheKey) throws Exception {
@@ -219,22 +223,22 @@ public class AnyFileUpload extends BaseHttpServlet {
         return returnVal;
     }
 
+    private static Result retrieveFile(SrvParam sp, FileItemInput uploadedItem) throws Exception {
 
-    private static Result retrieveFile(SrvParam sp, FileItemStream uploadedItem) throws Exception {
-        
         String wsCmd = sp.getOptional(WS_CMD);
         String fromUrl = sp.getOptional(URL);
         WebPlotRequest fromWPR= sp.getOptionalWebPlotRequest(WEB_PLOT_REQUEST);
+        String fileOnServer= sp.getOptional(FILE_ON_SERVER);
         boolean hipsCache = sp.getOptionalBoolean(HIPS_CACHE,false);
 
         UploadFileInfo uploadFileInfo;
         FileInfo statusFileInfo;
 
         if (wsCmd != null) {
-            // from workspace.. get the file using workspace api
+            // from workspace... get the file using workspace api
             uploadFileInfo = getFileFromWorkspace(sp);
             statusFileInfo= new FileInfo(uploadFileInfo.getFile());
-        } else if (fromUrl != null) { // from a URL.. get it
+        } else if (fromUrl != null) { // from a URL... get it
             String fname;
             if (hipsCache) {
                 statusFileInfo= HiPSRetrieve.retrieveHiPSData(fromUrl,null,false);
@@ -244,7 +248,8 @@ public class AnyFileUpload extends BaseHttpServlet {
                 int idx = fromUrl.lastIndexOf('/');
                 fname = (idx >= 0) ? fromUrl.substring(idx + 1) : fromUrl;
                 fname = fname.contains("?") ? "Upload-"+System.currentTimeMillis() : fname;       // don't save queryString as file name.  this will confuse reader expecting a url, like VoTableReader
-                statusFileInfo = LockingVisNetwork.retrieveURL(new URL(fromUrl));
+                File dir= getSessUploadDir(sp.convertToServerRequest());
+                statusFileInfo = LockingRetrieve.downloadWithCacheMsg(fromUrl, dir);
             }
             if (isUrlFail(statusFileInfo)) throw new Exception(codeFailMsg(statusFileInfo.getResponseCode()));
             uploadFileInfo= makeUploadFileInfo(statusFileInfo,fname);
@@ -254,28 +259,26 @@ public class AnyFileUpload extends BaseHttpServlet {
             if (retrieve==null) throw new Exception("Could not determine how to retrieve file");
             statusFileInfo = retrieve.getFile(fromWPR,false);
             uploadFileInfo= makeUploadFileInfo(statusFileInfo,null);
+        } else if (fileOnServer != null) {
+            File f= ServerContext.convertToFile(fileOnServer);
+            if (!f.canRead()) {
+                return new Result(new FileInfo(404),null);
+            }
+            String name= sp.getOptional(NAME,f.getName());
+            uploadFileInfo= new UploadFileInfo(fileOnServer, f,name,null);
+            statusFileInfo= new FileInfo(uploadFileInfo.getFile());
         } else if (uploadedItem != null) {
-            // it's a stream from multipart.. write it to disk
+            // it's a stream from multipart... write it to disk
             String name = uploadedItem.getName();
-            File tmpFile = File.createTempFile("upload_", "_" + name, ServerContext.getUploadDir());
-            FileUtil.writeToFile(uploadedItem.openStream(), tmpFile, (current) -> updateFeedback(name, current));
+            File tmpFile = File.createTempFile("upload_", "_" + name, getSessUploadDir(sp.convertToServerRequest()));
+            FileUtil.writeToFile(uploadedItem.getInputStream(), tmpFile, (current) -> updateFeedback(name, current));
             uploadFileInfo = new UploadFileInfo(ServerContext.replaceWithPrefix(tmpFile), tmpFile, name, uploadedItem.getContentType());
             statusFileInfo= new FileInfo(uploadFileInfo.getFile());
-        }
-        else {
+        } else {
             throw new IllegalArgumentException("Invalid parameters to AnyFileUpload");
         }
         return new Result(statusFileInfo,uploadFileInfo);
     }
 
-
-    private static class Result {
-        final FileInfo statusFileInfo;
-        final UploadFileInfo uploadFileInfo;
-
-        public Result(FileInfo statusFileInfo, UploadFileInfo uploadFileInfo) {
-            this.statusFileInfo = statusFileInfo;
-            this.uploadFileInfo = uploadFileInfo;
-        }
-    }
+    private record Result(FileInfo statusFileInfo, UploadFileInfo uploadFileInfo) { }
 }

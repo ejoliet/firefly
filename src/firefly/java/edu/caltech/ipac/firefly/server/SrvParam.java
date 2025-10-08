@@ -9,6 +9,7 @@ package edu.caltech.ipac.firefly.server;
 
 import edu.caltech.ipac.firefly.data.DownloadRequest;
 import edu.caltech.ipac.firefly.data.ServerParams;
+import edu.caltech.ipac.firefly.data.ServerRequest;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.messaging.JsonHelper;
 import edu.caltech.ipac.firefly.server.util.QueryUtil;
@@ -36,6 +37,7 @@ import static edu.caltech.ipac.firefly.data.TableServerRequest.FF_SESSION_ID;
  */
 
 public class SrvParam {
+    public static final String PARAM_DELIM= ":::";          // avoid chars used in params like SQL, regex pattern, etc
 
     private final Map<String, String[]> paramMap;
 
@@ -43,7 +45,7 @@ public class SrvParam {
 
     public Map<String, String> flatten() {
         HashMap<String, String> p = new HashMap<>();
-        paramMap.forEach((k, v) -> p.put(k, String.join(",", v)));
+        paramMap.forEach((k, v) -> p.put(k, String.join(PARAM_DELIM, v)));
         return p;
     }
 
@@ -380,6 +382,18 @@ public class SrvParam {
 //====================================================================
 //  Table related convenience methods
 //====================================================================
+
+    /**
+     * @return a ServerRequest object built from the parameters in this SrvParam object
+     */
+    public ServerRequest convertToServerRequest() {
+        ServerRequest sr = new ServerRequest();
+        for(Map.Entry<String,String[]> entry : paramMap.entrySet()) {
+            sr.setParam(entry.getKey(), entry.getValue());
+        }
+        return sr;
+    }
+
     public TableServerRequest getTableServerRequest() {
         String reqString = getRequired(ServerParams.REQUEST);
         return QueryUtil.convertToServerRequest(reqString);

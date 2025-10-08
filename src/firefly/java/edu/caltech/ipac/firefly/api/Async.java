@@ -15,9 +15,9 @@ import edu.caltech.ipac.firefly.core.background.Job;
 import edu.caltech.ipac.firefly.core.background.JobInfo;
 import edu.caltech.ipac.firefly.core.background.JobManager;
 
-import javax.servlet.ServletOutputStream;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -156,7 +156,7 @@ public class Async extends BaseHttpServlet {
     private static void updateJobPhase(HttpServletRequest req, HttpServletResponse res, String jobId) throws Exception {
         String phase = req.getParameter("PHASE");
         if (String.valueOf(phase).equals("ABORT")) {
-            JobInfo fi = JobManager.abort(jobId, "Abort by user");
+            JobInfo fi = JobManager.abort(jobId, null);
             sendResponse(JobUtil.toJson(fi), res);
         }
     }

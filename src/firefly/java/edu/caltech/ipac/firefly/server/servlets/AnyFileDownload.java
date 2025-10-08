@@ -15,8 +15,8 @@ import edu.caltech.ipac.util.download.FailedRequestException;
 import edu.caltech.ipac.util.download.URLDownload;
 import edu.caltech.ipac.visualize.net.URLParms;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
@@ -240,7 +240,7 @@ public class AnyFileDownload extends BaseHttpServlet {
         String logStr= "File download -- File: " + f.getPath()+
                 ", size: " +  FileUtil.getSizeAsString(f.length()) +
                 ", bytes: " + f.length();
-        _log.briefInfo(logStr);
+        _log.info(logStr);
         _statsLog.stats("file", "size(MB)", (double)f.length()/StringUtils.MEG,
                                          "u", FileUtil.getSizeAsString(f.length()), "file", f.getPath());
     }

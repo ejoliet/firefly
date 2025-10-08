@@ -5,6 +5,7 @@ package edu.caltech.ipac.firefly.server.query;
 
 import edu.caltech.ipac.firefly.core.background.Job;
 import edu.caltech.ipac.firefly.core.background.JobManager;
+import edu.caltech.ipac.firefly.core.background.JobUtil;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
 import edu.caltech.ipac.firefly.server.network.HttpServices;
@@ -25,6 +26,7 @@ import org.w3c.dom.NodeList;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
@@ -33,12 +35,15 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotEmpty;
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 import static edu.caltech.ipac.firefly.core.background.JobInfo.*;
 import static edu.caltech.ipac.firefly.core.background.JobManager.getJobInfo;
+import static edu.caltech.ipac.firefly.server.SrvParam.PARAM_DELIM;
 import static edu.caltech.ipac.firefly.server.network.HttpServices.*;
 import static edu.caltech.ipac.firefly.server.query.DaliUtil.*;
 import static edu.caltech.ipac.util.StringUtils.*;
+import edu.caltech.ipac.firefly.core.Util.Try;
 
 /**
  * Date: Sept 19, 2018
@@ -79,11 +84,26 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
         // send abort request.  ignore if there's error
         if (isEmpty(jobUrl)) return;
         String phaseUrl = jobUrl.trim().replaceAll("/$", "") + "/phase" ;        // remove trailing slash
-        HttpServices.postData(
-                HttpServiceInput.createWithCredential(phaseUrl)
-                        .setParam("PHASE", "ABORT")
+        Status status = HttpServices.postData(new HttpServiceInput(phaseUrl).setParam("PHASE", "ABORT").setFollowRedirect(false),
+                res -> {
+                    // expecting a 303 redirect to the job URL
+                    // instead, we will query the jobUrl directly to see if it's aborted
+                    JobInfo jobInfo = Try.it(() -> getUwsJobInfo(jobUrl)).get();
+                    if (jobInfo == null || jobInfo.getPhase() != Phase.ABORTED) {
+                        String msg = ifNotNull(jobInfo.getError().msg()).getOrElse("Job cannot be aborted");
+                        return new Status(400, "Failed to abort: %s".formatted(msg) );
+                    }
+                    return Status.ok();         // aborted or no longer active
+                }
         );
-        Logger.getLogger().debug("UWS job aborted: " + jobUrl);
+        if (status.isError()) {
+            logger.warn(status.getErrMsg());
+            sendJobUpdate(ji -> {
+                ji.setError(new JobInfo.Error(status.getStatusCode(), status.getErrMsg()));
+            });
+        } else {
+            logger.info("UWS job aborted: " + jobUrl);
+        }
     }
 
 //====================================================================
@@ -104,8 +124,8 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                 jobUrl = submitJob(req);
                 if (jobUrl != null) runJob(jobUrl);
                 updateJob(ji -> {
-                    ji.setPhase(Phase.PENDING);
-                    ji.getMeta().setProgress(10, "UWS job submitted");
+                    ji.setPhase(Phase.QUEUED);
+                    ji.getMeta().setProgress(0, "UWS job submitted");
                 });
             }
         } catch (Exception e) {
@@ -141,9 +161,9 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                 } else if (phase == Phase.HELD) {
                     updateJob(ji -> ji.setPhase(Phase.HELD));
                     throw new DataAccessException("The job is HELD pending execution and will not automatically be executed");
-                } else if (phase == Phase.SUSPENDED) {
-                    updateJob(ji -> ji.setPhase(Phase.SUSPENDED));
-                    throw new DataAccessException("Job temporarily paused by the system");
+                } else if (phase == Phase.PENDING) {
+                    updateJob(ji -> ji.setPhase(Phase.PENDING));
+                    throw new DataAccessException("The job was submitted, but no execution request has been made.");
                 } else if (phase == Phase.ERROR) {
                     JobInfo.Error error = getError(uwsJob, jobUrl);
                     updateJob(ji -> ji.setError(error));
@@ -201,7 +221,10 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
         if (jobUrl == null) return;
         if (getPhase(jobUrl) == Phase.PENDING) {
             jobUrl = jobUrl.trim().replaceAll("/$", "");        // cleanup URL
-            HttpServices.postData(HttpServiceInput.createWithCredential(jobUrl + "/phase").setParam("PHASE", "RUN"));
+            HttpServices.postData(new HttpServiceInput(jobUrl + "/phase")
+                    .setParam("PHASE", "RUN")
+                    .setFollowRedirect(false)                   // ignore redirect back to job URL.  we have it already.
+            );
         }
     }
 
@@ -267,8 +290,7 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
             File outFile = File.createTempFile("results-", ".vot", workDir);
 
             // Must followRedirect because TAP specifically say this endpoint may be redirected.
-            // Using 'getWithAuth' because it will handle credential when redirected
-            HttpServices.Status status = getWithAuth(url, HttpServices.defaultHandler(outFile));
+            HttpServices.Status status = HttpServices.getData(url, outFile);
             if (status.isError()) {
                 throw createDax("Failed to retrieve the result from", url, status.getException());
             }
@@ -281,16 +303,25 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
     }
 
     public static JobInfo getUwsJobInfo(String jobUrl) throws DataAccessException {
-        if (isEmpty(jobUrl)) return null;
+        if (isEmpty(jobUrl)) throw new DataAccessException("Job URL is missing");
 
         Ref<JobInfo> jInfo = new Ref<>();
-        HttpServices.Status status = getWithAuth(jobUrl, method -> {
+        HttpServices.Status status = HttpServices.getData(jobUrl, method -> {
+            if (!isOk(method)) {
+                String error = parseError(method, jobUrl);
+                return new HttpServices.Status(404, error);
+            }
+            // Some services (e.g., IRSA TAP) may return errors without proper status codes.
+            // Preserve the response body, so it can be parsed for error if needed.
+            byte[] response = null;
             try {
-                Document doc = parse(getResponseBodyAsStream(method));
+                response = method.getResponseBody();
+                Document doc = parse(new ByteArrayInputStream(response));
                 jInfo.set(convertToJobInfo(doc));
                 return HttpServices.Status.ok();
             } catch (Exception e) {
-                return new HttpServices.Status(400, e.getMessage());
+                String error = parseError(response, getResHeader(method, "Content-Type", ""));
+                return new HttpServices.Status(404, error);
             }
         });
         if (status.isError()) throw createDax("Fail to fetch UWS job info", jobUrl, status.getException());
@@ -301,7 +332,7 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
     public static Phase getPhase(String jobUrl) throws DataAccessException {
 
         ByteArrayOutputStream phase = new ByteArrayOutputStream();
-        HttpServices.Status status = HttpServices.getWithAuth(new HttpServiceInput(jobUrl + "/phase"), defaultHandler(phase));
+        HttpServices.Status status = HttpServices.getData(new HttpServiceInput(jobUrl + "/phase"), phase);
         if (status.isError()) {
             throw createDax("Error getting phase", jobUrl, status.getException());
         }
@@ -318,7 +349,7 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
         if (jobError != null) return jobError; // error is a part of the job resource
         else { // error document maybe present at /error endpoint of the job
             String errorUrl = jobUrl + "/error";
-            HttpServices.Status status = HttpServices.getWithAuth(errorUrl, method -> {
+            HttpServices.Status status = HttpServices.getData(errorUrl, method -> {
                 try {
                     return new HttpServices.Status(200, parseError(method, errorUrl));
                 } catch (Exception e) {
@@ -331,13 +362,13 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
 
     public long getTimeout(String jobUrl) {
         ByteArrayOutputStream duration = new ByteArrayOutputStream();
-        HttpServices.postData(HttpServiceInput.createWithCredential(jobUrl + "/executionduration"), duration);
+        HttpServices.postData(new HttpServiceInput(jobUrl + "/executionduration"), duration);
         return Long.parseLong(duration.toString());
     }
 
     public void setTimeout(String jobUrl, long duration) {
         HttpServices.postData(
-                HttpServiceInput.createWithCredential(jobUrl + "/executionduration")
+                new HttpServiceInput(jobUrl + "/executionduration")
                         .setParam("EXECUTIONDURATION",
                                 String.valueOf(duration)), new ByteArrayOutputStream()
         );
@@ -395,7 +426,10 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                 NodeList plist = params.getElementsByTagName(prefix + PARAMETER);
                 for (int i = 0; i < plist.getLength(); i++) {
                     Node p = plist.item(i);
-                    jobInfo.getParams().put(getAttr(p, "id"), p.getTextContent());
+                    String key = getAttr(p, "id");
+                    String val = jobInfo.getParams().get(key);
+                    val = isEmpty(val) ? p.getTextContent() : val + PARAM_DELIM + p.getTextContent();
+                    jobInfo.getParams().put(key, val);
                 }
             });
 

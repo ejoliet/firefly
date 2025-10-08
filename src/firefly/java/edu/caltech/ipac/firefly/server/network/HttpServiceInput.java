@@ -4,8 +4,10 @@
 
 package edu.caltech.ipac.firefly.server.network;
 
+import com.google.common.net.HttpHeaders;
 import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.security.SsoAdapter;
+import edu.caltech.ipac.firefly.server.util.VersionUtil;
 import edu.caltech.ipac.util.KeyVal;
 
 import java.io.File;
@@ -15,10 +17,13 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
+import static edu.caltech.ipac.firefly.server.network.HttpServices.sanitizeHeader;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 
 /**
@@ -38,15 +43,40 @@ public class HttpServiceInput implements Cloneable, Serializable {
 
     public HttpServiceInput() {}
 
+    /**
+     * Constructs an instance with the given request URL.
+     * The request will be created with credentials validated
+     * through the configured {@link SsoAdapter}.
+     * It will also set the default headers.  Remove or modify as needed.
+     * @param requestUrl  the target URL to access
+     */
     public HttpServiceInput(String requestUrl) {
-        this.requestUrl = requestUrl;
+        // set default headers
+        setHeader(HttpHeaders.USER_AGENT, VersionUtil.getUserAgentString());
+        setHeader(HttpHeaders.ACCEPT_ENCODING, "gzip");
+        setRequestUrl(requestUrl);
     }
 
     public String getRequestUrl() {
         return requestUrl;
     }
     public HttpServiceInput setRequestUrl(String requestUrl) {
+        return setRequestUrl(requestUrl, true);
+    }
+    /**
+     * Sets the request URL.  If {@code applyCredential} is {@code true},
+     * the configured {@link SsoAdapter} will be used to set authentication
+     * credentials on this input based on the request URL.
+     * @param requestUrl       the target URL to access
+     * @param applyCredential  if {@code true}, apply credentials from the configured {@code SsoAdapter}
+     * @return this {@code HttpServiceInput} instance for method chaining
+     */
+    public HttpServiceInput setRequestUrl(String requestUrl, boolean applyCredential) {
         this.requestUrl = requestUrl;
+        if (applyCredential) {
+            ifNotNull(ServerContext.getRequestOwner().getSsoAdapter())
+                    .apply(a -> a.setAuthCredential(this));
+        }
         return this;
     }
 
@@ -132,6 +162,22 @@ public class HttpServiceInput implements Cloneable, Serializable {
         return this;
     }
 
+    /**
+     * Returns the request headers including cookies (if any).
+     * Note that the returned map is a {@link Hashtable} to accommodate
+     * libraries that require it, such as Apache Axis.
+     * @return a map of request headers
+     */
+    public Map<String, String> getRequestHeaders() {
+        Map<String, String> hdrs = headers == null ? new Hashtable<>() : new Hashtable<>(headers);
+        String cookieStr = getCookieString();
+        if (!isEmpty(cookieStr)) {
+            hdrs.put(HttpHeaders.COOKIE, cookieStr);
+        }
+        return hdrs;
+    }
+
+
     public Map<String, String> getCookies() {
         return cookies;
     }
@@ -140,6 +186,10 @@ public class HttpServiceInput implements Cloneable, Serializable {
         if (cookies == null) cookies = new HashMap<>();
         cookies.put(key, value);
         return this;
+    }
+    public String getCookieString() {
+        if (cookies == null || cookies.isEmpty()) return null;
+        return cookies.entrySet().stream().map(e -> e.getKey() + "=" + e.getValue()).collect(Collectors.joining("; "));
     }
 
     public Map<String, File> getFiles() {
@@ -170,7 +220,7 @@ public class HttpServiceInput implements Cloneable, Serializable {
             sb.append("\n\tparams: ").append(params.toString());
         }
         if (headers != null) {
-            sb.append("\n\theaders: ").append(headers.toString());
+            sb.append("\n\theaders: {").append(headers.entrySet().stream().map(e -> "%s=%s".formatted(e.getKey(), sanitizeHeader(e.getKey(), e.getValue()))).collect(Collectors.joining())).append("}");
         }
         if (cookies != null) {
             sb.append("\n\tcookies: ").append(cookies.toString());
@@ -203,35 +253,9 @@ public class HttpServiceInput implements Cloneable, Serializable {
         }
     }
 
-    /**
-     * @return this HttpServiceInput with necessary credentials added
-     */
-    public HttpServiceInput applyCredential() {
-        SsoAdapter ssoAdapter = ServerContext.getRequestOwner().getSsoAdapter();
-        if (ssoAdapter != null) {
-            ssoAdapter.setAuthCredential(this);
-        }
-        return this;
-    }
-
 //====================================================================
 //  convenience functions
 //====================================================================
-
-    @Deprecated     // does not make sense because credential should only be passed to a known backend service(url)
-    public static HttpServiceInput createWithCredential() {
-        return createWithCredential(null);
-    }
-
-    /**
-     * returns an HttpServiceInput that contains the required credential to access the given backend service.
-     * This credential information is based on the implementer of SsoAdapter.
-     * @param requestUrl  URL to access
-     * @return
-     */
-    public static HttpServiceInput createWithCredential(String requestUrl) {
-        return new HttpServiceInput(requestUrl).applyCredential();
-    }
 
     public String getUniqueKey() {
         String key = isEmpty(requestUrl) ? "" : requestUrl;

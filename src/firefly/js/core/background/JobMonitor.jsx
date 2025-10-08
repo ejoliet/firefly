@@ -36,6 +36,7 @@ import {FormWatcher} from '../../templates/router/RouteHelper';
 import {logger} from '../../util/Logger';
 
 export const jobMonitorPath = '/jobMonitor';
+const jobIdColIdx = 7;  // the index of the jobId column in the table
 
 export function JobMonitor({initArgs, help_id, slotProps, ...props}) {
     const pollInterval = getAppOptions()?.background?.historyPollInterval || 30000;       // every 30 seconds
@@ -56,7 +57,7 @@ export function JobMonitor({initArgs, help_id, slotProps, ...props}) {
     const tableProps = {...slotProps?.table, ...table};
     const width = useStoreConnector(() => {
         const {columnWidths=[]} = getTableUiById('JobHistoryTable-ui') || {};
-        return columnWidths.reduce((acc, val, idx) => idx < 7 ? acc + val : acc, 3);
+        return columnWidths.reduce((acc, val, idx) => idx < 8 ? acc + val : acc, 3);
 
     });
     return(
@@ -203,7 +204,7 @@ function JobMonitorTable({help_id, ...props}) {
     useEffect(() => {
         const table = convertToTableModel(getMonitoredJob(jobMap), tbl_id);
         if (hlJobId) {
-            const highlightedRow = table.tableData.data.findIndex((row) => row[6] === hlJobId);
+            const highlightedRow = table.tableData.data.findIndex((row) => row[jobIdColIdx] === hlJobId);
             if (highlightedRow >= 0) table.highlightedRow = highlightedRow; // set the highlighted row if the job is found
         }
         dispatchTableAddLocal(table, undefined, false);
@@ -248,11 +249,12 @@ function PhaseRenderer({cellInfo}) {
 
 function ControlRenderer({cellInfo}) {
     const {value:jobId} = cellInfo;
-    const job = useStoreConnector(() => getJobInfo(jobId), [jobId]);
+    const job = getJobInfo(jobId);
+    // const job = useStoreConnector(() => getJobInfo(jobId), [jobId]);
     if (!job?.meta?.jobId) return null;
 
     return  (
-        <Stack mx={2} direction='row' justifyContent='right'>
+        <Stack mx={1} direction='row' justifyContent='right'>
             <Progress job={job}/>
             <Results job={job}/>
             <InfoPopup job={job}/>
@@ -271,7 +273,7 @@ function Delete({job}) {
     const title = job?.jobInfo?.title || job.jobId;
     if (isDone(job)) {
         return <IconButton  title={`Delete job ${job?.meta?.jobId}`} color='danger' onClick={doDelete}><DeleteOutlineOutlinedIcon/></IconButton>;
-    } else if (isExecuting(job)) {
+    } else if (isActive(job)) {
         return <IconButton  title={`Abort job ${title}`} color='danger' onClick={() => dispatchJobCancel(job?.meta?.jobId)}><StopCircleOutlinedIcon/></IconButton>;
     }
 }
@@ -357,6 +359,7 @@ function convertToTableModel(jobs, tbl_id) {
         {name: 'Title', width: 22},
         {name: 'Service ID', width: 11, type: 'char',  ...cProps},
         {name: 'Type', width: 9, type: 'char', ...cProps},
+        {name: 'Created', width: 14, ...cProps},
         {name: 'Start Time', width: 14, ...cProps},
         {name: 'End Time', width: 14, ...cProps},
         {name: 'Phase', width: 13, type: 'char', ...cProps},
@@ -368,10 +371,11 @@ function convertToTableModel(jobs, tbl_id) {
             getJobTitle(job),
             job.meta?.svcId,
             job.meta?.type,
+            job.creationTime && moment.utc(job.creationTime).format('YYYY-MM-DD HH:mm:ss'),
             job.startTime && moment.utc(job.startTime).format('YYYY-MM-DD HH:mm:ss'),
             job.endTime && moment.utc(job.endTime).format('YYYY-MM-DD HH:mm:ss'),
             job.phase,
-            job.meta?.jobId
+            job.meta?.jobId         // remember to adjust jobIdColIdx if columns changed
         ]);
 
     const phaseIdx = columns.findIndex((c) => c.name === 'Phase');
@@ -388,7 +392,7 @@ function convertToTableModel(jobs, tbl_id) {
 }
 
 function defaultRequest(doFilter) {
-    const sortInfo = SortInfo.newInstance(SORT_DESC, 'Start Time').serialize();
+    const sortInfo = SortInfo.newInstance(SORT_DESC, 'Created').serialize();
     const filters = doFilter ? "Phase IN ('EXECUTING', 'COMPLETED', 'ERROR', 'ABORTED')" : undefined;
     return {sortInfo, filters};
 }
@@ -421,7 +425,8 @@ function doDownload(job, index) {
 function getMonitoredJob(jobMap) {
     return (jobMap ? Object.values(jobMap) : [])
         .filter((job) => job?.meta?.monitored)                   // only monitored jobs
-        .sort((a,b) => b.startTime?.localeCompare(a.startTime));
+        .map((job) => ({...job, creationTime: job.creationTime || job.startTime}))                   // if creationTime is missing, use startTime
+        .sort((a,b) => b.creationTime?.localeCompare(a.creationTime));
 }
 
 

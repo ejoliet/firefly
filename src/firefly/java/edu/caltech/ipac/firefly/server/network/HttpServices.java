@@ -3,8 +3,6 @@
  */
 package edu.caltech.ipac.firefly.server.network;
 
-import com.google.common.net.HttpHeaders;
-import edu.caltech.ipac.firefly.server.util.VersionUtil;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.KeyVal;
 import edu.caltech.ipac.util.download.URLDownload;
@@ -12,6 +10,7 @@ import edu.caltech.ipac.firefly.server.util.Logger;
 import org.apache.commons.httpclient.Header;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.HttpMethod;
+import org.apache.commons.httpclient.HttpStatus;
 import org.apache.commons.httpclient.NameValuePair;
 import org.apache.commons.httpclient.UsernamePasswordCredentials;
 import org.apache.commons.httpclient.auth.AuthScope;
@@ -81,6 +80,9 @@ public class HttpServices {
     public static Status getData(String url, File results) {
         return getData(new HttpServiceInput(url), results);
     }
+    public static Status getData(String url, Handler handler) {
+        return getData(new HttpServiceInput(url), handler);
+    }
     public static Status getData(HttpServiceInput input, File results) {
         try {
             return getData(input, defaultHandler(results));
@@ -96,66 +98,36 @@ public class HttpServices {
         return getData(input, defaultHandler(results));
     }
 
+    public static Status getData(HttpServiceInput input, Handler handler) {
+        return getData(input, 3, handler);
+    }
+
     /**
-     * For convenience, this function will return 400-bad-request if url is malformed or any IO related exceptions.
-     * Exceptions will be written into the results stream when possible.
-     * if params are given as input, it will replace any queryString provided in the url.  So, use one of the other.
-     * params given as input will be automatically encoded with UTF-8.
+     * Convenience function with the following behavior:
+     * - Returns HTTP 400 (Bad Request) if the URL is malformed or an I/O error occurs.
+     * - When possible, exception details are returned in Status's error message with error code.
+     * - If `params` are provided, they replace any query string in the URL (use one or the other).
+     * - Input parameters are automatically UTF-8 encoded.
+     * - Handles redirects and re-evaluates credentials as needed.
      * @param input  if params are given, it will replace any queryString provided in the url.  So, use one of the other.
+     * @param maxFollow  if followRedirect is true, the maximum number of redirect to follow.
      * @param handler  how to handle the response/results.  If null, do nothing.
      * @return Status
      */
-    public static Status getData(HttpServiceInput input, Handler handler) {
+    public static Status getData(HttpServiceInput input, int maxFollow, Handler handler ) {
         try {
             String url = input.getRequestUrl();
-            return executeMethod(new GetMethod(url), input, handler);
+            if (!input.isFollowRedirect()) {
+                return executeMethod(new GetMethod(url), input, handler);
+            }
+            // Need to manually handle redirect to ensure credentials are applied properly
+            input.setFollowRedirect(false);
+            return executeMethod(new GetMethod(url), input, new RedirectHandler(input, handler, maxFollow));
         } catch (Exception e) {
             LOG.error(e);
             return new Status(400, e.getMessage());
         }
-    }
 
-    public static HttpServices.Status getWithAuth(String url, HttpServices.Handler handler) {
-        return getWithAuth(new HttpServiceInput(url), 3, handler);
-    }
-
-    public static HttpServices.Status getWithAuth(HttpServiceInput input, HttpServices.Handler handler) {
-        return getWithAuth(input, 3, handler);
-    }
-
-    /**
-     * Similar to #getData(), but this function will handle credentials if necessary
-     * and ensure that redirects are re-evaluated accordingly
-     * @param input   request input
-     * @param maxFollow  the maximum number of redirect to follow.  3 if using one of the overloaded functions.
-     * @param handler   a handler to call upon successful fetch
-     * @return the status of this fetch
-     */
-    public static HttpServices.Status getWithAuth(HttpServiceInput input, int maxFollow, HttpServices.Handler handler) {
-        input.applyCredential()
-                .setFollowRedirect(false);
-        return HttpServices.getData(input, (method -> {
-            try {
-                if (HttpServices.isOk(method)) {
-                    return handler.handleResponse(method);
-                }
-                if (HttpServices.isRedirected(method)) {
-                    String location = HttpServices.getResHeader(method, "Location", null);
-                    if (location != null) {
-                        if (maxFollow > 0) {
-                            return getWithAuth(new HttpServiceInput(location), maxFollow-1, handler);
-                        } else {
-                            return new HttpServices.Status(421, "Request redirected without a location header");
-                        }
-                    } else {
-                        return new HttpServices.Status(421, "ERR_TOO_MANY_REDIRECTS");
-                    }
-                }
-                return HttpServices.Status.getStatus(method);
-            } catch (Exception e) {
-                return new HttpServices.Status(500, "Error retrieving content from " + input.getRequestUrl() +": " + e.getMessage());
-            }
-        }));
     }
 
 //====================================================================
@@ -190,11 +162,19 @@ public class HttpServices {
     }
 
     public static Status postData(HttpServiceInput input, Handler handler) {
+        return postData(input, 3, handler);
+    }
+
+    public static Status postData(HttpServiceInput input, int maxFollow, Handler handler) {
         try {
             String url = input.getRequestUrl();
             if (isEmpty(url))  throw new FileNotFoundException("Missing URL parameter");
-            input.setFollowRedirect(false);                                                 // post are not allowed to follow redirect
-            return executeMethod(new PostMethod(url), input, handler);
+            if (!input.isFollowRedirect()) {
+                return executeMethod(new PostMethod(url), input, handler);
+            }
+            // Need to manually handle redirect to ensure credentials are applied properly
+            input.setFollowRedirect(false);                 // httpclient 3.x, post are not allowed to follow redirect; but, we will do it manually.
+            return executeMethod(new PostMethod(url), input, new RedirectHandler(input, handler, maxFollow));
         } catch (Exception e) {
             return new Status(400, e.getMessage());
         }
@@ -232,25 +212,23 @@ public class HttpServices {
         try {
             input = input == null ? new HttpServiceInput() : input;
 
-            method.setRequestHeader("Connection", "close");            // request server to NOT keep-alive.. we don't plan to reuse this connection.
-            method.setRequestHeader("User-Agent", VersionUtil.getUserAgentString());
-            method.setRequestHeader(HttpHeaders.ACCEPT_ENCODING, "gzip");
+            method.setRequestHeader("Connection", "close");            // request server to NOT keep-alive. we don't plan to reuse this connection.
             if (method instanceof GetMethod) {
-                method.setFollowRedirects(input.isFollowRedirect());    // post are not allowed to follow redirect
+                method.setFollowRedirects(input.isFollowRedirect());    // httpclient 3.x, post are not allowed to follow redirect
             }
 
             HttpClient httpClient = newHttpClient();
 
             handleAuth(httpClient, method, input.getUserId(), input.getPasswd());
 
-            handleCookies(method, input.getCookies());
-
-            handleHeaders(method, input.getHeaders());
+            handleHeaders(method, input.getRequestHeaders());
 
             handleParams(method, input.getParamPairs(), input.getFiles());
 
             logRequestStart(method, input);
 
+            // don't parse, validate, or manage cookies
+            method.getParams().setCookiePolicy(CookiePolicy.IGNORE_COOKIES);
             httpClient.executeMethod(method);
             if (handler != null) {
                 status = handler.handleResponse(method);
@@ -371,14 +349,83 @@ public class HttpServices {
         }
     }
 
+
+    /**
+     * Handles redirects by following the Location header up to maxFollow times.
+     * It will also re-apply credentials as needed.
+     * For safety, it will change Method to GET when following redirect.  In the future when necessary, it will check for 307 & 308 status to keep the same method.
+     */
+    public static class RedirectHandler implements Handler {
+        private final HttpServiceInput input;
+        private final Handler handler;
+        private final int maxFollow;
+
+        public RedirectHandler(HttpServiceInput input, Handler handler, int maxFollow) {
+            this.input = input;
+            this.handler = handler;
+            this.maxFollow = maxFollow;
+        }
+
+        public Status handleResponse(HttpMethod method) {
+            try {
+                if (HttpServices.isOk(method)) {
+                    return handler.handleResponse(method);
+                }
+                if (HttpServices.isRedirected(method)) {
+                    String location = HttpServices.getResHeader(method, "Location", null);
+                    if (location != null) {
+                        if (maxFollow > 0) {
+                            HttpServiceInput redirect = new HttpServiceInput(location);
+                            // carry over cookies
+                            Header[] setCookies = method.getResponseHeaders("Set-Cookie");
+                            if (setCookies != null && setCookies.length > 0) {
+                                String cookieHeader = Arrays.stream(setCookies)
+                                        .map(h -> h.getValue().split(";", 2)[0])
+                                        .collect(Collectors.joining("; "));
+                                redirect.setHeader("Cookie", cookieHeader);
+                            }
+                            // carry over previous headers
+                            input.getHeaders().entrySet().stream()
+                                    .filter(h -> isForwardHeader(h.getKey()))
+                                    .forEach(h -> redirect.setHeader(h.getKey(), h.getValue()));
+
+                            return getData(redirect, maxFollow-1, handler);
+                        } else {
+                            return new Status(421, "ERR_TOO_MANY_REDIRECTS");
+                        }
+                    } else {
+                        return new Status(421, "Request redirected without a location header");
+                    }
+                }
+                return Status.getStatus(method);
+            } catch (Exception e) {
+                return new Status(500, "Error retrieving content from " + input.getRequestUrl() +": " + e.getMessage());
+            }
+        }
+    }
+
+    private static boolean isForwardHeader(String headerName) {
+        String lower = headerName.toLowerCase();
+        return switch (lower) {
+            case "user-agent", "accept", "accept-language" -> true;
+            default -> false;
+        };
+    }
+
     public static boolean isOk(HttpMethod method) {
         int status = method.getStatusCode();
         return status >= 200 && status < 300;
     }
 
     public static boolean isRedirected(HttpMethod method) {
-        int status = method.getStatusCode();
-        return status >= 300 && status < 400;
+        return  switch (method.getStatusCode()) {
+            case HttpStatus.SC_MOVED_PERMANENTLY,   // 301
+                HttpStatus.SC_MOVED_TEMPORARILY,    // 302
+                HttpStatus.SC_SEE_OTHER,            // 303
+                HttpStatus.SC_TEMPORARY_REDIRECT,   // 307
+                308    -> true;                     // 308 SC_PERMANENT_REDIRECT not defined in v3
+            default -> false;
+        };
     }
 
     public static String getReqHeader(HttpMethod method, String key, String def) {
@@ -409,16 +456,6 @@ public class HttpServices {
                 UsernamePasswordCredentials credentials = new UsernamePasswordCredentials(userId, password);
                 client.getState().setCredentials(AuthScope.ANY, credentials);
             }
-        }
-    }
-
-    private static void handleCookies(HttpMethod method, Map<String,String> cookies) {
-        if (cookies != null && cookies.size() > 0) {
-            String cookieStr = cookies.entrySet().stream()
-                    .map((e) -> e.getKey() + "=" + e.getValue())
-                    .collect(Collectors.joining(";"));
-            method.getParams().setCookiePolicy(CookiePolicy.IGNORE_COOKIES);
-            method.setRequestHeader("Cookie", cookieStr);
         }
     }
 
@@ -478,8 +515,10 @@ public class HttpServices {
             if(status.isOk()) {
                 LOG.info("--> done URL: " + method.getURI().toString());
                 LOG.trace("--> trace: ", getDetailDesc(method, input, status));
-            } else if (status.isRedirected() && input.isFollowRedirect()) {
-                LOG.error("--> Failed to follow redirect with status:" + status + "\n" + getDetailDesc(method, input, status));
+            } else if (status.isRedirected()) {
+                if (input.isFollowRedirect()) {
+                    LOG.error("--> Failed to follow redirect with status:" + status + "\n" + getDetailDesc(method, input, status));
+                }
             } else {
                 LOG.error("--> Failed with status:" + status + "\n" + getDetailDesc(method, input, status));
             }
