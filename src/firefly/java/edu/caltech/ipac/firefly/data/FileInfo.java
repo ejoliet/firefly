@@ -3,6 +3,7 @@
  */
 package edu.caltech.ipac.firefly.data;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
 import edu.caltech.ipac.util.StringUtils;
 import edu.caltech.ipac.util.cache.CacheKey;
@@ -15,9 +16,18 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static edu.caltech.ipac.firefly.data.HttpResultInfo.*;
+import static edu.caltech.ipac.firefly.data.HttpResultInfo.CONTENT_TYPE;
+import static edu.caltech.ipac.firefly.data.HttpResultInfo.EXTERNAL_NAME;
+import static edu.caltech.ipac.firefly.data.HttpResultInfo.RESPONSE_CODE;
+import static edu.caltech.ipac.firefly.data.HttpResultInfo.RESPONSE_CODE_MSG;
+import static edu.caltech.ipac.firefly.data.HttpResultInfo.SIZE_IN_BYTES;
+import static edu.caltech.ipac.firefly.data.HttpResultInfo.SUFFIX;
 
-
+@JsonAutoDetect(
+        fieldVisibility = JsonAutoDetect.Visibility.ANY,
+        getterVisibility = JsonAutoDetect.Visibility.NONE,
+        setterVisibility = JsonAutoDetect.Visibility.NONE
+)
 public class FileInfo implements HasAccessInfo, Serializable, CacheKey {
 
     public static final String INTERNAL_NAME= "internalName";
@@ -64,8 +74,11 @@ public class FileInfo implements HasAccessInfo, Serializable, CacheKey {
 
 
     public FileInfo(int responseCode) {
-        this(null,"", responseCode, ResponseMessage.getHttpResponseMessage(responseCode));
+        this(responseCode, ResponseMessage.getHttpResponseMessage(responseCode));
+    }
 
+    public FileInfo(int responseCode, String message) {
+        this(null,"", responseCode, message);
     }
 
     private FileInfo(File file, String externalName, String desc, int responseCode, String responseCodeMsg, String contentType) {
@@ -99,7 +112,12 @@ public class FileInfo implements HasAccessInfo, Serializable, CacheKey {
 //======================================================================
 
     public void putAttribute(String key, String value) { attributes.put(key,value); }
-    public String getAttribute(String key) {return attributes.get(key); }
+    public String getAttribute(String key) {
+        if (attributes.containsKey(key)) return attributes.get(key);
+        var matchingKey= attributes.keySet().stream().filter(k -> k.equalsIgnoreCase(key)).findFirst().orElse(null);
+        if (matchingKey!=null) return attributes.get(matchingKey);
+        return null;
+    }
     public Map<String,String> getAttributeMap() {return new HashMap<>(attributes);}
 
 
@@ -166,9 +184,7 @@ public class FileInfo implements HasAccessInfo, Serializable, CacheKey {
 
     @Override
     public boolean equals(Object o) {
-        if (o instanceof FileInfo) {
-            FileInfo fi = (FileInfo) o;
-            // external name is unique
+        if (o instanceof FileInfo fi) {
             return getInternalFilename().equals(fi.getInternalFilename());
         } else {
             return false;
@@ -198,6 +214,9 @@ public class FileInfo implements HasAccessInfo, Serializable, CacheKey {
 
     public String resolveFileName(String name) { return resolver.getResolvedName(name); }
 
+    public long getContentLength() { return StringUtils.getLong(getAttribute("Content-Length"),0); }
+    public String getContentEncoding() { return getAttribute("Content-Encoding"); }
+    public String getContentDisposition() { return getAttribute("Content-Disposition"); }
 
     public FileInfo copy() {
         FileInfo fi= new FileInfo();
@@ -214,6 +233,20 @@ public class FileInfo implements HasAccessInfo, Serializable, CacheKey {
 
     public interface FileNameResolver {
         String getResolvedName(String input);
+    }
+
+    public boolean isReservedKey(String k) {
+        return (k.equals(RESPONSE_CODE) ||
+                k.equals(RESPONSE_CODE_MSG) ||
+                k.equals(EXTERNAL_NAME) ||
+                k.equals(CONTENT_TYPE) ||
+                k.equals(SUFFIX) ||
+                k.equals(INTERNAL_NAME) ||
+                k.equals(FILE_DOWNLOADED) ||
+                k.equals(DESC) ||
+                k.equals(BLANK) ||
+                k.equals(SIZE_IN_BYTES) ||
+                k.equals(HAS_ACCESS));
     }
 }
 

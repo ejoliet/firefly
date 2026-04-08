@@ -12,7 +12,7 @@ import {computeCentralPointAndRadius,} from 'firefly/visualize/VisUtil.js';
 import PropTypes, {arrayOf, bool, func, number, object, oneOf, shape, string} from 'prop-types';
 import React, {useContext, useEffect, useRef, useState} from 'react';
 import {getTblById, makeFileRequest, onTableLoaded} from '../../api/ApiUtilTable.jsx';
-import {dispatchAddTaskCount, dispatchRemoveTaskCount} from '../../core/AppDataCntlr.js';
+import {dispatchAddWorkingTask} from '../../core/AppDataCntlr.js';
 import {MetaConst} from '../../data/MetaConst.js';
 import HiPSMOC from '../../drawingLayers/HiPSMOC.js';
 import ImageOutline from '../../drawingLayers/ImageOutline.js';
@@ -26,6 +26,7 @@ import {useFieldGroupValue, useStoreConnector} from '../../ui/SimpleComponent.js
 import {SizeInputFields} from '../../ui/SizeInputField.jsx';
 import {DEF_TARGET_PANEL_KEY, TargetPanel} from '../../ui/TargetPanel.jsx';
 import {parseObsCoreRegion} from '../../util/ObsCoreSRegionParser.js';
+import {callWhileAwaiting} from '../../util/WebUtil';
 import {CoordinateSys} from '../CoordSys.js';
 import {
     dispatchAttachLayerToPlot, dispatchCreateDrawLayer, dispatchDestroyDrawLayer, dlRoot, getDlAry
@@ -42,8 +43,9 @@ import {
 import {makeWorldPt, parseWorldPt} from '../Point.js';
 import {createHiPSMocLayerFromPreloadedTable} from '../task/PlotHipsTask.js';
 import {WebPlotRequest} from '../WebPlotRequest.js';
-import {CONE_CHOICE_KEY, POLY_CHOICE_KEY} from './CommonUIKeys.js';
+import {BOX_CHOICE_KEY, CONE_CHOICE_KEY, POLY_CHOICE_KEY} from './CommonUIKeys.js';
 import {MultiImageViewer} from './MultiImageViewer.jsx';
+import {SmallLegend} from './SmallLegend';
 import {HelpLines, targetHipsDefaultMenuItemKey, TargetHipsPanelToolbar} from './TargetHipsPanelToolbar.jsx';
 import {closeToolbarModalLayers} from './ToolbarToolModalEnd.js';
 import {
@@ -54,6 +56,10 @@ const DIALOG_ID= 'HiPSPanelPopup';
 const DEFAULT_HIPS= 'ivo://CDS/P/DSS2/color';
 const DEFAULT_FOV= 340;
 const RADIUS_DISABLED_KEY= 'none---Size';
+const POLYGON_DISABLED_KEY = 'non---Polygon';
+const BOX_SIZE_X_DISABLED_KEY= 'none---BoxSizeX';
+const BOX_SIZE_Y_DISABLED_KEY= 'none---BoxSizeY';
+const BOX_ROTATION_DISABLED_KEY= 'none---BoxRotation';
 
 const sharedPropTypes= {
     hipsUrl: string,
@@ -107,7 +113,9 @@ VisualTargetPanel.propTypes= {
 
 export const HiPSTargetView = ({sx, hipsDisplayKey='none',
                                    hipsUrl=DEFAULT_HIPS, hipsFOVInDeg= DEFAULT_FOV, centerPt=makeWorldPt(0,0, CoordinateSys.GALACTIC),
-                                   targetKey=DEF_TARGET_PANEL_KEY, sizeKey=RADIUS_DISABLED_KEY, polygonKey='non---Polygon',
+                                   targetKey=DEF_TARGET_PANEL_KEY, sizeKey=RADIUS_DISABLED_KEY, polygonKey=POLYGON_DISABLED_KEY,
+                                   boxSizeXKey=BOX_SIZE_X_DISABLED_KEY, boxSizeYKey=BOX_SIZE_Y_DISABLED_KEY,
+                                   boxRotationKey=BOX_ROTATION_DISABLED_KEY,
                                    getWhichOverlay=() => CONE_CHOICE_KEY, toolbarHelpId,
                                    showHelpLines=true, selectionHelpText= undefined,
                                    setWhichOverlay, sRegion, coordinateSys, mocList, minSize=1/3600, maxSize=100,
@@ -119,19 +127,37 @@ export const HiPSTargetView = ({sx, hipsDisplayKey='none',
     const [getTargetWp,setTargetWp]= useFieldGroupValue(targetKey, groupKey);
     const [getHiPSRadius, setHiPSRadius]= useFieldGroupValue(sizeKey, groupKey);
     const [getPolygon, setPolygon]= useFieldGroupValue(polygonKey, groupKey);
+    const [getBoxSizeX, setBoxSizeX]= useFieldGroupValue(boxSizeXKey, groupKey);
+    const [getBoxSizeY, setBoxSizeY]= useFieldGroupValue(boxSizeYKey, groupKey);
+    const [getBoxRotation, setBoxRotation]= useFieldGroupValue(boxRotationKey, groupKey);
     const [mocError, setMocError]= useState();
     const {current:lastWhichOverlay}= useRef({lastValue:undefined});
 
     const userEnterWorldPt= () =>  parseWorldPt(getTargetWp());
     const userEnterSearchRadius= () =>  Number(getHiPSRadius());
     const userEnterPolygon= () => convertStrToWpAry(getPolygon());
+    const userEnterBoxParams= () => {
+        const sizeX= Number(getBoxSizeX());
+        const sizeY= Number(getBoxSizeY());
+        const rotation= Number(getBoxRotation());
+        return {
+            sizeX: Number.isFinite(sizeX) ? sizeX : undefined,
+            sizeY: Number.isFinite(sizeY) ? sizeY : undefined,
+            rotation: Number.isFinite(rotation) ? rotation : undefined,
+        };
+    };
+    const setBoxParams= (boxParams) => {
+        setBoxSizeX(boxParams?.sizeX);
+        setBoxSizeY(boxParams?.sizeY);
+        setBoxRotation(boxParams?.rotation);
+    };
     const usingRadius= sizeKey!==RADIUS_DISABLED_KEY;
 
     useEffect(() => { // show HiPS plot
         if (!pv || hipsUrl!==pv.request.getHipsRootUrl()) {
             initHiPSPlot({plotId,hipsUrl, viewerId,centerPt,hipsFOVInDeg, coordinateSys,
                 userEnterWorldPt, userEnterSearchRadius,
-                getWhichOverlay, userEnterPolygon,
+                getWhichOverlay, userEnterPolygon, userEnterBoxParams,
             });
         }
         else {
@@ -139,8 +165,8 @@ export const HiPSTargetView = ({sx, hipsDisplayKey='none',
             if (coordinateSys && plot && coordinateSys!==plot.projection.coordSys) {
                 dispatchChangeHiPS({plotId,coordSys:coordinateSys});
             }
-            updatePlotOverlayFromUserInput(plotId, getWhichOverlay(), userEnterWorldPt(), userEnterSearchRadius(),
-                userEnterPolygon(), true);
+            updatePlotOverlayFromUserInput({plotId, whichOverlay: getWhichOverlay(), wp: userEnterWorldPt(), 
+                radius: userEnterSearchRadius(), polygonAry: userEnterPolygon(), boxParams: userEnterBoxParams(), forceCenterOn: true});
 
             if (getActivePlotView(visRoot())?.plotId !== plotId ) dispatchChangeActivePlotView(plotId);
         }
@@ -152,7 +178,7 @@ export const HiPSTargetView = ({sx, hipsDisplayKey='none',
     useEffect(() => {
         setMocError();
         void updateMoc(mocList,plotId,setMocError);
-    }, [mocList]);
+    }, [mocList, plotId]);
 
     useEffect(() => { // if plot view changes then update the target or polygon field
         const setWhichOverlayWrapper= setWhichOverlay ?
@@ -161,28 +187,29 @@ export const HiPSTargetView = ({sx, hipsDisplayKey='none',
                 lastWhichOverlay.lastValue= overLay;
             } : undefined;
         updateUIFromPlot({plotId,setWhichOverlay:setWhichOverlayWrapper, whichOverlay:getWhichOverlay(),setTargetWp,getTargetWp,
-            setHiPSRadius,getHiPSRadius,setPolygon,getPolygon,minSize,maxSize,
+            setHiPSRadius,getHiPSRadius,setPolygon,getPolygon,setBoxParams,getBoxParams:userEnterBoxParams, minSize,maxSize,
             canUpdateModalEndInfo:false
         });
-    },[pv]);
+    },[pv]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => { // if target or radius field change then hips plot to reflect it
         const whichOverlay= getWhichOverlay();
         const canGenerate= whichOverlay!==lastWhichOverlay.lastValue;
-        if (canGenerate && whichOverlay===CONE_CHOICE_KEY && !userEnterWorldPt()) {
+        if (canGenerate && (whichOverlay===CONE_CHOICE_KEY || whichOverlay===BOX_CHOICE_KEY) && !userEnterWorldPt()) {
              const wp = primePlot(visRoot(), plotId)?.attributes[PlotAttribute.USER_SEARCH_WP];
              wp && setTargetWp(wp.toString());
          }
         const radius=  usingRadius ? userEnterSearchRadius() : undefined;
+        const boxParams= userEnterBoxParams();
 
-        updatePlotOverlayFromUserInput(plotId, whichOverlay, userEnterWorldPt(),
-            radius, userEnterPolygon(), false, canGenerate);
+        updatePlotOverlayFromUserInput({plotId, whichOverlay, wp: userEnterWorldPt(),
+            radius, polygonAry: userEnterPolygon(), boxParams, forceCenterOn: false, canGeneratePolygon: canGenerate});
         lastWhichOverlay.lastValue= whichOverlay;
-    }, [getTargetWp, getHiPSRadius, getPolygon, getWhichOverlay()]);
+    }, [getTargetWp, getHiPSRadius, getPolygon, getBoxSizeX, getBoxSizeY, getBoxRotation, getWhichOverlay()]);
 
     useEffect(() => {
         attachSRegion(sRegion,plotId);
-    }, [sRegion]);
+    }, [plotId, sRegion]);
 
     return (
         <Stack {...{minHeight:200, ...sx,}}>
@@ -197,7 +224,8 @@ export const HiPSTargetView = ({sx, hipsDisplayKey='none',
                               whichOverlay={getWhichOverlay()}
                               toolbarHelpId={toolbarHelpId}
                               handleToolbar={false}
-                              menuItemKeys={{...targetHipsDefaultMenuItemKey, selectArea:usingRadius}}
+                              menuItemKeys={{...targetHipsDefaultMenuItemKey, selectArea:false}}
+                              Legend={SmallLegend}
                               Toolbar={TargetHipsPanelToolbar}/>
         </Stack>
     );
@@ -207,6 +235,9 @@ HiPSTargetView.propTypes= {
     ...sharedPropTypes,
     sizeKey: string,
     targetKey: string,
+    boxSizeXKey: string,
+    boxSizeYKey: string,
+    boxRotationKey: string,
 };
 
 
@@ -236,7 +267,7 @@ export const TargetHiPSRadiusPopupPanel = ({searchAreaInDeg, sx,
                                                sizeLabel= 'Search Area:', ...restOfProps}) => {
     const [controlConnected, setControlConnected] = useState(false);
     return (
-        <ConnectionCtx.Provider value={{controlConnected, setControlConnected}}>
+        <ConnectionCtx value={{controlConnected, setControlConnected}}>
             <Stack {...{width: 700, pb: 3, ...sx}}>
                 <Stack >
                     <VisualTargetPanel {...{style:{paddingTop: 10}, fieldKey:targetKey, sizeKey, polygonKey,
@@ -249,7 +280,7 @@ export const TargetHiPSRadiusPopupPanel = ({searchAreaInDeg, sx,
                     }} />
                 </Stack>
             </Stack>
-        </ConnectionCtx.Provider>
+        </ConnectionCtx>
     );
 };
 
@@ -311,7 +342,7 @@ function HiPSPanelPopupButton({groupKey:gk, polygonKey, whichOverlay=CONE_CHOICE
                 connectContext?.setControlConnected(false);
             }
         };
-    },[]);
+    },[]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return (
         <ToolbarButton {...{
@@ -366,10 +397,11 @@ function showHiPSPanelPopup({popupClosing, element, plotId= defPopupPlotId,
  * @param {Function} obj.userEnterSearchRadius
  * @param obj.getWhichOverlay
  * @param {Function} obj.userEnterPolygon
+ * @param {Function} obj.userEnterBoxParams
  * @return {Promise<void>}
  */
 async function initHiPSPlot({ hipsUrl, plotId, viewerId, centerPt, hipsFOVInDeg, coordinateSys,
-                                userEnterWorldPt, userEnterSearchRadius, getWhichOverlay, userEnterPolygon}) {
+                                userEnterWorldPt, userEnterSearchRadius, getWhichOverlay, userEnterPolygon, userEnterBoxParams}) {
     getDrawLayersByType(dlRoot(), HiPSMOC.TYPE_ID)
         .forEach( ({drawLayerId}) => dispatchDestroyDrawLayer(drawLayerId));// clean up any old moc layers
     const wpRequest= WebPlotRequest.makeHiPSRequest(hipsUrl, centerPt, hipsFOVInDeg);
@@ -400,7 +432,8 @@ async function initHiPSPlot({ hipsUrl, plotId, viewerId, centerPt, hipsFOVInDeg,
     initSearchSelectTool(plotId);
     if (userEnterWorldPt?.() || userEnterPolygon?.()?.length) {
         await onPlotComplete(plotId);
-        updatePlotOverlayFromUserInput(plotId,getWhichOverlay(), userEnterWorldPt?.(), userEnterSearchRadius?.(), userEnterPolygon?.(), true);
+        updatePlotOverlayFromUserInput({plotId,whichOverlay: getWhichOverlay(), wp: userEnterWorldPt?.(), 
+            radius: userEnterSearchRadius?.(), polygonAry: userEnterPolygon?.(), boxParams: userEnterBoxParams?.(), forceCenterOn: true});
     }
 }
 
@@ -443,17 +476,18 @@ function loadMocWithAbort(mocList, plotId,setMocError) {
 
         try {
             for(let i=0; (i<mocAddList.length); i++) {
-                const {mocUrl,title,mocColor,maxFetchDepth}= mocAddList[i];
+                const {mocUrl,title,mocColor,maxFetchDepth,shortTitle}= mocAddList[i];
 
                 const tbl_id= 'MOC---'+mocUrl;
                 let add= true;
                 await  onPlotComplete(plotId);
                 if (abort) return;
                 if (!getTblById(tbl_id)) {
-                    dispatchAddTaskCount(plotId, tbl_id);
-                    const {status, cacheKey}=  await upload(mocUrl, 'details', {hipsCache:true});
+
+                    const {status, cacheKey}= await callWhileAwaiting(
+                        upload(mocUrl, 'details', {hipsCache:true}),
+                        (p) => dispatchAddWorkingTask(plotId, p, 'MOC') );
                     setMocError();
-                    dispatchRemoveTaskCount(plotId, tbl_id);
                     if (abort) return;
                     const request= makeFileRequest(title, cacheKey, undefined, {
                         tbl_id,
@@ -461,9 +495,8 @@ function loadMocWithAbort(mocList, plotId,setMocError) {
                         META_INFO: {[MetaConst.IGNORE_MOC]: 'true' }
                     } );
                     dispatchTableFetch(request);
-                    dispatchAddTaskCount(plotId, tbl_id);
-                    await onTableLoaded(tbl_id);
-                    dispatchRemoveTaskCount(plotId, tbl_id);
+                    await callWhileAwaiting(onTableLoaded(tbl_id),
+                        (p) => dispatchAddWorkingTask(plotId, p, 'MOC') );
                     if (abort) return;
                     add= (status === '200');
                 }
@@ -476,6 +509,7 @@ function loadMocWithAbort(mocList, plotId,setMocError) {
                         visible: true,
                         fitsPath: mocUrl,
                         title,
+                        shortTitle,
                         color: mocColor ?? colors[i % 2],
                         mocUrl,
                         mocGroupDefColorId: `mocForTargetHipsPanelID-${i}-${mocColor??''}`,
@@ -505,6 +539,3 @@ function attachSRegion(sRegion, plotId) {
         {drawObj, color: 'red', title:'s_region outline', destroyWhenAllDetached: true});
     if (!isDrawLayerAttached(dl, plotId)) dispatchAttachLayerToPlot(dl.drawLayerId, plotId, false);
 }
-
-
-

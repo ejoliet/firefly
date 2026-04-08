@@ -4,6 +4,8 @@
 
 package edu.caltech.ipac.firefly.core.background;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import edu.caltech.ipac.firefly.core.Util;
 import edu.caltech.ipac.firefly.server.SrvParam;
 import edu.caltech.ipac.util.AppProperties;
@@ -15,7 +17,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 
@@ -32,7 +33,6 @@ import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 public class JobInfo implements Serializable {
 
     public enum Phase {PENDING, QUEUED, EXECUTING, COMPLETED, ERROR, ABORTED, HELD, SUSPENDED, ARCHIVED, UNKNOWN}
-    public static final Set<Phase> CLEANUP_PHASES_EXCLUDES = Set.of(Phase.PENDING, Phase.QUEUED, Phase.EXECUTING, Phase.SUSPENDED);
     private static final int LIFE_SPAN = AppProperties.getIntProperty("job.lifespan", 60*60*24);        // default lifespan in seconds; kill job if exceed
 
     // these are uws:job defined properties
@@ -53,15 +53,14 @@ public class JobInfo implements Serializable {
     public static final String ERROR_SUMMARY = "errorSummary";
     public static final String ERROR_TYPE = "type";
     public static final String ERROR_MSG = "message";
+    public static final String ERROR_HAS_DETAILS = "hasDetail";
     public static final String META = "meta";
     public static final String JOB_INFO = "jobInfo";
 
     // These are additional info that's not in defined in uws:job but is needed by Firefly
     // In serialized form, it will go under uws:jobInfo block
     public static final String PROGRESS = "progress";
-    public static final String PROGRESS_DESC = "progressDesc";
     public static final String JOB_TYPE = "type";
-    public static final String SUMMARY = "summary";
     public static final String JOB_URL = "jobUrl";
     public static final String MONITORED = "monitored";
     public static final String TITLE = "title";
@@ -84,9 +83,9 @@ public class JobInfo implements Serializable {
     private Instant endTime;
     private int executionDuration = LIFE_SPAN;
     private Instant destruction;
-    private Map<String, String> params = new HashMap<>();
+    private Map<String, String> parameters = new HashMap<>();
     private List<Result> results = new ArrayList<>();
-    private Error error;
+    private ErrorSummary errorSummary;
 
     //meta contains essential information needed to manage the job
     final private Meta meta = new Meta();
@@ -114,6 +113,8 @@ public class JobInfo implements Serializable {
     public Meta getMeta() {
         return meta;
     }
+
+    @JsonProperty("jobInfo")
     public Aux getAux() {return aux; }
 
     public Phase getPhase() {
@@ -128,13 +129,12 @@ public class JobInfo implements Serializable {
         this.phase = phase;
     }
 
-    public Error getError() {
-        return error;
+    public ErrorSummary getErrorSummary() {
+        return errorSummary;
     }
 
-    public void setError(Error error) {
-        setPhase(Phase.ERROR);
-        this.error = error;
+    public void setErrorSummary(ErrorSummary errorSummary) {
+        this.errorSummary = errorSummary;
     }
 
     public List<Result> getResults() {
@@ -146,11 +146,11 @@ public class JobInfo implements Serializable {
     }
 
     @Nonnull
-    public Map<String, String> getParams() {
-        return params;
+    public Map<String, String> getParameters() {
+        return parameters;
     }
 
-    public void setParams(Map<String,String> params) { this.params = params; }
+    public void setParameters(Map<String,String> parameters) { this.parameters = parameters; }
 
     public String getOwnerId() { return ownerId;}
 
@@ -188,7 +188,7 @@ public class JobInfo implements Serializable {
     /**
      * @return how long this job may run in seconds.  zero implies unlimited execution duration.
      */
-    public long executionDuration() {
+    public long getExecutionDuration() {
         return executionDuration;
     }
     public void setExecutionDuration(int duration) { executionDuration = duration; }
@@ -196,8 +196,9 @@ public class JobInfo implements Serializable {
     /**
      * @return a SrvParam from the flatten params map
      */
+    @JsonIgnore
     public SrvParam getSrvParams() {
-        return SrvParam.makeSrvParamSimpleMap(getMeta().getParams());
+        return SrvParam.makeSrvParamSimpleMap(getMeta().getParameters());
     }
 
     public void copyFrom(JobInfo uws) {
@@ -213,9 +214,10 @@ public class JobInfo implements Serializable {
         this.endTime = uws.endTime;
         this.executionDuration = uws.executionDuration;
         this.destruction = uws.destruction;
-        this.params = new HashMap<>(uws.params);
+        this.parameters = new HashMap<>(uws.parameters);
         this.results = new ArrayList<>(uws.results);
-        this.error = uws.error;
+        this.errorSummary = uws.errorSummary;
+        this.getAux().setProgress(uws.aux.getProgress());
         ifNotNull(uws.aux.getJobUrl()).apply(aux::setJobUrl);
         ifNotNull(uws.aux.getUserId()).apply(aux::setUserId);
         ifNotNull(uws.aux.getUserName()).apply(aux::setUserName);
@@ -227,7 +229,11 @@ public class JobInfo implements Serializable {
 //
 //====================================================================
 
-    public record Error ( int code, String msg) implements Serializable {}
+    public record ErrorSummary(String message, String type, boolean hasDetail) implements Serializable {
+        public ErrorSummary(String message) {
+            this(message, "fatal", false);
+        }
+    }
     public record Result(String id, String href, String mimeType, String size) implements Serializable {};
 
     /**
@@ -238,12 +244,9 @@ public class JobInfo implements Serializable {
     public static class Meta implements Serializable {
         String jobId;
         String runId;
-        Map<String, String> params = new HashMap<>();
+        Map<String, String> parameters = new HashMap<>();
         String userKey;
         Job.Type type;
-        int progress;
-        String progressDesc;
-        String summary;
         boolean monitored;
         String svcId;       // the service id that this job is associated with
         String runHost;     // the host where the job is running on
@@ -259,8 +262,8 @@ public class JobInfo implements Serializable {
         public String getRunId() { return runId; }
         public void setRunId(String runId) { this.runId = runId; }
 
-        public Map<String, String> getParams() { return params; }
-        public void setParams(Map<String, String> params) { this.params = params; }
+        public Map<String, String> getParameters() { return parameters; }
+        public void setParameters(Map<String, String> parameters) { this.parameters = parameters; }
 
         public String getUserKey() { return userKey; }
         public void setUserKey(String userKey) { this.userKey = userKey;}
@@ -268,22 +271,8 @@ public class JobInfo implements Serializable {
         public String getRunHost() { return runHost; }
         public void setRunHost(String runHost) { this.runHost = runHost;}
 
-        public int getProgress() { return progress; }
-        public void setProgress(int progress) { this.progress = Math.min(Math.max(progress, 0), 100); }
-
-        public void setProgress(int progress, String desc) {
-            setProgress(progress);
-            setProgressDesc(desc);
-        }
-
-        public String getProgressDesc() { return progressDesc; }
-        public void setProgressDesc(String progressDesc) { this.progressDesc = progressDesc; }
-
         public Job.Type getType() { return type; }
         public void setType(Job.Type type) { this.type = type; }
-
-        public String getSummary() { return summary; }
-        public void setSummary(String summary) { this.summary = summary; }
 
         public boolean isMonitored() { return monitored; }
         public void setMonitored(boolean monitored) { this.monitored = monitored; }
@@ -312,6 +301,7 @@ public class JobInfo implements Serializable {
         String userEmail;   // may need to be generic so that other user's info can be stored amd passed around
         String title;
         String jobUrl;      // the service URL associated with this job
+        Progress progress;
 
         public String getUserId() { return userId; }
         public void setUserId(String userId) { this.userId = userId;}
@@ -327,6 +317,24 @@ public class JobInfo implements Serializable {
 
         public String getJobUrl() { return jobUrl; }
         public void setJobUrl(String jobUrl) { this.jobUrl = jobUrl; }
+
+        public Progress getProgress() { return progress; }
+        public void setProgress(Progress progress) { this.progress = progress; }
+    }
+
+    public record Progress(int percentComplete, int itemsProcessed, int totalItems, String message) implements Serializable {
+        public Progress() {
+            this(-1, -1, -1, null);
+        }
+        public Progress(String message) {
+            this(-1, message);
+        }
+        public Progress(int percentComplete, String message) {
+            this(percentComplete, -1, -1, message);
+        }
+        public Progress(int itemsProcessed, int totalItems, String message) {
+            this(-1, itemsProcessed, totalItems, message);
+        }
     }
 
 }

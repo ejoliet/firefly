@@ -29,7 +29,8 @@ import {
     primePlot, clonePvAry, clonePvAryWithPv, applyToOnePvOrAll, applyToOnePvOrOverlayGroup,
     matchPlotViewByPositionGroup, getPlotViewIdxById, getPlotGroupIdxById, findPlotGroup,
     getPlotViewById, findCurrentCenterPoint, getCenterOfProjection,
-    isRotationMatching, hasWCSProjection, isThreeColor, getHDU, getMatchingRotationAngle
+    isRotationMatching, hasWCSProjection, isThreeColor, getHDU, getMatchingRotationAngle, isImageCube,
+    convertImageIdxToHDU, hasLocalStretchByteData
 } from '../PlotViewUtil.js';
 import Point, {parseAnyPt, makeImagePt, makeWorldPt, makeDevicePt} from '../Point.js';
 import {UserZoomTypes} from '../ZoomUtil.js';
@@ -101,6 +102,7 @@ export function reducer(state, action) {
         case Cntlr.CHANGE_IMAGE_VISIBILITY: return changeVisibility(state,action);
         case Cntlr.REQUEST_LOCAL_DATA: return requestLocalData(state,action);
         case Cntlr.CHANGE_SUBHIGHLIGHT_PLOT_VIEW: return changeSubHighPlotView(state,action);
+        case Cntlr.MARK_OUT_OF_MEMORY: return doMarkOutOfMemory(state,action);
     }
     return retState;
 }
@@ -216,18 +218,24 @@ function updateHiPSColor(state,action) {
 
 function updateImageDisplayData(state,action) {
     const {plotViewAry, mpwWcsPrimId, wcsMatchType, plotGroupAry}= state;
-    const {plotId, primaryStateJson,overlayUpdateAry, rawData,bias,contrast, useRed, useGreen, useBlue, zoomLevel:newZoomFactor, colorTableId=-1}= action.payload;
+    const {plotId, primaryStateJson,overlayUpdateAry, rawData,bias,contrast,
+        useRed, useGreen, useBlue, zoomLevel:newZoomFactor, colorTableId, nanPixelColor}= action.payload;
     const inPv= getPlotViewById(state,plotId);
     const inPlot= primePlot(inPv);
 
     let pv= {...inPv, serverCall:'success'};
     const zoomFactor= (action.type===Cntlr.ZOOM_IMAGE) ? newZoomFactor : inPlot.zoomFactor;
     pv= replacePrimaryPlot(pv,
-        WebPlot.replacePlotValues(inPlot,primaryStateJson,zoomFactor, rawData,colorTableId, bias,contrast,useRed,useGreen,useBlue));
+        WebPlot.replacePlotValues(inPlot,primaryStateJson,zoomFactor, rawData,colorTableId, bias,contrast,nanPixelColor,useRed,useGreen,useBlue));
     if (action.type===Cntlr.COLOR_CHANGE && !isThreeColor(pv)) {
         const cId= primePlot(pv).colorTableId;
         pv.plots= pv.plots.map( (p) => {
-            return {...p,colorTableId:cId}; //todo bias and control need to be set here
+            const newP={...p,colorTableId:cId};
+            newP.rawData.bandData[Band.NO_BAND.value]= {...p.rawData.bandData[Band.NO_BAND.value]};
+            if (bias) newP.rawData.bandData[Band.NO_BAND.value].bias=bias;
+            if (contrast) newP.rawData.bandData[Band.NO_BAND.value].contrast=contrast;
+            if (nanPixelColor) newP.rawData.bandData[Band.NO_BAND.value].nanPixelColor=nanPixelColor;
+            return newP;
         });
     }
 
@@ -706,9 +714,17 @@ function recenterPv(centerPt,  centerOnImage, updateFixedTarget= false) {
 
 function makeNewPrimePlot(state,action) {
     const {plotId,primeIdx}= action.payload;
-    let pv=  getPlotViewById(state,plotId);
-    if (!pv || isEmpty(pv.plots) || pv.plots.length<=primeIdx) return state;
-    pv= changePrimePlot(pv, primeIdx);
+    const existingPv=  getPlotViewById(state,plotId);
+    if (!existingPv || isEmpty(existingPv.plots) || existingPv.plots.length<=primeIdx) return state;
+    const pv= changePrimePlot(existingPv, primeIdx);
+
+    if (isImageCube(primePlot(pv))) {
+        const primeIdx= convertImageIdxToHDU(pv,pv.primeIdx).cubeIdx;
+        pv.overlayPlotViews= pv.overlayPlotViews.map( (oPv) => {
+            if (!oPv.cube || !oPv.plot || !oPv.plots.length) return oPv;
+            return {...oPv,plot:oPv.plots[primeIdx], primeIdx};
+        });
+    }
     return {...state, plotViewAry:clonePvAryWithPv(state,pv)};
 }
 
@@ -781,12 +797,12 @@ function markByteDataRefresh(state, action) {
     if (imageOverlayId) {
         const overlayPlotViews= pv.overlayPlotViews?.map( (oPv) => {
             if (oPv?.plot?.plotImageId!==plotImageId) return oPv;
-            return {...oPv, plot:{...oPv.plot}};
+            return {...oPv, plot:{...oPv.plot}, lastByteRefreshData:Date.now()};
         });
         updatedPv= {...pv, overlayPlotViews};
     }
     else {
-        const plots= pv.plots.map( (p) => p.plotImageId===plotImageId ? {...p}: p);
+        const plots= pv.plots.map( (p) => p.plotImageId===plotImageId ? {...p,lastByteRefreshData:Date.now()}: p);
         updatedPv= {...pv,plots};
     }
 
@@ -801,9 +817,10 @@ function requestLocalData(state, action) {
     let updatedPv;
     if (imageOverlayId) {
         const overlayPlotViews= pv.overlayPlotViews.map( (oPv) => {
-            if (oPv?.plot?.plotImageId!==plotImageId) return oPv;
-            oPv.plot= {...oPv.plot,dataRequested};
-            return oPv;
+            const plots= oPv.plots.map( (p) =>
+                p.plotImageId!==plotImageId ? p : {...p,dataRequested}
+            );
+            return {...oPv, plots, plot:plots[oPv.primeIdx]};
         });
         updatedPv= {...pv, overlayPlotViews};
     }
@@ -821,15 +838,22 @@ function requestLocalData(state, action) {
 function updatePlotProgress(state,action) {
     const {plotId, message:plottingStatusMsg, done, requestKey, callSuccess=true, allowBackwardUpdates= false}= action.payload;
     const plotView=  getPlotViewById(state,plotId);
+    const plot= primePlot(plotView);
 
     // validate the update
+
+
     if (!plotView) return state;
     if (requestKey!==plotView.request.getRequestKey()) return state;
     if (plotView.plottingStatusMsg===plottingStatusMsg) return state;
-    if (!done && plotView.serverCall!=='working' && !allowBackwardUpdates) return state;
+
+    const tileDataLoading= isImage(plot) && !plot?.tileData && !hasLocalStretchByteData(plot);
+    if (!done && !tileDataLoading && plotView.serverCall!=='working' && !allowBackwardUpdates) return state;
 
     // do the update
-    const serverCall= done ? callSuccess ? 'success' : 'fail' : 'working';
+
+    const serverCall= (done || tileDataLoading) ? callSuccess ? 'success' : 'fail' : 'working';
+
     return {...state,plotViewAry:clonePvAry(state,plotId, {plottingStatusMsg,serverCall})};
 }
 
@@ -860,6 +884,18 @@ function changeSubHighPlotView(state,action) {
         if (pv.subHighlight===entry.subHighlight) return pv;
         anyChanged= true;
         return {...pv, subHighlight:entry.subHighlight};
+    });
+    return anyChanged ? {...state, plotViewAry} : state;
+}
+
+function doMarkOutOfMemory(state, action) {
+    const {markOutOfMemory= false,plotId}= action.payload;
+    let anyChanged= false;
+    const plotViewAry= state.plotViewAry.map( (pv) => {
+        if (pv.plotId!==plotId) return pv;
+        if (pv.plotViewCtx.markOutOfMemory===markOutOfMemory) return pv;
+        anyChanged= true;
+        return {...pv, plotViewCtx:{...pv.plotViewCtx, markOutOfMemory}};
     });
     return anyChanged ? {...state, plotViewAry} : state;
 }

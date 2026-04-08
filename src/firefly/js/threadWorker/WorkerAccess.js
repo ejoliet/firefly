@@ -1,11 +1,12 @@
+import {dispatchPlotProgressUpdate} from '../visualize/ImagePlotCntlr';
 import Worker from './firefly-thread.worker.js';
 import {uniqueId} from 'lodash';
-// import {WorkerSim} from './WorkerSim.js';
 import {Logger} from '../util/Logger.js';
+import {RawDataThreadActions} from './WorkerThreadActions';
 
 
 const logger= Logger('WorkerAccess');
-const WORKER_COUNT= 6;
+const WORKER_COUNT= 8;
 const workerKeys= [];
 for(let i=0; (i<WORKER_COUNT); i++) workerKeys.push(`worker-${i}`);
 let nextWorkerKey= 0;
@@ -33,8 +34,18 @@ function makeWorker(workerKey) {
     const worker= new Worker();
     worker.onmessage= (ev) => {
         const {success,callKey}= ev.data;
+        if (ev.data.statusMessage) {
+            const {plotId,messageText,requestKey}= ev.data;
+            dispatchPlotProgressUpdate(plotId,messageText,false,requestKey);
+            return;
+        }
         if (promiseMap.has(callKey)) {
             const pResponse= promiseMap.get(callKey);
+            if (!success && isWorkerOutOfMemory(ev.data?.error)) {
+                worker.outOfMemory = true;
+                worker.terminate();
+                workerMap.delete(workerKey);
+            }
             success ? pResponse.resolve(ev.data) : pResponse.reject(ev.data);
             promiseMap.delete(callKey);
         }
@@ -73,7 +84,11 @@ export function postToWorker(action) {
     const {workerKey}= action;
     if (!workerKey) throw('postToWorker requires worker key');
     const callKey= uniqueId('callkey-');
-    getWorker(workerKey).postMessage({...action, callKey});
+    const worker= getWorker(workerKey);
+    if (worker.outOfMemory) {
+        throw('postToWorker: worker out of memory');
+    }
+    worker.postMessage({...action, callKey});
 
     return new Promise( (resolve, reject) => {
         promiseMap.set(callKey, {callKey, workerKey, resolve, reject});
@@ -89,13 +104,10 @@ export function getNextWorkerKey() {
 
 
 export function removeWorker(workerKey) {
-    [...promiseMap.values()]
-        .filter( (v) => v.workerKey===workerKey)
-        .forEach( (v) => {
-            promiseMap.delete(v.callKey);
-            v.reject({success:false, fatal:false});
-        });
-
-    getWorker(workerKey).terminate();
+    void postToWorker( { type: RawDataThreadActions.CLOSE_WHEN_IDLE, workerKey, callKey:'', payload:{workerKey}});
     workerMap.delete(workerKey);
+}
+
+export function isWorkerOutOfMemory(error) {
+    return (error?.message?.toLowerCase().includes('out of memory'));
 }

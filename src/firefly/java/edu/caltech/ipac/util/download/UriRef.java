@@ -1,11 +1,9 @@
 package edu.caltech.ipac.util.download;
 
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Objects;
 
+import static edu.caltech.ipac.util.download.URLDownload.makeURL;
 import static edu.caltech.ipac.util.download.UriRef.ResourceType.GcsCloud;
 import static edu.caltech.ipac.util.download.UriRef.ResourceType.OnPrimUrl;
 import static edu.caltech.ipac.util.download.UriRef.ResourceType.S3Cloud;
@@ -15,7 +13,7 @@ import static edu.caltech.ipac.util.download.UriRef.ResourceType.S3Cloud;
  *
  */
 public record UriRef(Object ref, Object sourceForRef) {
-    public enum CloudEnvironment {AWS, GCS, ON_PRIM}
+    public enum CloudEnvironment {AWS, GCP, ON_PREM}
     public enum ResourceType {OnPrimUrl, S3Cloud, GcsCloud}
 
     public UriRef {
@@ -35,9 +33,7 @@ public record UriRef(Object ref, Object sourceForRef) {
 
     public ResourceType getType() {return determineType(ref);}
 
-    public URL getURL() {
-        return (ref instanceof URL url) ? url : null;
-    }
+    public URL getURL() { return (ref instanceof URL url) ? url : null; }
     public S3Ref getS3Ref() { return (ref instanceof S3Ref s3Ref) ? s3Ref : null; }
     public GcsRef getGcsRef() { return (ref instanceof GcsRef gcsRef) ? gcsRef : null; }
 
@@ -59,7 +55,7 @@ public record UriRef(Object ref, Object sourceForRef) {
         if (S3Ref.isS3Ref(obj)) return S3Cloud;
         else if (GcsRef.isGcsRef(obj)) return GcsCloud;
         else if (obj instanceof URL) return OnPrimUrl;
-        else if (obj instanceof String s) return makeURLFromStr(s)!=null ? OnPrimUrl : null;
+        else if (obj instanceof String s) return makeURL(s)!=null ? OnPrimUrl : null;
         else return null;
 
     }
@@ -85,19 +81,9 @@ public record UriRef(Object ref, Object sourceForRef) {
         var resourceType= determineType(uriStr);
         if (resourceType == null) return null;
         return switch (resourceType) {
-            case OnPrimUrl -> new UriRef(makeURLFromStr(uriStr), uriStr);
+            case OnPrimUrl -> new UriRef(makeURL(uriStr), uriStr);
             case S3Cloud -> new UriRef(S3Ref.makeFromUri(uriStr), uriStr);
             case GcsCloud -> new UriRef(GcsRef.makeFromUri(uriStr), uriStr);
         };
     }
-
-    private static URL makeURLFromStr(String urlStr) {
-        if (urlStr == null) return null;
-        try {
-            return new URI(urlStr.trim()).toURL();
-        } catch (URISyntaxException | MalformedURLException ignore) {
-            return null;
-        }
-    }
-
 }

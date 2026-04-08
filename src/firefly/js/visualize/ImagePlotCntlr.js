@@ -128,6 +128,7 @@ const PROCESS_SCROLL= `${PLOTS_PREFIX}.ProcessScroll`;
 const CHANGE_CENTER_OF_PROJECTION= `${PLOTS_PREFIX}.changeCenterOfProjection`;
 /** Action Type: Recenter in image on the active target */
 const RECENTER= `${PLOTS_PREFIX}.recenter`;
+const MARK_OUT_OF_MEMORY= `${PLOTS_PREFIX}.makeOutOfMemory`;
 /** Action Type: replot the image with the original plot parameters */
 const RESTORE_DEFAULTS= `${PLOTS_PREFIX}.restoreDefaults`;
 const POSITION_LOCKING= `${PLOTS_PREFIX}.PositionLocking`;
@@ -328,7 +329,7 @@ export default {
     PLOT_MASK, PLOT_MASK_START, PLOT_MASK_FAIL, PLOT_MASK_LAZY_LOAD, DELETE_OVERLAY_PLOT, BYTE_DATA_REFRESH,
     OVERLAY_PLOT_CHANGE_ATTRIBUTES, WCS_MATCH, API_TOOLS_VIEW, CHANGE_MOUSE_READOUT_MODE,
     CHANGE_HIPS_IMAGE_CONVERSION, CHANGE_TABLE_AUTO_SCROLL, USE_TABLE_AUTO_SCROLL,REQUEST_LOCAL_DATA,
-    CHANGE_SUBHIGHLIGHT_PLOT_VIEW
+    CHANGE_SUBHIGHLIGHT_PLOT_VIEW, MARK_OUT_OF_MEMORY
 };
 
 const KEY_ROOT= 'progress-';
@@ -432,6 +433,7 @@ export function dispatchChangeImageVisibility({plotId, imageOverlayId, visible, 
  * @param {number} obj.cbarId must be in the range, 0 - 21, each number represents different color bar
  * @param {number} obj.bias bias between 0 - 1, .5 is no bias
  * @param {number} obj.contrast bias between 0 - 2, .1 is no contrast
+ * @param {Array.<number>} obj.nanPixelColor a 3 cell array of [r,g,b]
  * @param {boolean} obj.useRed use this band, only use with 3 color
  * @param {boolean} obj.useGreen use this band, only use with 3 color
  * @param {boolean} obj.useBlue use this band, only use with 3 color
@@ -445,9 +447,10 @@ export function dispatchChangeImageVisibility({plotId, imageOverlayId, visible, 
  * @memberof firefly.action
  */
 export function dispatchColorChange({plotId, cbarId, bias, contrast,
-                                        useRed=true, useGreen=true, useBlue=true,
+                                        useRed=true, useGreen=true, useBlue=true, nanPixelColor= [0,0,0],
                                         actionScope=ActionScope.GROUP, dispatcher= flux.process} ) {
-    dispatcher({ type: COLOR_CHANGE, payload: { plotId, cbarId, bias, contrast, useRed, useGreen, useBlue, actionScope }});
+    dispatcher({ type: COLOR_CHANGE, payload: { plotId, cbarId, bias, contrast, nanPixelColor,
+            useRed, useGreen, useBlue, actionScope }});
 }
 
 /**
@@ -604,6 +607,9 @@ export function dispatchRecenter({plotId, centerPt= undefined, centerOnImage=fal
     dispatcher({type: RECENTER, payload: {plotId, centerPt, centerOnImage, updateFixedTarget, updateWcsPrimId} });
 }
 
+export function dispatchMarkOutOfMemory({plotId, markOutOfMemory= true, dispatcher= flux.process}) {
+    dispatcher({type: MARK_OUT_OF_MEMORY, payload: {plotId, markOutOfMemory}});
+}
 /**
  * @summary replot the image with the original plot parameters
  *
@@ -792,7 +798,7 @@ export function dispatchChangeHiPS({ plotId, hipsUrlRoot, coordSys, centerProjPt
  * @param {number} p.maskValue power of 2, e.g 4, 8, 32, 128, etc
  * @param {number} p.maskNumber 2, e.g 4, 8, 32, 128, etc
  * @param {string} p.imageOverlayId
- * @param {number} p.imageNumber hdu number of fits
+ * @param {number} p.hduNumber hdu number of fits
  * @param {string} p.fileKey file on the server
  * @param {string} p.color - color is optional, if not specified, one is chosen
  * @param {string} p.title
@@ -806,12 +812,12 @@ export function dispatchChangeHiPS({ plotId, hipsUrlRoot, coordSys, centerProjPt
  * @memberof firefly.action
  */
 export function dispatchPlotMask({plotId,imageOverlayId, maskValue, fileKey,
-                                  imageNumber, maskNumber=-1, color, title,
+                                  hduNumber, maskNumber=-1, color, title,
                                   uiCanAugmentTitle,
                                   relatedDataId, lazyLoad, dispatcher= flux.process}) {
 
     dispatcher( { type: PLOT_MASK, payload: { plotId,imageOverlayId, fileKey, maskValue,
-                                              uiCanAugmentTitle, imageNumber, maskNumber,
+                                              uiCanAugmentTitle, hduNumber, maskNumber,
                                               color, title, relatedDataId, lazyLoad } });
 }
 
@@ -1063,13 +1069,13 @@ const changeActions= convertToIdentityObj([
     STRETCH_CHANGE, RECENTER, OVERLAY_COLOR_LOCKING, POSITION_LOCKING,
     PLOT_PROGRESS_UPDATE, OVERLAY_PLOT_CHANGE_ATTRIBUTES, CHANGE_PRIME_PLOT, CHANGE_CENTER_OF_PROJECTION,
     CHANGE_HIPS, CHANGE_HIPS_IMAGE_CONVERSION, CHANGE_IMAGE_VISIBILITY, BYTE_DATA_REFRESH,
-    REQUEST_LOCAL_DATA,CHANGE_SUBHIGHLIGHT_PLOT_VIEW
+    REQUEST_LOCAL_DATA,CHANGE_SUBHIGHLIGHT_PLOT_VIEW, MARK_OUT_OF_MEMORY,
 ]);
 
 const adminActions= convertToIdentityObj([
     API_TOOLS_VIEW, CHANGE_ACTIVE_PLOT_VIEW, CHANGE_EXPANDED_MODE, CHANGE_MOUSE_READOUT_MODE,
     EXPANDED_AUTO_PLAY, CHANGE_POINT_SELECTION, DELETE_PLOT_VIEW, WCS_MATCH, CHANGE_TABLE_AUTO_SCROLL,
-    USE_TABLE_AUTO_SCROLL
+    USE_TABLE_AUTO_SCROLL,
 ]);
 
 

@@ -7,10 +7,10 @@ import edu.caltech.ipac.firefly.core.Util;
 import edu.caltech.ipac.firefly.core.background.JobManager;
 import edu.caltech.ipac.firefly.server.ServCommand;
 import edu.caltech.ipac.firefly.server.ServerContext;
+import edu.caltech.ipac.firefly.server.db.DuckDbAdapter;
 import edu.caltech.ipac.firefly.server.db.DuckDbReadable;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.table.TableUtil;
-import edu.caltech.ipac.table.io.IpacTableException;
 import edu.caltech.ipac.table.io.IpacTableWriter;
 import edu.caltech.ipac.table.io.RegionTableWriter;
 import edu.caltech.ipac.table.io.VoTableWriter;
@@ -47,7 +47,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_INDEX;
@@ -138,7 +137,9 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
         var locked = GET_DATA_CHECKER.lock(uniqueID);
         try {
             var dbAdapter = getDbAdapter(treq);
-            sendJobUpdate(ji -> ji.getMeta().setProgress(10, "fetching data..."));
+            if (job != null && !job.getWorker().isSelfManaged()) {
+                sendJobUpdate(ji -> ji.getAux().setProgress( new JobInfo.Progress("fetching data...")));
+            }
 
             DataGroupPart results;
             try {
@@ -152,8 +153,7 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
                 results = getResultSet(treq, dbAdapter);
                 int totalRows = results.getRowCount();
                 sendJobUpdate(v -> {
-                    v.getMeta().setProgress(90, "generating results...");
-                    sendJobUpdate(ji -> ji.getMeta().setSummary(String.format("%,d rows found", totalRows)));
+                    sendJobUpdate(ji -> ji.getAux().setProgress( new JobInfo.Progress("%,d rows found".formatted(totalRows))));
                 });
             } catch (Exception e) {
                 // table data exists; but, bad grammar when querying for the resultset.
@@ -164,7 +164,10 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
                     results = EmbeddedDbUtil.toDataGroupPart(dg, treq);
                     String error = dbAdapter.handleSqlExp("", e).getCause().getMessage(); // get the message describing the cause of the exception.
                     results.setErrorMsg(error);
-                    sendJobUpdate(ji -> ji.setError( new JobInfo.Error(500, error)));      // because an error table is returned
+                    sendJobUpdate(ji -> {
+                        ji.setPhase(JobInfo.Phase.ERROR);
+                        ji.setErrorSummary( new JobInfo.ErrorSummary(error));       // because an error table is returned
+                    });
                 } else {
                     throw e;
                 }
@@ -267,7 +270,7 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
             StopWatch.getInstance().stop("fetchDataGroup: " + req.getRequestId()).printLog("fetchDataGroup: " + req.getRequestId());
             if (dg == null) throw new DataAccessException("Failed to retrieve data");
 
-            sendJobUpdate(v -> v.getMeta().setProgress(70, dg.size() + " rows of data found"));
+            sendJobUpdate(v -> v.getAux().setProgress( new JobInfo.Progress(dg.size() + " rows of data found")));
 
             applyExtraMeta(dg, req);
             return dg;
@@ -279,13 +282,17 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
         TableUtil.consumeColumnMeta(dg, null);      // META-INFO in the request should only be pass-along and not persist.
     }
 
-    public File getDataFile(TableServerRequest request) throws IpacTableException, IOException, DataAccessException {
+    public File getDataFile(TableServerRequest request) throws DataAccessException {
         TableServerRequest cr = (TableServerRequest) request.cloneRequest();
         cr.setPageSize(Integer.MAX_VALUE);
         DataGroupPart results = getData(cr);
-        File ipacTable = createTempFile(cr, ".tbl");
-        IpacTableWriter.save(ipacTable, results.getData());
-        return ipacTable;
+        try {
+            File ipacTable = createTempFile(cr, ".tbl");
+            IpacTableWriter.save(ipacTable, results.getData());
+            return ipacTable;
+        } catch (IOException e) {
+            throw new DataAccessException(e);
+        }
     }
 
     public FileInfo writeData(OutputStream out, ServerRequest request, FormatUtil.Format format, TableUtil.Mode mode) throws DataAccessException {
@@ -539,9 +546,13 @@ abstract public class EmbeddedDbProcessor implements SearchProcessor<DataGroupPa
     protected void setJobResults(File... files) {
         if (files == null || files.length == 0) return;
         updateJob(ji -> {
+            ji.setResults(new ArrayList<>());
             Arrays.stream(files)
                     .filter(f -> f != null && f.isFile() && f.canRead())
-                    .forEach(file -> ji.addResult(new JobInfo.Result("result", ServerContext.replaceWithPrefix(file), null, String.valueOf(file.length()))));
+                    .forEach(file -> {
+                        DuckDbAdapter.MimeDesc mimeDesc = FormatUtil.getMimeType(file);
+                        ji.addResult(new JobInfo.Result("result", ServerContext.replaceWithPrefix(file), mimeDesc.mime(), String.valueOf(file.length())));
+                    });
         });
     }
 

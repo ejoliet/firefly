@@ -29,7 +29,7 @@ const simbadThenNed= 'simbadthenned';
 const TargetPanelView = (props) =>{
     const {showHelp, feedback, valid, message, onChange, value, button, slotProps, fieldKey,
         children, resolver, showResolveSourceOp= true, showExample= true,
-        label= LABEL_DEFAULT,
+        label= LABEL_DEFAULT, inputFieldLabel,
         targetPanelExampleRow1, targetPanelExampleRow2,
         connectedMarker=false, placeholderHighlight=true,
         examples, onUnmountCB, sx}= props;
@@ -41,6 +41,7 @@ const TargetPanelView = (props) =>{
 
     const positionField = (
         <InputFieldView {...{valid, visible:true, message,
+            label: inputFieldLabel,
             placeholder:label,
             onChange: (ev) => onChange(ev.target.value, TARGET),
             endDecorator,
@@ -74,6 +75,7 @@ const TargetPanelView = (props) =>{
 
 TargetPanelView.propTypes = {
     label : string,
+    inputFieldLabel: string,
     sx: object,
     valid   : bool.isRequired,
     showHelp   : bool.isRequired,
@@ -247,7 +249,8 @@ function makePayloadAndUpdateActive(displayValue, parseResults, resolvePromise, 
 function replaceValue(v,defaultToActiveTarget, computedState) {
     if (!defaultToActiveTarget) return v;
     if ((computedState.displayValue || computedState.message) && !computedState.valid) return '';
-    if (v?.trim() && v===computedState.value && computedState.valid && isValidPoint(parseWorldPt(v))) return v;
+    if (isString(v)) v= v.trim();
+    if (v && v===computedState.value && computedState.valid && isValidPoint(parseWorldPt(v))) return v;
     return getActiveTarget()?.worldPt?.toString() ?? v;
 }
 

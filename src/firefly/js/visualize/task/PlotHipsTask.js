@@ -265,7 +265,7 @@ async function makeHiPSPlot(rawAction, dispatcher) {
             // console.log('hips plot expired or aborted');
             return;
         }
-        await getGpuJs(getRootURL()); // make sure the GPU code is loaded up front
+        await getGpuJs(); // make sure the GPU code is loaded up front
         createHiPSGridLayer();
         dispatchAddActionWatcher({
             actions:[ImagePlotCntlr.PLOT_HIPS, ImagePlotCntlr.UPDATE_VIEW_SIZE],
@@ -283,12 +283,12 @@ async function makeHiPSPlot(rawAction, dispatcher) {
 
 
 
-export function createHiPSMocLayerFromPreloadedTable({tbl_id,title, fitsPath, mocUrl, plotId, visible=false,
+export function createHiPSMocLayerFromPreloadedTable({tbl_id,title, shortTitle, fitsPath, mocUrl, plotId, visible=false,
                                                          maxFetchDepth, color, mocGroupDefColorId, attachAllPlot=false} ) {
     const table= getTblById(tbl_id);
     if (!table || table.isFetching) return;
     const uniqColName= table.tableData.columns[0].name;
-    const dl = addNewMocLayer({ tbl_id, title, fitsPath, mocUrl, uniqColName,
+    const dl = addNewMocLayer({ tbl_id, title, shortTitle, fitsPath, mocUrl, uniqColName,
         color, tablePreloaded:true,  maxFetchDepth, mocGroupDefColorId });
     if (dl && plotId) {
         dispatchAttachLayerToPlot(dl.drawLayerId, plotId, attachAllPlot, visible, true);
@@ -299,7 +299,9 @@ export function createHiPSMocLayerFromPreloadedTable({tbl_id,title, fitsPath, mo
 
 export async function createHiPSMocLayer({ivoid, title, hipsUrl, plot, visible=false, mocFile = 'Moc.fits',
                                          color, mocGroupDefColorId}) {
-    const mocUrl = (mocFile && isString(mocFile))  ? hipsUrl.endsWith('/') ? hipsUrl + mocFile : hipsUrl+'/'+mocFile : hipsUrl;
+    const mocUrl = (mocFile && isString(mocFile))
+        ? hipsUrl.endsWith('/') ? hipsUrl + mocFile : hipsUrl+'/'+mocFile
+        : hipsUrl;
     const tbl_id = makeMocTableId(ivoid);
     const dls = getDrawLayersByType(getDlAry(), HiPSMOC.TYPE_ID);
 

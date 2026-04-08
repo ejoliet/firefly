@@ -1,38 +1,57 @@
-import {allBandAry, Band} from '../Band.js';
+import BrowserInfo from '../../util/BrowserInfo';
+import {Band} from '../Band.js';
 import {ServerParams} from '../../data/ServerParams.js';
-import {addRawDataToCache, getEntry, removeRawData} from './RawDataThreadCache.js';
+import {getColorModelByGPUType} from './ColorTable';
+import {getGpuJs, getGpuJsImmediate} from './GpuJsConfig';
+import {isAbortedError, makeJobRunningContext} from './JobRunner';
+import {addRawDataToCache, getEntry, getEntryCount, removeRawData} from './RawDataThreadCache.js';
 import PlotState from '../PlotState.js';
 import {RawDataThreadActions} from '../../threadWorker/WorkerThreadActions.js';
-import {lowLevelDoFetch} from '../../util/WebUtil.js';
+import {AJAX_REQUEST, lowLevelDoFetch, REQUEST_WITH} from '../../util/WebUtil.js';
 import {
-    abortFetch, getRealDataDim, getTransferable,
-    makeFetchOptions, populateRawImagePixelDataInWorker, TILE_SIZE } from './RawDataCommon.js';
+    getRealDataDim, getTransferable,
+    populateRawImagePixelDataInWorker, shouldUseGpuInWorker,
+    TILE_SIZE, FULL, HALF, HALF_FULL, QUARTER, QUARTER_HALF, QUARTER_HALF_FULL,
+} from './RawDataCommon.js';
+import {createTileWithGPU} from './RawImageTilesGPU';
 
-const {FETCH_DATA, STRETCH, COLOR, GET_FLUX, REMOVE_RAW_DATA, FETCH_STRETCH_BYTE_DATA, ABORT_FETCH}= RawDataThreadActions;
+const {FETCH_DATA, STRETCH, COLOR, MASK_COLOR, GET_FLUX, REMOVE_RAW_DATA, FETCH_STRETCH_BYTE_DATA, ABORT_FETCH, CLOSE_WHEN_IDLE}= RawDataThreadActions;
+const jobRunner= makeJobRunningContext(3);
 
-
-
-export function doRawDataWork({type,payload}) {
+export async function doRawDataWork({type,payload,sendStatus}) {
+    let scheduleClose= false;
+    if (shouldUseGpuInWorker() && !BrowserInfo.supportsWebGpu() && !getGpuJsImmediate()  && payload.rootUrl) {
+        await getGpuJs(payload.rootUrl); // make sure the GPU code is loaded up front
+    }
     try {
         payload= deserialize(payload);
 
         switch (type) {
             case ABORT_FETCH: return abortFetch(payload);
-            case FETCH_STRETCH_BYTE_DATA: return fetchByteDataArray(payload);
+            case FETCH_STRETCH_BYTE_DATA: return fetchByteDataArray(payload,sendStatus);
             case COLOR: return doColorChange(payload);
+            case MASK_COLOR: return doMaskColorChange(payload);
             case REMOVE_RAW_DATA: {
-                abortFetch(payload);
-                return Promise.resolve({data:{type:REMOVE_RAW_DATA, entryCnt:removeRawData(payload.plotImageId)}});
+                void jobRunner.abortJobs(payload.plotImageId);
+                await deleteByteData(payload.cmdSrvUrl,payload.plotImageId, payload.plotStateSerialized, FULL);
+                return {data:{type:REMOVE_RAW_DATA, entryCnt:removeRawData(payload.plotImageId)}};
+            }
+            case CLOSE_WHEN_IDLE: {
+                if (!scheduleClose) {
+                    scheduleClose=true;
+                    doScheduleClose();
+                }
+                return {data:{success:true, type: RawDataThreadActions.CLOSE_WHEN_IDLE}};
             }
 
             case FETCH_DATA:
             case STRETCH:
             case GET_FLUX:
-                return Promise.resolve({success:false, error:`${type} is disabled`});
+                return {success:false, error:`${type} is disabled`};
         }
     }
     catch (error) {
-        return Promise.resolve({success:false, error});
+        return {success:false, error};
     }
 }
 
@@ -45,14 +64,38 @@ function deserialize(payload) {
 
 
 
+function doScheduleClose() {
+    let idleCnt= 0;
+    const id= setInterval( () => {
+        if (!getEntryCount()) idleCnt++;
+        else idleCnt=0;
+        if (idleCnt===2) {
+           clearInterval(id);
+           self.close();
+        }
+
+    }, 1000);
+}
 
 async function doColorChange(payload) {
-    const {plotImageId,plotState,colorTableId, threeColor, bias, contrast, rootUrl, useRed=true,useGreen=true,useBlue=true} = payload;
+    const {plotImageId,plotState,colorTableId, threeColor, bias, contrast, rootUrl, useRed=true,useGreen=true,useBlue=true,nanPixelColor} = payload;
     const bandUse= {useRed,useGreen,useBlue};
-    const result= await changeLocalRawDataColor(plotImageId,colorTableId,threeColor, bias, contrast, bandUse, plotState,rootUrl);
+    const result= await changeLocalRawDataColor(plotImageId,colorTableId,threeColor, bias, contrast, bandUse, plotState,rootUrl,nanPixelColor);
     return {data:{...result, type:COLOR, transferable: getTransferable(result)}};
 }
 
+async function doMaskColorChange(payload) {
+    const {plotImageId,plotState,maskColor, rootUrl,} = payload;
+    const entry = getEntry(plotImageId);
+    const newPlotState = plotState.copy();
+
+    const {retRawTileDataGroup, localRawTileDataGroup}=
+        await populateRawImagePixelDataInWorker({rawTileDataGroup:entry.rawTileDataGroup, mask:true, maskColor,rootUrl});
+    entry.rawTileDataGroup= localRawTileDataGroup;
+
+    const result=  {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized: newPlotState.toJson(true)};
+    return {data:{...result, type:MASK_COLOR, transferable: getTransferable(result)}};
+}
 
 function convertToBits(ary) {
     const retAry= new Uint8ClampedArray(Math.trunc(ary.length/8)+1);
@@ -65,59 +108,41 @@ function convertToBits(ary) {
     return retAry;
 }
 
-async function fetchByteDataArray(payload) {
-    const {plotImageId,plotStateSerialized, plotState, processHeader, dataWidth, dataHeight,
-        bias, contrast, cmdSrvUrl, rootUrl, mask= false, maskBits=0, maskColor='',
-        veryLargeData= false, dataCompress='FULL', colorTableId} = payload;
+/**
+ * @param {StretchWorkerActionPayload} payload
+ * @param {Function} sendStatus
+ */
+async function fetchByteDataArray(payload,sendStatus) {
+    const {plotImageId,plotStateSerialized, processHeader, dataWidth, dataHeight,
+        dataCompress=FULL, colorTableId, nanPixelColor} = payload;
 
     try {
-        // const start= Date.now();
-        const callResults= await callStretchedByteData(plotImageId, plotStateSerialized, plotState,
-            dataWidth,dataHeight, mask, maskBits, cmdSrvUrl, dataCompress, veryLargeData);
+        const callResults= await callStretchedByteData(payload,sendStatus);
         if (!callResults.success) {
-            return {data:{success:false, type: FETCH_STRETCH_BYTE_DATA, fatal: true, message: callResults.message}};
+            return {data:{success:false, aborted: Boolean(callResults.aborted),
+                    type: FETCH_STRETCH_BYTE_DATA, fatal: true, message: callResults.message,
+                    status: callResults.status,
+            }};
         }
 
-        const {allTileAry}= callResults;
-        const rawTileDataGroup= createRawTileDataGroup(dataWidth,dataHeight, dataCompress);
-        if (plotState.isThreeColor()) {
-            let rt;
-            let tileIdx=0;
-            for(let i=0; (i<rawTileDataGroup.rawTileDataAry.length); i++) {
-                rt= rawTileDataGroup.rawTileDataAry[i];
-                rt.pixelData3C= [];
-                allBandAry.forEach( (b) => {
-                    if (plotState.isBandUsed(b)) {
-                        rt.pixelData3C[b.value]= allTileAry[tileIdx];
-                        tileIdx++;
-                    }
-                    else {
-                        rt.pixelData3C[b.value]= new Uint8ClampedArray(dataWidth*dataHeight);
-                        rt.pixelData3C[b.value].fill(0);
-                    }
-                });
-            }
-        }
-        else {
-            rawTileDataGroup.rawTileDataAry.forEach( (rt,idx) =>
-                rt.pixelDataStandard= mask? convertToBits(allTileAry[idx]) : allTileAry[idx]);
-        }
+        const {tileResultsAry}= callResults;
+        const rawTileDataGroup= createRawTileDataGroupStandardPopulated(dataWidth,dataHeight, dataCompress,
+                                                        colorTableId, nanPixelColor, tileResultsAry);
         let entry= getEntry(plotImageId);
         if (!entry) {
             addRawDataToCache(plotImageId,undefined,undefined,undefined,processHeader);
             entry= getEntry(plotImageId);
         }
-        const {retRawTileDataGroup, localRawTileDataGroup}=
-                await populateRawImagePixelDataInWorker(rawTileDataGroup, colorTableId, plotState.isThreeColor(),
-                                                        mask, maskColor, bias, contrast, {}, rootUrl);
-        entry.rawTileDataGroup= localRawTileDataGroup;
+        const retRawTileDataGroup = {...rawTileDataGroup};
+        if (!shouldUseGpuInWorker()) {
+            retRawTileDataGroup.rawTileDataAry= retRawTileDataGroup.rawTileDataAry.map((rt) =>
+                        ({ ...rt, pixelData3C: undefined, pixelDataStandard: undefined, }));
+        }
 
+        entry.rawTileDataGroup= rawTileDataGroup;
+        entry.rawTileDataGroup.rawTileDataAry = rawTileDataGroup.rawTileDataAry.map((rt) =>
+                        ({ ...rt, workerBitMapTile:undefined, }));
 
-        // logging code - uncomment to log
-        // const elapse= Date.now()-start;
-        // const totalLen= allTileAry.reduce((total,tile) => total+tile.length, 0);
-        // const mbPerSec= (totalLen/MEG) / (elapse/1000);
-        // console.debug(`${plotImageId}: ${getSizeAsString(totalLen)}, ${elapse} ms, MB/Sec: ${mbPerSec}`);
         const result= {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized, type: FETCH_STRETCH_BYTE_DATA};
         const transferable= getTransferable(result);
         return {data:result, transferable};
@@ -129,13 +154,18 @@ async function fetchByteDataArray(payload) {
     }
 }
 
-function getCompressParam(dataCompress, veryLargeData) {
+export async function abortFetch({plotImageId}) {
+    jobRunner.abortJobs(plotImageId);
+    return {data:{success:true, type: RawDataThreadActions.ABORT_FETCH}};
+}
+
+function getCompressParam(dataCompress, veryLargeData=false) {
     switch (dataCompress) {
-        case 'FULL': return 'FULL';
-        case 'HALF': return dataCompress= veryLargeData ? 'HALF' : 'HALF_FULL';
-        case 'QUARTER': return dataCompress= veryLargeData ? 'QUARTER_HALF' : 'QUARTER_HALF_FULL';
+        case FULL: return FULL;
+        case HALF: return dataCompress===veryLargeData ? HALF : HALF_FULL;
+        case QUARTER: return dataCompress===veryLargeData ? QUARTER_HALF : QUARTER_HALF_FULL;
     }
-    return 'FULL';
+    return FULL;
 }
 
 /**
@@ -146,72 +176,171 @@ function getCompressParam(dataCompress, veryLargeData) {
  */
 
 /**
- *
- * @param {String} plotImageId
- * @param plotStateSerialized
- * @param plotState
- * @param {number} dataWidth
- * @param {number} dataHeight
- * @param {boolean} mask
- * @param {number} maskBits
- * @param {String} cmdSrvUrl
- * @param {String} dataCompress - should be 'FULL' or 'HALF' or 'QUARTER'
- * @param {boolean} veryLargeData - if true and dataCompress is 'QUARTER' never request full size
+ * @param {StretchWorkerActionPayload} payload
+ * @param {Function} sendStatus
  * @return {Promise<StretchByteDataResults>}
  */
-export async function callStretchedByteData(plotImageId,plotStateSerialized,plotState, dataWidth,dataHeight,
-                                            mask,maskBits,cmdSrvUrl, dataCompress= 'FULL', veryLargeData= false) {
+export async function callStretchedByteData(payload,sendStatus ) {
 
-    const options=  makeFetchOptions(plotImageId, {
-        [ServerParams.COMMAND]: ServerParams.GET_BYTE_DATA,
-        [ServerParams.TILE_SIZE] : TILE_SIZE,
-        [ServerParams.STATE] : plotStateSerialized,
-        [ServerParams.MASK_DATA] : mask,
-        [ServerParams.MASK_BITS] : maskBits,
-        [ServerParams.DATA_COMPRESS] : getCompressParam(dataCompress, veryLargeData)
-    });
+    const {plotImageId,plotStateSerialized,plotState, dataWidth,dataHeight,
+        nanPixelColor,colorTableId, mask=false,maskBits,cmdSrvUrl:url, dataCompress= 'FULL'}= payload;
 
-    if (dataCompress!=='FULL' && dataCompress!=='HALF' && dataCompress!=='QUARTER') throw(new Error('dataCompress must be FULL or HALF or QUARTER'));
+    const colorModel= !mask && !plotState.isThreeColor() && getColorModelByGPUType(colorTableId,nanPixelColor);
+    const ct= getCompressParam(dataCompress, payload.veryLargeData);
+    const {options}=  makeFetchOptions(plotImageId,
+        {
+            ...getBaseByteDataParams(plotStateSerialized,'create',ct),
+            [ServerParams.MASK_DATA] : mask,
+            [ServerParams.MASK_BITS] : maskBits,
+            [ServerParams.TILE_SIZE] : TILE_SIZE,
+        },
+        'create');
 
-    const response= await lowLevelDoFetch(cmdSrvUrl, options, false );
+    if (dataCompress!==FULL && dataCompress!==HALF && dataCompress!==QUARTER) throw(new Error('dataCompress must be FULL or HALF or QUARTER'));
+
+    const response= await lowLevelDoFetch(url, options, false );
     if (!response.ok) {
-        return {
-            success:false,
-            message: `Fatal: Error from Server for getStretchedByteData: code: ${response.status}, text: ${response.statusText}`,
-            allTileAry:[]
-        };
+        const message= `Fatal: Error from Server for getStretchedByteData: code: ${response.status}, text: ${response.statusText}`;
+        console.log('callStretchedByteData: '+message);
+        return { success:false, message, allTileAry:[] };
     }
-    const byte1d= new Uint8ClampedArray(await response.arrayBuffer());
-    if (!byte1d.length) {
-        return {
-            success:false,
-            message: 'Fatal: No data returned from getStretchedByteData',
-            allTileAry:[]
-        };
+    else {
+        const results= await response.json();
+        if (!results[0]?.data?.tileCount) {
+            const message= 'callStretchedByteData: error no tiles created';
+            console.log(message);
+            return { success:false, message, allTileAry:[] };
+        }
     }
 
     const {tileSize,xPanels,yPanels, realDataWidth, realDataHeight} =  getRealDataDim(dataCompress,dataWidth,dataHeight);
 
-    let pos= 0;
-    let idx=0;
-    const allTileAry= [];
-    const colorCnt= plotState.isThreeColor() ? plotState.getBands().length : 1;
+    let tileNumber=0;
+
+    const promiseAry= [];
+    let totalTiles=0;
+    let processedTiles=0;
+
+    const incUpdateCnt= async () => {
+        processedTiles++;
+        if ((processedTiles % 4)===0 && totalTiles) {
+            sendStatus(`${processedTiles} of ${totalTiles}`);
+        }
+    };
+
+
     for(let i= 0; i<xPanels; i++) {
         for (let j = 0; j < yPanels; j++) {
-            for(let bandIdx=0; (bandIdx<colorCnt); bandIdx++) {
-                const width = (i < xPanels - 1) ? tileSize : ((realDataWidth - 1) % tileSize + 1);
-                const height = (j < yPanels - 1) ? tileSize : ((realDataHeight - 1) % tileSize + 1);
-                const len= width*height;
-                allTileAry[idx]= byte1d.slice(pos,pos+len);
-                idx++;
-                pos+=len;
-            }
+            const width = (i < xPanels - 1) ? tileSize : ((realDataWidth - 1) % tileSize + 1);
+            const height = (j < yPanels - 1) ? tileSize : ((realDataHeight - 1) % tileSize + 1);
+            promiseAry.push(getATile({tileNumber, colorModel,width,height,payload,incUpdateCnt}));
+            tileNumber++;
         }
     }
-    return {success: true, message:'', allTileAry};
+
+    totalTiles= promiseAry.length;
+
+    const results= await Promise.allSettled(promiseAry);
+    sendStatus('');
+    const tileResultsAry= results.map( (r) => r.value);
+    const success= !tileResultsAry.some( (r) => Boolean(r?.error || !r));
+    const firstErrStat= !success ? tileResultsAry.find( (r) => r.error || !r)?.status : 200;
+    const aborted= success ? false : tileResultsAry.some( (r) => r?.aborted);
+    if (success || !aborted) deleteByteData(url,plotImageId, plotStateSerialized, ct); // don't clean up if aborted since it will probably be overridden anyway, avoids a race condition
+    return success
+        ? {success, message:'', tileResultsAry}
+        : {success, message:'tile retrieve failed,', tileResultsAry:[], aborted, status: firstErrStat};
+}
+
+function deleteByteData(url, plotImageId, plotStateSerialized, ct) {
+    const {options}= makeFetchOptions(plotImageId, getBaseByteDataParams(plotStateSerialized,'delete',ct),undefined);
+    void lowLevelDoFetch(url, options, false );
+}
+
+/**
+ * Retrieve and process the tile
+ * @param obj
+ * @param obj.tileNumber
+ * @param obj.colorModel
+ * @param obj.width
+ * @param obj.height
+ * @param obj.payload
+ * @param obj.incUpdateCnt
+ * @return {Promise<{pixelDataStandard: ArrayBuffer, workerBitMapTile: HTMLCanvasElement|OffscreenCanvas|ImageBitmap}>}
+ */
+async function getATile({tileNumber, colorModel, width, height, payload,incUpdateCnt}) {
+    const {cmdSrvUrl:url, plotImageId, plotState, plotStateSerialized, mask, maskColor, bias=.5, contrast=1,
+        dataCompress, veryLargeData}= payload;
+    const isThreeColor = plotState.isThreeColor();
+    const doBitmap= shouldUseGpuInWorker();
+    const ct= getCompressParam(dataCompress, veryLargeData);
+    const params= { ...getBaseByteDataParams(plotStateSerialized,'getTile',ct), [ServerParams.TILE_NUMBER]: tileNumber+''};
+
+    const signalId= 'tile'+tileNumber;
+
+    try {
+        if (isThreeColor) {
+            const bandUse= {useRed:plotState.isBandUsed(Band.RED),useGreen:plotState.isBandUsed(Band.RED),useBlue:plotState.isBandUsed(Band.RED)};
+            const pixelData3C=[undefined,undefined,undefined];
+            const bandAry= plotState.getBands();
+            const threeCPromises= [];
+            for(let i=0; (i<bandAry.length); i++){
+                const bandStr= bandAry[i].toString();
+                const {options,abortController}= makeFetchOptions(plotImageId, { ...params, [ServerParams.BAND]: bandStr},signalId+bandStr);
+                threeCPromises.push(fetchTileDataInQueue(url,options,signalId+bandStr,plotImageId, abortController));
+            }
+            for(let i=0; (i<bandAry.length); i++){
+                const response= await threeCPromises[i];
+                if (!response || response.error) return response ?? {error:true};
+                pixelData3C[bandAry[i].value]= response.array;
+            }
+            const inData= {width,height, pixelData3C, pixelDataStandard:undefined};
+            const workerBitMapTile= doBitmap
+                ? await createTileWithGPU(inData, colorModel, mask, maskColor, bias, contrast, bandUse)
+                : undefined;
+            incUpdateCnt?.();
+            return {pixelDataStandard:undefined, pixelData3C, workerBitMapTile};
+        }
+        else {
+            const {options,abortController}= makeFetchOptions(plotImageId, params,signalId);
+            const response= await fetchTileDataInQueue(url,options,signalId, plotImageId, abortController);
+            if (!response || response.error) return response ?? {error:true};
+            const responseAry= response.array;
+            const pixelDataStandard= mask ? convertToBits(responseAry) : responseAry;
+            const inData= {width,height, pixelData3C:undefined, pixelDataStandard};
+            const workerBitMapTile= doBitmap
+                ? await createTileWithGPU(inData, colorModel, mask, maskColor, bias, contrast, undefined)
+                : undefined;
+            incUpdateCnt?.();
+            return {pixelDataStandard, workerBitMapTile};
+        }
+    } catch (error) {
+        console.error(error);
+        return {error, aborted:isAbortedError(error)};
+    }
+}
+
+async function fetchTileData(url, options) {
+    const response= await lowLevelDoFetch(url, options, false);
+    if (!response.ok) return {error: true, status:response.status, statusText:response.statusText};
+    const responseBuffer= await response.arrayBuffer();
+    if (!responseBuffer) return {error:true};
+    return {ok:true, array: new Uint8ClampedArray(responseBuffer)};
+}
+
+async function fetchTileDataInQueue(url, options, signalId, plotImageId, abortController) {
+    return jobRunner.createJobPromise(() => fetchTileData(url, options),plotImageId, abortController);
 }
 
 
+function getBaseByteDataParams(plotStateSerialized,tileAction,ct) {
+    return {
+        [ServerParams.COMMAND]: ServerParams.GET_BYTE_DATA,
+        [ServerParams.STATE] : plotStateSerialized,
+        [ServerParams.TILE_ACTION]: tileAction,
+        [ServerParams.DATA_COMPRESS] : ct,
+    };
+}
 
 
 /**
@@ -226,16 +355,17 @@ export async function callStretchedByteData(plotImageId,plotStateSerialized,plot
  * @param {boolean} bandUse
  * @param {PlotState} plotState
  * @param {string} rootUrl
+ * @param  nanPixelColor
  * @return {Object}
  */
-async function changeLocalRawDataColor(plotImageId, colorTableId, threeColor, bias, contrast, bandUse, plotState, rootUrl) {
+async function changeLocalRawDataColor(plotImageId, colorTableId, threeColor, bias, contrast, bandUse, plotState, rootUrl,nanPixelColor) {
     const entry = getEntry(plotImageId);
     const bandEntry=entry?.[Band.NO_BAND.key];
     if (!bandEntry) return;
     const newPlotState = plotState.copy();
     const {retRawTileDataGroup, localRawTileDataGroup}=
-        await populateRawImagePixelDataInWorker(entry.rawTileDataGroup, colorTableId, threeColor, false, '',
-            bias, contrast, bandUse, rootUrl);
+        await populateRawImagePixelDataInWorker({rawTileDataGroup:entry.rawTileDataGroup, colorTableId, threeColor,
+            bias, contrast, bandUse, rootUrl,nanPixelColor});
     entry.rawTileDataGroup= localRawTileDataGroup;
     return {rawTileDataGroup:retRawTileDataGroup, plotStateSerialized: newPlotState.toJson(true)};
 }
@@ -243,6 +373,18 @@ async function changeLocalRawDataColor(plotImageId, colorTableId, threeColor, bi
 
 
 
+export function createRawTileDataGroupStandardPopulated(dataWidth,dataHeight, dataCompress,
+                                                colorTableId, nanPixelColor, tileResultsAry) {
+    const rawTileDataGroup= createRawTileDataGroup(dataWidth,dataHeight, dataCompress, undefined);
+    rawTileDataGroup.colorTableid= colorTableId;
+    rawTileDataGroup.nanPixelColor = nanPixelColor;
+    rawTileDataGroup.rawTileDataAry.forEach( (entry,i) =>{
+        entry.pixelDataStandard= tileResultsAry[i].pixelDataStandard;
+        entry.pixelData3C= tileResultsAry[i].pixelData3C;
+        entry.workerBitMapTile= tileResultsAry[i].workerBitMapTile;
+    });
+    return rawTileDataGroup;
+}
 
 
 
@@ -254,20 +396,18 @@ async function changeLocalRawDataColor(plotImageId, colorTableId, threeColor, bi
  * @param rgbIntensity
  * @return {RawTileData}
  */
-export function createRawTileDataGroup(dataWidth,dataHeight, dataCompress='FULL', rgbIntensity) {
+export function createRawTileDataGroup(dataWidth,dataHeight, dataCompress=FULL, rgbIntensity) {
     const {tileSize,xPanels,yPanels, realDataWidth, realDataHeight} =  getRealDataDim(dataCompress,dataWidth,dataHeight);
     const rawTileDataAry= [];
-    // const yIndexes= [];
 
     for(let i= 0; i<xPanels; i++) {
         for(let j= 0; j<yPanels; j++) {
             const width= (i<xPanels-1) ? tileSize : ((realDataWidth-1) % tileSize + 1);
             const height= (j<yPanels-1) ? tileSize : ((realDataHeight-1) % tileSize + 1);
             rawTileDataAry.push(createImageTileData(tileSize*i,tileSize*j,width,height));
-            // if (i===0) yIndexes.push(tileSize*j);
         }
     }
-    return {rawTileDataAry, dataCompress, rgbIntensity};
+    return {rawTileDataAry, dataCompress, rgbIntensity, nanPixelColor:[0,0,0]};
 }
 
 
@@ -287,11 +427,25 @@ export function createImageTileData(x,y,width,height) {
         lastLine: y +height -1,
         pixelDataStandard: undefined,
         pixelData3C: undefined,
-        workerTmpTile: undefined,
+        workerBitMapTile: undefined,
         imageMasks: undefined,
         rawImageTile: undefined,
     };
 }
 
-
-
+export function makeFetchOptions(plotImageId, params, signalId) {
+    const options= {
+        method: 'post',
+        mode: 'cors',
+        credentials: 'include',
+        cache: 'default',
+        params,
+        headers: {
+            [REQUEST_WITH]: AJAX_REQUEST,
+        }
+    };
+    if (!signalId) return {options};
+    const ac= globalThis.AbortController && new AbortController();
+    if (ac) options.signal= ac.signal;
+    return {options, abortController:ac};
+}

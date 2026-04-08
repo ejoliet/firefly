@@ -28,7 +28,7 @@ import BrowserInfo from '../util/BrowserInfo.js';
 import {
     visRoot, ActionScope, dispatchPlotProgressUpdate, dispatchZoom, dispatchRecenter, dispatchProcessScroll,
     dispatchChangeCenterOfProjection, dispatchChangeActivePlotView,
-    dispatchUpdateViewSize, dispatchRequestLocalData, MOUSE_CLICK_REASON, ExpandType
+    dispatchUpdateViewSize, dispatchRequestLocalData, MOUSE_CLICK_REASON, ExpandType, dispatchMarkOutOfMemory
 } from './ImagePlotCntlr.js';
 import {fireMouseCtxChange, makeMouseStatePayload, MouseState} from './VisMouseSync.js';
 import {isHiPS, isHiPSAitoff, isImage} from './WebPlot.js';
@@ -53,9 +53,6 @@ export const ImageViewerLayout= memo(({ plotView, drawLayersAry, width, height, 
     const plot= primePlot(plotView);
     const hasPlot= Boolean(plot);
     const plotShowing= Boolean(viewDim.width && viewDim.height && plot && !plotView.nonRecoverableFail);
-    const onScreen= !plotShowing || isImageOnScreen(plotView);
-    const sizeViewable= !plotShowing || isImageSizeViewable(plotView);
-    const loadingRawData= plotShowing && isImage(plot) && !plot?.tileData && !hasLocalStretchByteData(plot);
 
     useEffect(() => {
         if (width && height) {
@@ -94,7 +91,7 @@ export const ImageViewerLayout= memo(({ plotView, drawLayersAry, width, height, 
     const eventCB= (eventPlotId,mouseState,screenPt,screenX,screenY,nativeEv) => {
         const {DOWN,MOVE}= MouseState;
         const shiftDown= nativeEv.shiftKey;
-        const mouseStatePayload= makeMouseStatePayload(eventPlotId,mouseState,screenPt,screenX,screenY, {shiftDown});
+        const mouseStatePayload= makeMouseStatePayload(eventPlotId,mouseState,screenPt,screenX,screenY, nativeEv.type, {shiftDown});
         const list= drawLayersAry.filter(
             (dl) => dl.visiblePlotIdAry.includes(plotId) && dl.mouseEventMap?.[mouseState.key] );
 
@@ -105,6 +102,11 @@ export const ImageViewerLayout= memo(({ plotView, drawLayersAry, width, height, 
         else if (isWheel(mouseState)) {
             if (!isActivePlotView(visRoot(),eventPlotId) && isWheelRequireImageActive(eventPlotId)) return;
             handleScrollWheelEvent(plotView,mouseState,screenPt,nativeEv);
+            return;
+        }
+        else if (isPinch(mouseState)) {
+            if (!isActivePlotView(visRoot(),eventPlotId)) return;
+            handlePinchEvent(plotView,mouseState,screenPt,nativeEv);
             return;
         }
         else {
@@ -131,7 +133,7 @@ export const ImageViewerLayout= memo(({ plotView, drawLayersAry, width, height, 
     return (
         <div className='web-plot-view-scr' style={rootStyle}>
             <ImageViewerContents {...{drawLayersAry,plotView,eventCallback:eventCB,cursor,plotShowing}}/>
-            <MessageArea {...{pv:plotView,plotShowing,onScreen,sizeViewable,loadingRawData}}/>
+            <MessageArea {...{pv:plotView,plotShowing}}/>
         </div>
     );
 
@@ -143,6 +145,7 @@ const draggingOrReleasing = (ms) => ms===MouseState.DRAG || ms===MouseState.DRAG
     ms===MouseState.UP || ms===MouseState.EXIT || ms===MouseState.ENTER;
 
 const isWheel= (mouseState) => mouseState===MouseState.WHEEL_DOWN || mouseState===MouseState.WHEEL_UP;
+const isPinch= (mouseState) => mouseState===MouseState.PINCH_IN || mouseState===MouseState.PINCH_OUT;
 
 const zoomThrottle= throttle( (params) => {
     dispatchZoom(params);
@@ -165,7 +168,7 @@ function isWheelRequireImageActive(plotId) {
     }
     else {
         const viewerId= findViewerWithItemId(mvRoot, plotId, IMAGE);
-        return getViewer(mvRoot, viewerId)?.scroll ?? false
+        return getViewer(mvRoot, viewerId)?.scroll ?? false;
     }
 }
 
@@ -312,14 +315,32 @@ function makeScroll() {
 }
 
 
+function handlePinchEvent(plotView, mouseState, screenPt, nativeEv) {
+    if (!plotView) return;
+    const userZoomType= mouseState===MouseState.PINCH_OUT ? UserZoomTypes.UP : UserZoomTypes.DOWN;
+    const plot= primePlot(plotView) ?? {};
+    const devicePt= CCUtil.getDeviceCoords(plot,screenPt);
+    const {screenSize:{width,height}}= plot;
+    if (mouseState===MouseState.PINCH_IN && width<100 && height<100) return;
+    dispatchZoom(
+        {
+            plotId:plotView.plotId,
+            userZoomType,
+            devicePt,
+            upDownPercent:Math.abs(nativeEv.wheelDeltaY)%120===0?1:  isHiPS(plot)? .2 : .4
+        } );
+
+}
+
 function makeHandleScrollWheelEvent() {
     let mouseWheelDevicePt= undefined;
     let mouseWheelTimeoutId= undefined;
 
     const handleScrollWheelEvent= (plotView, mouseState, screenPt, nativeEv) => {
 
+        const plot= primePlot(plotView) ?? {};
         if (!mouseWheelDevicePt) {
-            mouseWheelDevicePt= CCUtil.getDeviceCoords(primePlot(plotView),screenPt);
+            mouseWheelDevicePt= CCUtil.getDeviceCoords(plot,screenPt);
             mouseWheelTimeoutId= setTimeout(() => {
                 mouseWheelDevicePt= undefined;
             }, 200);
@@ -333,7 +354,6 @@ function makeHandleScrollWheelEvent() {
 
         const userZoomType= mouseState===MouseState.WHEEL_DOWN ? UserZoomTypes.UP : UserZoomTypes.DOWN;
         nativeEv.preventDefault();
-        const plot= primePlot(plotView) ?? {};
         const {screenSize}= plot;
         const {viewDim}= plotView ?? {};
         const smallImage=
@@ -416,6 +436,7 @@ function isImageSizeViewable(plotView) {
 /**
  *
  * @param {PlotView} pv
+ * @param colorMode
  * @return {Array}
  */
 function makeTileDrawers(pv, colorMode) {
@@ -461,11 +482,15 @@ function sizeChange(previousDim,width,height,viewDim) {
 }
 
 
-function MessageArea({pv,plotShowing,onScreen, sizeViewable, loadingRawData}) {
+function MessageArea({pv,plotShowing}) {
+    const plot= primePlot(pv);
+    const loadingRawData= plotShowing && isImage(plot) && !plot?.tileData && !hasLocalStretchByteData(plot);
+    const sizeViewable= !plotShowing || isImageSizeViewable(pv);
+    const onScreen= !plotShowing || isImageOnScreen(pv);
     if (pv.serverCall==='success' && !pv.nonRecoverableFail) {
         if (loadingRawData) {
             return (
-                <ImageViewerStatus message={'Loading Image Rendering'} working={true}
+                <ImageViewerStatus message={`Loading Image Rendering${pv.plottingStatusMsg?': ':''}${pv.plottingStatusMsg}`} working={true}
                                    maskWaitTimeMS= {500} messageWaitTimeMS={1000} useMessageAlpha={plotShowing}/>
             );
         }
@@ -485,6 +510,16 @@ function MessageArea({pv,plotShowing,onScreen, sizeViewable, loadingRawData}) {
                                    useMessageAlpha={false} buttonText='Zoom To Fit'
                                    buttonCB={() => dispatchZoom({plotId:pv.plotId, userZoomType:UserZoomTypes.FIT}) }/>
             );
+        }
+        else if (pv.plotViewCtx.markOutOfMemory) {
+            return (
+                <ImageViewerStatus message={'Last action failed: Image out of memory'} working={false} top={2}
+                                   useMessageAlpha={true} buttonText='OK'
+                                   buttonCB={() => {
+                                       dispatchChangeActivePlotView(pv.plotId);
+                                       setTimeout(() => dispatchMarkOutOfMemory({plotId:pv.plotId, markOutOfMemory:false}));
+                                   } } />
+                );
         }
         else {
             return false;

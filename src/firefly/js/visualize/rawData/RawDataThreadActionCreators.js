@@ -4,15 +4,17 @@ import {isThreeColor} from '../PlotViewUtil.js';
 
 /**
  *
- * @param {WebPlot} plot
- * @param colorTableId
- * @param {number} bias
- * @param {number} contrast
- * @param bandUse
- * @param {String} workerKey
+ * @param {Object} obj
+ * @param {WebPlot} obj.plot
+ * @param obj.colorTableId
+ * @param {number} obj.bias
+ * @param {number} obj.contrast
+ * @param obj.bandUse
+ * @param {Array.<number>} obj.nanPixelColor
+ * @param {String} obj.workerKey
  * @return {WorkerAction}
  */
-export function makeColorAction(plot, colorTableId, bias, contrast, bandUse, workerKey) {
+export function makeColorAction({plot, colorTableId, bias, contrast, bandUse, nanPixelColor, workerKey}) {
     const {plotImageId, plotState} = plot;
     return {
         type: RawDataThreadActions.COLOR,
@@ -22,6 +24,7 @@ export function makeColorAction(plot, colorTableId, bias, contrast, bandUse, wor
             colorTableId,
             bias,
             contrast,
+            nanPixelColor,
             ...bandUse,
             plotStateSerialized: plotState.toJson(true),
             threeColor: isThreeColor(plot),
@@ -29,6 +32,26 @@ export function makeColorAction(plot, colorTableId, bias, contrast, bandUse, wor
         }
     };
 }
+
+
+/**
+ * change mask color
+ * @param obj
+ * @param obj.plot
+ * @param obj.maskColor
+ * @param obj.workerKey
+ * @return {WorkerAction}
+ */
+export function makeMaskColorAction({plot, maskColor, workerKey}) {
+    const {plotImageId, plotState} = plot;
+    return {
+        type: RawDataThreadActions.MASK_COLOR,
+        workerKey,
+        payload: { plotImageId, maskColor, plotStateSerialized: plotState.toJson(true), rootUrl: getRootURL() }
+    };
+}
+
+
 
 /**
  *
@@ -44,6 +67,25 @@ export function makeAbortFetchAction(plotImageId, workerKey) {
     };
 }
 
+/**
+ * @typedef {Object} StretchWorkerActionPayload
+ * @prop {String} plotImageId
+ * @prop {String} dataCompress
+ * @prop {boolean} veryLargeData
+ * @prop {boolean} mask
+ * @prop {number} maskBits
+ * @prop {String} maskColor
+ * @prop {number} dataWidth
+ * @prop {number} dataHeight
+ * @prop {String} plotStateSerialized
+ * @prop {Object} processHeader
+ * @prop {String} colorTableId
+ * @prop {number} bias
+ * @prop {number} contrast
+ * @prop {String} nanPixelColor
+ */
+
+
 
 /**
  *
@@ -58,17 +100,18 @@ export function makeAbortFetchAction(plotImageId, workerKey) {
  * @return {WorkerAction}
  */
 export function makeRetrieveStretchByteDataAction(plot, plotState, maskOptions, dataCompress, veryLargeData, workerKey) {
-    const {plotImageId, colorTableId} = plot;
+    const {plotImageId, colorTableId, plotId} = plot;
     const b = plot.plotState.firstBand();
     const {processHeader} = plot.rawData.bandData[b.value];
     const cleanProcessHeader = {...processHeader, imageCoordSys: processHeader.imageCoordSys.toString()};
     const threeColor = isThreeColor(plot);
-    const {bias,contrast}= plot.rawData.bandData[0];
+    const {bias,contrast,nanPixelColor}= plot.rawData.bandData[0];
     const mask= Boolean(maskOptions);
     return {
         type: RawDataThreadActions.FETCH_STRETCH_BYTE_DATA,
         workerKey,
         payload: {
+            plotId,
             plotImageId,
             dataCompress,
             veryLargeData,
@@ -82,6 +125,7 @@ export function makeRetrieveStretchByteDataAction(plot, plotState, maskOptions, 
             colorTableId,
             bias,
             contrast,
+            nanPixelColor,
             // cmdSrvUrl: getCmdSrvNoZipURL(),
             cmdSrvUrl: getCmdSrvSyncURL(),
             threeColor,

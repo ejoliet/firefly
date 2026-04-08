@@ -22,11 +22,12 @@ export const obsPrefix = 'obscore:';
 export const ColNameIdx = 0;
 export const UtypeColIdx = 2;
 
-export const SERVICE_DESC_COL_NAMES = ['id', ACCESS_URL, SERVICE_DEF, ERROR_MESSAGE, SEMANTICS,
+export const DATALINK_COL_NAMES = ['id', ACCESS_URL, SERVICE_DEF, ERROR_MESSAGE, SEMANTICS,
     DESCRIPTION, CONTENT_TYPE, CONTENT_LENGTH];
 
 export const adhocServiceUtype = 'adhoc:service';
 export const cisxAdhocServiceUtype = 'cisx:adhoc:service';
+export const ipacMultiSpectrum = 'ipac:MultiSpectrum-service';
 export const standardIDs = {
     tap: 'ivo://ivoa.net/std/tap',
     sia: 'ivo://ivoa.net/std/sia',

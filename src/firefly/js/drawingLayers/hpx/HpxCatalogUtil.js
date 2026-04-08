@@ -1,5 +1,5 @@
 import pointInPolygon from 'point-in-polygon';
-import {dispatchAddTaskCount, dispatchRemoveTaskCount} from '../../core/AppDataCntlr';
+import {dispatchAddWorkingTask} from '../../core/AppDataCntlr';
 import {FilterInfo} from '../../tables/FilterInfo';
 import {
     DATA_NORDER, ensureDataForSelection, getAllWptsIdxsForTile, getHpxIndexData, getValuesForOrder, HPX_WORKING_KEY,
@@ -9,13 +9,14 @@ import {dispatchTableFilter, dispatchTableSelect} from '../../tables/TablesCntlr
 import {getTblById} from '../../tables/TableUtil';
 import {showInfoPopup} from '../../ui/PopupUtil';
 import BrowserInfo from '../../util/BrowserInfo';
+import {callWhileAwaiting} from '../../util/WebUtil';
 import CoordSys from '../../visualize/CoordSys';
 import CysConverter from '../../visualize/CsysConverter';
 import {dlRoot} from '../../visualize/DrawLayerCntlr';
 import {getCatalogNorderlevel, getCornersForCell} from '../../visualize/HiPSUtil';
 import {PlotAttribute} from '../../visualize/PlotAttribute';
 import {DEFAULT_COVERAGE_PLOT_ID, getAllDrawLayersForPlot, primePlot} from '../../visualize/PlotViewUtil';
-import {detachSelectArea} from '../../visualize/ui/SelectAreaDropDownView';
+import {detachSelectArea} from '../../visualize/ui/SelectAreaUIComponents';
 import {contains, containsEllipse} from '../../visualize/VisUtil';
 import SelectArea from '../SelectArea';
 import {SelectedShape} from '../SelectedShape';
@@ -45,7 +46,7 @@ export const DEFAULT_HEATMAP_LABELS= true;
 export function getHeatMapGridSize() {
     const HPX_GRID_SIZE_VERY_SMALL= 32;
     const HPX_GRID_SIZE_VERY_SMALL_PERFORMANT= 16;
-    if (BrowserInfo.isChrome()) return HPX_GRID_SIZE_VERY_SMALL_PERFORMANT;
+    if (BrowserInfo.isChromeLike()) return HPX_GRID_SIZE_VERY_SMALL_PERFORMANT;
     if (BrowserInfo.isSafari()) return HPX_GRID_SIZE_VERY_SMALL;
     if (BrowserInfo.isFirefox()) return HPX_GRID_SIZE_VERY_SMALL_PERFORMANT;
     return HPX_GRID_SIZE_VERY_SMALL;
@@ -58,7 +59,7 @@ export function getHeatMapNorder(largeSizeNorder) {
     if (largeSizeNorder===DATA_NORDER-3) return {showLabels:true, norder:DATA_NORDER-2};
 
     let performant= false;
-    if (BrowserInfo.isChrome()) performant= true;
+    if (BrowserInfo.isChromeLike()) performant= true;
 
     if (performant) {
         return {showLabels:false, norder:largeSizeNorder+3};
@@ -253,9 +254,8 @@ async function getSelectedHealPix(tbl_id, cc, pt0, pt1, tileList, norder, contai
         if (match) selectedTiles.push(tile);
     });
 
-    dispatchAddTaskCount(DEFAULT_COVERAGE_PLOT_ID,HPX_WORKING_KEY);
-    idxData= await ensureDataForSelection(tbl_id,norder,selectedTiles);
-    dispatchRemoveTaskCount(DEFAULT_COVERAGE_PLOT_ID,HPX_WORKING_KEY);
+    idxData= await callWhileAwaiting(ensureDataForSelection(tbl_id,norder,selectedTiles),
+        (p) => dispatchAddWorkingTask(DEFAULT_COVERAGE_PLOT_ID,p));
 
     // const selectedTableIdxList = [];
     const hpxSelectList= [];

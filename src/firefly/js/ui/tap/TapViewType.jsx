@@ -21,7 +21,8 @@ import {
 import {TableSearchMethods} from './TableSearchMethods.jsx';
 import {
     defTapBrowserState, getLoadedCapability, getTapServices, isCapabilityLoaded, loadTapCapabilities, loadTapColumns,
-    loadTapSchemas, loadTapTables, tapHelpId, loadObsCoreMetadata, ADQL_QUERY_KEY, SERVICE_EXIST_ERROR, getServiceId
+    loadTapSchemas, loadTapTables, tapHelpId, loadObsCoreMetadata, ADQL_QUERY_KEY, SERVICE_EXIST_ERROR, getServiceId,
+    getTapServiceByURL
 } from './TapUtil.js';
 
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded';
@@ -92,17 +93,18 @@ const expandableTapSectionSx = {
 };
 
 function AdqlUI({serviceUrl, serviceLabel, servicesShowing, setServicesShowing, setSelectBy, lockService, setError}) {
-    const [,setCapabilitiesChange] = useState(); // this is just to force a rerender
-    const capabilities= getLoadedCapability(serviceUrl);
+    const [capabilities, setCapabilities] = useState(() => getLoadedCapability(serviceUrl));
     useEffect(() => {
-        if (!isCapabilityLoaded(serviceUrl)) {
-            loadTapCapabilities(serviceUrl)
-                .then((c) => setCapabilitiesChange(c??{}))
-                .catch( (error) => {
-                    setError(`Fail to retrieve capability for: ${serviceUrl}`);
-                });
+        if (!serviceUrl) return;
+        if (isCapabilityLoaded(serviceUrl)) {
+            setCapabilities(getLoadedCapability(serviceUrl));
+            return;
         }
+        loadTapCapabilities(serviceUrl)
+            .then((c) => setCapabilities(c ?? getLoadedCapability(serviceUrl)))
+            .catch(() => setError(`Fail to retrieve capability for: ${serviceUrl}`));
     }, [serviceUrl]);
+
 
     return (
         <Sheet variant='outline' sx={{display:'flex', flexDirection: 'column', flexGrow: 1}}>
@@ -155,28 +157,28 @@ function BasicUI(props) {
     const [schemaName, schemaRef, setSchemaName] = useStateRef(lockedSchemaName || searchParams.schema || initState.schemaName || urlApi.schema);
     const [tableName, tableRef, setTableName] = useStateRef(lockedTableName || searchParams.table || initState.tableName || urlApi.table);
     const [obsCoreEnabled, setObsCoreEnabled] = useState(initState.obsCoreEnabled || initArgs.urlApi?.selectBy === 'obscore');
-    const [,setCapabilitiesChange] = useState(); // this is just to force a rerender
     const [schemaOptions, setSchemaOptions] = useState();
     const [tableOptions, setTableOptions] = useState();
     const [tableTableModel, setTableTableModel] = useState();
     const [columnsModel, setColumnsModel] = useState();
     const [obsCoreMetadataModel, setObsCoreMetadataModel] = useState(undefined);
-    const {schemaLabel}= getTapServices().find( ({value}) => value===serviceUrl) ?? {};
+    const {schemaLabel}= getTapServiceByURL(serviceUrl) ?? {};
 
     const schemaIsLocked= !forceLockObsCore && Boolean(lockedSchemaName);
     const tableIsLocked= !forceLockObsCore && Boolean(lockedTableName);
-
-    const capabilities= getLoadedCapability(serviceUrl);
+    const [capabilities, setCapabilities] = useState(() => getLoadedCapability(serviceUrl));
 
     useEffect(() => {
-        if (!isCapabilityLoaded(serviceUrl)) {
-            loadTapCapabilities(serviceUrl)
-                .then((c) => setCapabilitiesChange(c??{}))
-                .catch( (error) => {
-                    setError(`${SERVICE_EXIST_ERROR}: ${serviceUrl}`);
-                });
+        if (!serviceUrl) return;
+        if (isCapabilityLoaded(serviceUrl)) {
+            setCapabilities(getLoadedCapability(serviceUrl));
+            return;
         }
+        loadTapCapabilities(serviceUrl)
+            .then((c) => setCapabilities(c ?? getLoadedCapability(serviceUrl)))
+            .catch(() => setError(`Fail to retrieve capability for: ${serviceUrl}`));
     }, [serviceUrl]);
+
 
     const setLockToObsCore= (doLock) => {
         if (!hasObsCoreTable || !obsCoreTableModel?.tableData?.data) return;
@@ -466,7 +468,9 @@ function SchemaChooser({sOps,schemaName,setSchemaName,schemaLabel }) {
                 title:SCHEMA_TIP,
                 options:dropOps, value:schemaName, placeholder:'Loading...',
                 startDecorator:!sOps.length ? <Button loading={true}/> : undefined,
-                onChange:(ev, selectedTapSchema) => setSchemaName(selectedTapSchema),
+                onChange:(ev, selectedTapSchema) => {
+                    ev && selectedTapSchema && setSchemaName(selectedTapSchema);
+                },
                 renderValue:
                     ({value}) =>
                         (<OpRender {...{
@@ -501,6 +505,7 @@ function TableChooser({tOps=[],tableTableModel, tableName,setTableName,schemaNam
                     options:dropOps, value:tableName, placeholder:'Loading...',
                     startDecorator:!tOps.length ? <Button loading={true}/> : undefined,
                     onChange:(ev, selectedTapTable) => {
+                        if (!ev) return;
                         setTableName(selectedTapTable);
                         setVal('tableName',selectedTapTable);
                     },

@@ -23,13 +23,14 @@ import {ConstraintContext} from './Constraints';
 import {ROW_POSITION} from './Cutout';
 import {showResultTitleDialog} from './ResultTitleDialog';
 import {SiaUI} from './SiaUI';
-import {getMaxrecHardLimit, makeNumberedTitle} from './TapUtil';
+import {getMaxrecHardLimit} from './TapUtil';
 import {
     SIA_SERVICE_META, SIA_SERVICE_URL, SIA_USER_ENTERED_TITLE,
     addUserService,
     defSiaBrowserState, deleteUserService, getServiceNamesAsKey, getSiaServiceLabel, getSiaServiceOptions,
     loadSiaV2Meta, siaHelpId, getServiceHiPS
 } from './SiaUtil.js';
+import {makeNumberedTitle} from 'firefly/tables/TableUtil';
 
 const DEFAULT_SIA_PANEL_GROUP_KEY = 'SIAv2_PANEL_GROUP_KEY';
 
@@ -104,7 +105,7 @@ function SIAV2SearchPanelImpl({initArgs, titleOn, lockService, lockedServiceUrl,
 
     return (
         <Box width={1} height={1}>
-            <ConstraintContext.Provider value={ctx}>
+            <ConstraintContext value={ctx}>
                 <FormPanel  onSuccess={(request) => onSIAv2SearchSubmit(request, serviceUrl, getServiceMeta(), getSiaState())}
                             cancelText=''
                             help_id = {siaHelpId('form')}
@@ -137,7 +138,7 @@ function SIAV2SearchPanelImpl({initArgs, titleOn, lockService, lockedServiceUrl,
                         initArgs, serviceUrl, titleOn, siaOps, working
                     }} />
                 </FormPanel>
-            </ConstraintContext.Provider>
+            </ConstraintContext>
         </Box>
     );
 }

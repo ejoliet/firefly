@@ -11,7 +11,6 @@ import React from 'react';
 import ImageRoot from '../../drawingLayers/ImageRoot.js';
 import {showColorPickerDialog} from '../../ui/ColorPicker.jsx';
 import {showPointShapeSizePickerDialog} from '../../ui/PointShapeSizePicker.jsx';
-import {clone} from '../../util/WebUtil.js';
 import {dispatchDetachLayerFromPlot} from '../DrawLayerCntlr.js';
 import {dispatchDeleteOverlayPlot, dispatchOverlayPlotChangeAttributes, visRoot} from '../ImagePlotCntlr.js';
 import {getAllDrawLayersForPlot, getHDU, getLayerTitle, isDrawLayerVisible, primePlot} from '../PlotViewUtil.js';
@@ -210,22 +209,27 @@ function modifyMaskColor(opv) {
 
     const [rV,gV,bV]= toRGB(opv.colorAttributes.color);
     const rgbStr= `rgba(${rV},${gV},${bV},${opv.opacity})`;
-    showColorPickerDialog(rgbStr, false, true,
-        (ev, okPushed) => {
-            if (!ev?.rgb) return;
-            const {r,g,b,a}= ev.rgb;
-            const newColor= `#${hexC(r)}${hexC(g)}${hexC(b)}`;
+    showColorPickerDialog(
+        {
+            colorStr:rgbStr,
+            callbackOnBoth:true,
+            presetAlpha:.58,
+            cb:(ev) => {
+                if (!ev?.rgb) return;
+                const {r,g,b,a}= ev.rgb;
+                const newColor= `#${hexC(r)}${hexC(g)}${hexC(b)}`;
 
 
-            operateOnOverlayPlotViewsThatMatch(visRoot(),opv, (aOpv) => {
-                const {plotId, imageOverlayId} = aOpv;
-                const colorAttributes= aOpv.colorAttributes.color!==newColor ?
-                                  clone(aOpv.colorAttributes, {color:newColor} ) : aOpv.colorAttributes;
-                dispatchOverlayPlotChangeAttributes({plotId, imageOverlayId,doReplot:false,
-                    attributes:{colorAttributes,opacity:a}});
-            });
+                operateOnOverlayPlotViewsThatMatch(visRoot(),opv, (aOpv) => {
+                    const {plotId, imageOverlayId} = aOpv;
+                    const colorAttributes= aOpv.colorAttributes.color!==newColor ?
+                        {...aOpv.colorAttributes, color:newColor} : aOpv.colorAttributes;
+                    dispatchOverlayPlotChangeAttributes({plotId, imageOverlayId,doReplot:false,
+                        attributes:{colorAttributes,opacity:a}});
+                });
 
-        }, '', '', .58);
+            },
+        });
 }
 
 function modifyShape(dl, plotId) {

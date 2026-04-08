@@ -5,7 +5,6 @@
 package edu.caltech.ipac.firefly.core.background;
 
 import edu.caltech.ipac.firefly.api.Async;
-import edu.caltech.ipac.firefly.core.RedisService;
 import edu.caltech.ipac.firefly.core.Util.Try;
 import edu.caltech.ipac.firefly.data.ServerEvent;
 import edu.caltech.ipac.firefly.data.userdata.UserInfo;
@@ -23,11 +22,9 @@ import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.cache.CacheKey;
 import edu.caltech.ipac.util.cache.CacheManager;
 import edu.caltech.ipac.util.cache.StringKey;
+import io.lettuce.core.ScanArgs;
 import org.apache.commons.lang.text.StrBuilder;
 import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.params.ScanParams;
 
 import javax.annotation.Nonnull;
 import java.io.Serializable;
@@ -46,12 +43,15 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static edu.caltech.ipac.firefly.core.RedisService.SCAN_BATCH_SIZE;
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotEmpty;
 import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 import static edu.caltech.ipac.firefly.core.background.Job.Type.UWS;
 import static edu.caltech.ipac.firefly.core.background.JobInfo.*;
+import static edu.caltech.ipac.firefly.core.background.JobInfo.Phase.EXECUTING;
 import static edu.caltech.ipac.firefly.core.background.JobUtil.*;
 import static edu.caltech.ipac.firefly.data.ServerParams.EMAIL;
+import static edu.caltech.ipac.firefly.server.ServerContext.SCHEDULE_TASK_EXEC;
 import static edu.caltech.ipac.firefly.server.query.UwsJobProcessor.getUwsJobInfo;
 import static edu.caltech.ipac.util.StringUtils.isEmpty;
 import static edu.caltech.ipac.firefly.core.background.Job.Type.PACKAGE;
@@ -68,56 +68,49 @@ public class JobManager {
 
     public static final String BG_INFO = "background.info";
     public static final String ALL_JOB_CACHE_KEY = "ALL_JOB_INFOS"; // cache key for all job infos
-    public static final long CLEANUP_INTVL_MINS = AppProperties.getIntProperty("job.cleanup.interval", 12*60);          // run cleanup once every 12 hours
-    public static final int JOB_LIST_DEFAULT_LIMIT = AppProperties.getIntProperty("job.list.default.limit", 100_000);    // the default limit for job list queries
+    public static final long CLEANUP_INTVL_MINS = AppProperties.getIntProperty("job.cleanup.interval", 2*60);          // run cleanup once every 2 hours
+    public static final int JOB_LIST_DEFAULT_LIMIT = AppProperties.getIntProperty("job.list.default.limit", 100_000);  // the default limit for job list queries
     private static final int KEEP_ALIVE_INTERVAL = AppProperties.getIntProperty("job.keepalive.interval", 60);  // default keepalive interval in seconds
     private static final int WAIT_COMPLETE = AppProperties.getIntProperty("job.wait.complete", 1);              // wait for complete after submit in seconds
     private static final int MAX_PACKAGERS = AppProperties.getIntProperty("job.max.packagers", 10);             // maximum number of simultaneous packaging threads
-    private static final int JOB_EXPIRY_HOURS = AppProperties.getIntProperty("job.expiry.hours", 24*14);        // Time in hours to keep a job after it has ended.  Default to 14 days.
-    private static final int JOB_ARCHIVED_EXPIRY_HOURS = AppProperties.getIntProperty("job.archived.expiry.hours", 24*14);   // Time in hours to keep an archived job after it has ended.  Default to 14 days.
-    public static final int JOB_SCAN_BATCH_SIZE = AppProperties.getIntProperty("job.scan.batch_size", 10_000);   // batch size for scanning job keys in Redis.  Default to 10,000.  Larger value return more keys per call but use more CPU and memory per iteration.  this is a good size for larger redis store.
+    private static final int JOB_TTL_DAYS = AppProperties.getIntProperty("job.ttl.days", 7);                    // Time in days to keep a job in redis.  Default to 7 days.
 
     private static final Logger.LoggerImpl LOG = Logger.getLogger();
     private static final ExecutorService packagers = Executors.newFixedThreadPool(MAX_PACKAGERS);
     private static final ExecutorService searches = Executors.newCachedThreadPool();
     private static final HashMap<String, JobEntry> runningJobs = new HashMap<>();
-    private static final DistribMapCache<JobInfo> allJobInfos = new DistribMapCache<>(ALL_JOB_CACHE_KEY, 0, new JobInfoSerializer()); // the all job hash should never expire
+    private static final DistribMapCache<JobInfo> allJobInfos = new DistribMapCache<>(ALL_JOB_CACHE_KEY, 0); // the all job hash should never expire
     private static final String COMPLETED_HANDLER = AppProperties.getProperty("job.completed.handler");
-    private static final CacheKey JOB_CACHE_VERSION_KEY = new StringKey("job.all.cache.version");
-    private static final String JOB_CACHE_VERSION = "1.0";
+    public static final CacheKey JOB_CACHE_VERSION_KEY = new StringKey("job.all.cache.version");
 
     public static void init() {
+
+        Messenger.subscribe(JobEvent.TOPIC, new JobEventHandler());
+
+        // setup completed handler if configured
         if (!isEmpty(COMPLETED_HANDLER)) {
             Class<?> clz = Try.it(() -> Class.forName(COMPLETED_HANDLER)).get();
             if (clz != null && JobCompletedHandler.class.isAssignableFrom(clz)) {
                 JobCompletedHandler handler = Try.it(() -> (JobCompletedHandler) clz.newInstance()).get();
-                if (handler != null)    Messenger.subscribe(JobCompletedEvent.TOPIC, handler);
+                if (handler != null) Messenger.subscribe(JobCompletedEvent.TOPIC, handler);
             } else {
                 LOG.error("Invalid JobCompletedHandler class: " + COMPLETED_HANDLER);
             }
         }
 
-        Messenger.subscribe(JobEvent.TOPIC, new JobEventHandler());
-        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
-                JobManager::checkJobs, KEEP_ALIVE_INTERVAL, KEEP_ALIVE_INTERVAL, TimeUnit.SECONDS);   // check every 30 seconds
+        // setup cleanup schedule task
+        SCHEDULE_TASK_EXEC.scheduleAtFixedRate(
+                JobManager::cleanup,
+                JobManager.CLEANUP_INTVL_MINS,
+                JobManager.CLEANUP_INTVL_MINS,
+                TimeUnit.MINUTES);
 
-        ScheduledExecutorService migrator = Executors.newSingleThreadScheduledExecutor();
-        migrator.scheduleWithFixedDelay(() -> {
-            try (Jedis jedis = RedisService.getConnection()) {
-                // run migration only when there's connection to Redis
-                LOG.info("Ensure job history is up to date");
-                String jobCacheVersion = (String) CacheManager.getDistributed().get(JOB_CACHE_VERSION_KEY);
-                if (isEmpty(jobCacheVersion) || !jobCacheVersion.equals(JOB_CACHE_VERSION)) {
-                    LOG.info("Migrating job history keys to new format");
-                    int count = migrateRedisKeys();
-                    LOG.info("Migrated "+ count + " job keys to new format");
-                    CacheManager.getDistributed().put(JOB_CACHE_VERSION_KEY, JOB_CACHE_VERSION);
-                }
-                migrator.shutdown(); // stop once successful
-            } catch (Exception e) {
-                LOG.debug("Job history check failed, retrying in 5s");
-            }
-        }, 0, 5, TimeUnit.SECONDS);
+        // setup local running job checker
+        SCHEDULE_TASK_EXEC.scheduleAtFixedRate(
+                JobManager::checkJobs,
+                KEEP_ALIVE_INTERVAL,
+                KEEP_ALIVE_INTERVAL,
+                TimeUnit.SECONDS);   // check every 30 seconds
     }
 
     /**
@@ -131,18 +124,20 @@ public class JobManager {
             if (ids != null) importedJobIds.addAll(ids);
         });
         // update all userJobs with active status
-        userJobs.forEach(ji -> {
-            if (ji.getMeta().getType() == UWS &&
-                    isActive(ji) &&
-                    !importedJobIds.contains(ji.getMeta().getJobId())) {
-                JobInfo uws = Try.it(() -> getUwsJobInfo(ji.getAux().getJobUrl())).get();
-                if (uws == null) {
-                    LOG.debug("Job no longer exists:" + ji.getAux().getJobUrl());
-                    ji.setError(new JobInfo.Error(404, "Job no longer exists"));
-                } else {
-                    mergeJobInfo(ji, uws, null, null);
+        userJobs.removeIf(ji -> {
+            if (isActive(ji)) {
+                if (ji.getMeta().getType() == UWS && !importedJobIds.contains(ji.getMeta().getJobId())) {
+                    // update UWS job status, if not already updated during import
+                    JobInfo uws = Try.it(() -> getUwsJobInfo(ji.getAux().getJobUrl())).get();
+                    if (uws == null) {
+                        LOG.debug("Job no longer exists:" + ji.getAux().getJobUrl());
+                        return true;    // remove job that no longer exists
+                    } else {
+                        mergeJobInfo(ji, uws, null, null);
+                    }
                 }
             }
+            return false;
         });
 
         return userJobs;
@@ -154,8 +149,9 @@ public class JobManager {
         updateJobInfo(jobId, true, ji -> {      // setting 'true' to add this jobInfo into the datastore
             Instant start = Instant.now();
             ji.setCreationTime(start);
-            ji.setDestruction(start.plus(7, ChronoUnit.DAYS));
+            ji.setDestruction(start.plus(JOB_TTL_DAYS, ChronoUnit.DAYS));
             ji.getMeta().setType(job.getType());
+            ji.getMeta().setRunHost(hostName());
         });
         // update Job after jobInfo has been created
         job.runAs(reqOwner);
@@ -163,31 +159,34 @@ public class JobManager {
 
         sendUpdate(jobId, ji -> {
             ji.setPhase(QUEUED);
-            ji.getMeta().setProgress(0);
         });
 
         try {
             Future<String> future = job.getType() == PACKAGE ? packagers.submit(job) : searches.submit(job);
             runningJobs.put(jobId, new JobEntry(future, job));
-
             future.get(WAIT_COMPLETE, TimeUnit.SECONDS);        // wait in seconds for a job to complete
         } catch (TimeoutException e) {
             // it's ok; job may take longer to complete
         } catch (Exception e) {
             // job run() handles exceptions; this only happens if submit or future.get() fails
             sendUpdate(jobId, (ji) -> {
-                ji.setError(new JobInfo.Error(500, e.getMessage()));
-                ji.getMeta().setProgress(100, null);
+                ji.setPhase(ERROR);
+                ji.setErrorSummary(new ErrorSummary(e.getMessage()));
             });
             LOG.error(e);
+        }
+        if (!job.getWorker().isSelfManaged()) {
+            updateJobInfo(jobId, ji -> {
+                ji.setOwnerId(reqOwner.getUserKey());
+            });
         }
         return getJobInfo(jobId);
     }
 
     public static JobInfo abort(String jobId, String reason) {
         JobInfo info = updateJobInfo(jobId, (ji) -> {
-            if (reason != null) ji.setError(new JobInfo.Error(500, reason));
             ji.setPhase(ABORTED);
+            if (reason != null) ji.setErrorSummary(new ErrorSummary(reason));
         });
         if (info != null) {
             Messenger.publish(new JobEvent(JobEvent.EventType.ABORTED, info));      // notify all instances AFTER jobInfo is updated
@@ -226,7 +225,7 @@ public class JobManager {
     }
 
     public static JobInfo sendEmail(String jobId, String email) {
-        updateJobInfo(jobId, (ji) -> ji.getMeta().getParams().put(EMAIL, email));
+        updateJobInfo(jobId, (ji) -> ji.getMeta().getParameters().put(EMAIL, email));
         JobInfo jobInfo = getJobInfo(jobId);
         if (jobInfo != null) EmailNotification.sendNotification(jobInfo);
         return jobInfo;
@@ -283,9 +282,11 @@ public class JobManager {
             info = new JobInfo(jobId);
             initNewJob(info);
         }
-        if (info == null || func == null) return null;
-        func.accept(info);
-        updateJobInfo(info);
+        if (info == null) return null;
+        if (func != null) {
+            func.accept(info);
+            updateJobInfo(info);
+        }
         return info;
     }
 
@@ -298,7 +299,8 @@ public class JobManager {
         JobInfo jobInfo = updateJobInfo(jobId, func);
         if (jobInfo != null) {
             Messenger.publish(new JobEvent(JobEvent.EventType.UPDATED, jobInfo));
-            Logger.getLogger().trace("sendUpdate: " + jobInfo.getMeta().getJobId() + " " + jobInfo.getPhase() + jobInfo.getMeta().getProgressDesc());
+            String progress = jobInfo.getAux().getProgress() == null ? "null" : String.format("%d%% %s", jobInfo.getAux().getProgress().percentComplete(), jobInfo.getAux().getProgress().message());
+            Logger.getLogger().trace("sendUpdate: " + jobInfo.getMeta().getJobId() + " " + jobInfo.getPhase() + progress);
         }
         return jobInfo;
     }
@@ -379,7 +381,7 @@ public class JobManager {
                         ji.getPhase(),
                         ji.getCreationTime() == null ? "" : ji.getCreationTime().truncatedTo(ChronoUnit.SECONDS),
                         startT == null || endT == null ? -1 : Duration.between(startT, endT).toSeconds(),
-                        ji.getMeta().getProgress(),
+                        ifNotNull(ji.getAux().getProgress()).orElse(new Progress()).get(Progress::percentComplete),
                         ji.getMeta().isMonitored(),
                         ji.getMeta().getUserKey()));
             });
@@ -405,8 +407,8 @@ public class JobManager {
      * @return a list of all JobInfo in the datastore
      */
     static List<JobInfo> getAllJobs() {
-        ScanParams scanParams = new ScanParams().match("*").count(JOB_SCAN_BATCH_SIZE); // adjust count as needed
-        return allJobInfos.getValuesFor(scanParams);
+        ScanArgs scanArgs = new ScanArgs().match("*").limit(SCAN_BATCH_SIZE);
+        return allJobInfos.getValuesFor(scanArgs);
     }
 
     /**
@@ -415,8 +417,8 @@ public class JobManager {
      */
     static List<JobInfo> getUserJobs() {
         String userKey = ServerContext.getRequestOwner().getUserKey();
-        ScanParams scanParams = new ScanParams().match("*:%s".formatted(userKey)).count(JOB_SCAN_BATCH_SIZE); // adjust count as needed
-        return allJobInfos.getValuesFor(scanParams);
+        ScanArgs scanArgs = new ScanArgs().match("*:%s".formatted(userKey)).limit(SCAN_BATCH_SIZE);
+        return allJobInfos.getValuesFor(scanArgs);
     }
 
 //====================================================================
@@ -433,7 +435,6 @@ public class JobManager {
         ji.getMeta().setJobId(ji.getJobId());
         ji.getMeta().setUserKey(reqOwner.getUserKey());
         ji.getMeta().setEventConnId(reqOwner.getEventConnID());
-        ji.getMeta().setRunHost(hostName());
         ji.getMeta().setAppUrl(ServerContext.getRequestOwner().getBaseUrl());
         ji.getMeta().setMonitored(true);                // all async jobs are monitored by default
 
@@ -475,7 +476,7 @@ public class JobManager {
 
         // kill expired jobs
         getRunningJobs().forEach(fi -> {
-                    long duration = fi.executionDuration();
+                    long duration = fi.getExecutionDuration();
                     if (duration != 0 && fi.getStartTime().plus(duration, ChronoUnit.SECONDS).isBefore(Instant.now())) {
                         abort(fi.getMeta().getJobId(), "Exceeded execution duration");
                     }
@@ -568,43 +569,36 @@ public class JobManager {
     }
 
     public static void cleanup() {
+        LOG.info("JobInfo cleanup started");
         List<JobInfo> jobs = getAllJobs();
         jobs.forEach(job -> {
-            CacheKey k = cacheKey(job);
-            if (!job.getMeta().isMonitored() && job.getEndTime().plus(1, ChronoUnit.HOURS).isBefore(Instant.now())) {
-                LOG.info("Removing non-monitored job: " + k);
-                allJobInfos.remove(k);      // remove non-monitored job after 1 hour
-            } else if (job.getPhase() == ARCHIVED) {
-                if (job.getEndTime().plus(JOB_ARCHIVED_EXPIRY_HOURS, ChronoUnit.HOURS).isBefore(Instant.now())) {
-                    LOG.info("Removing expired archived job: " + k);
+            try {
+                CacheKey k = cacheKey(job);
+                Instant desTime = job.getDestruction();
+                if (desTime == null) {
+                    Instant startTime = ifNotNull(job.getCreationTime()).getOrElse(job.getStartTime());
+                    desTime = startTime == null ? Instant.now() : startTime.plus(JOB_TTL_DAYS, ChronoUnit.DAYS);
+                }
+                Instant endTime = ifNotNull(job.getEndTime()).getOrElse(desTime);
+
+                if (!job.getMeta().isMonitored() && endTime.plus(1, ChronoUnit.HOURS).isBefore(Instant.now())) {
+                    LOG.info("Removing non-monitored job: " + k);
+                    allJobInfos.remove(k);      // remove non-monitored job after 1 hour
+                } else if (isActive(job) && hostName().equals(job.getMeta().getRunHost())) {
+                    if (job.getMeta().getType() != UWS && !runningJobs.containsKey(job.getMeta().getJobId())) {
+                        // if the job is active and supposed to run on this host, but we don't have record of it running, remove it
+                        LOG.info("Removing orphan active job: " + k);
+                        allJobInfos.remove(k);
+                    }
+                } else if (desTime.isBefore(Instant.now())) {
+                    LOG.info("  Removing expired job: " + k);
                     allJobInfos.remove(k);
                 }
-            } else if (!CLEANUP_PHASES_EXCLUDES.contains(job.getPhase()) && job.getEndTime().plus(JOB_EXPIRY_HOURS, ChronoUnit.HOURS).isBefore(Instant.now())) {
-                LOG.info("Removing expired job: " + k);
-                allJobInfos.remove(k);
+            } catch (Exception e) {
+                LOG.error(e,"Unexpected error during job cleanup for jobId=" + job.getJobId());
             }
         });
-    }
-
-    /**
-     * This serializer is used to serialize JobInfo objects for storage in the cache.
-     * Instead of using the default Java serialization, it uses a JSON string.
-     */
-    private static class JobInfoSerializer implements DistribMapCache.Serializer<JobInfo> {
-
-        public String serialize(Object obj) {
-            if (obj instanceof JobInfo jobInfo) {
-                return toJson(jobInfo);
-            }
-            return null;
-        }
-
-        public JobInfo deserialize(String str) throws Exception{
-            if (str != null) {
-                return toJobInfo((JSONObject) new JSONParser().parse(str));
-            }
-            return null;
-        }
+        LOG.info("JobInfo cleanup finished");
     }
 
 
@@ -616,7 +610,7 @@ public class JobManager {
      * Migrate all Redis keys that do not have userKey in the key to the new format.
      * @return the number of keys migrated
      */
-    public static int migrateRedisKeys() {
+    public static int appendUserKeyToJobId() {
         // For keys without userKey, we need to migrate them to the new format where userKey is appended to the jobId.
         int count = 0;
         for(CacheKey key : allJobInfos.getKeys()) {

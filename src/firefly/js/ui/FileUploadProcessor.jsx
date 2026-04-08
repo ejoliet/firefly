@@ -140,7 +140,7 @@ export function resultSuccess(request,cacheKey) {
             const title= report.fileName ?? 'UWS Job File';
             const jobUrl = report?.parts[0].url;
             const req = makeTblRequest('UwsJob', title, {jobUrl});
-            dispatchTableSearch(req);
+            dispatchTableSearch(req, {backgroundable: true});
             return true;
 
         default: return false;
@@ -371,7 +371,8 @@ export const isRegion= (currentSummaryModel) => getFirstPartType(currentSummaryM
 export const isUWS= (report) => report.fileFormat === 'UWS';
 
 function isFileSupported(summaryModel, currentReport) {
-    return getFirstPartType(summaryModel) && (SUPPORTED_TYPES.includes(getFirstPartType(summaryModel)) || getFileFormat(currentReport)===Format.FITS);
+    return getFirstPartType(summaryModel) && (SUPPORTED_TYPES.includes(getFirstPartType(summaryModel)) ||
+        getFileFormat(currentReport)===Format.FITS || getFileFormat(currentReport)===Format.ASDF);
 }
 
 function sendRegionRequest(fileCacheKey,currentReport) {

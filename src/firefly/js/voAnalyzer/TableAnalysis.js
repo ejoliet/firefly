@@ -13,9 +13,8 @@ import CoordinateSys from '../visualize/CoordSys.js';
 import {makeAnyPt, makeWorldPt, parseWorldPt} from '../visualize/Point.js';
 import {isTableExclusiveToPlot} from '../visualize/saga/CatalogWatcher';
 import {
-    ACCESS_FORMAT, ACCESS_URL, CLOUD_ACCESS, DEFAULT_TNAME_OPTIONS, obsPrefix, OBSTAP_CNAMES, S_REGION,
-    SERVICE_DESC_COL_NAMES,
-    SSA_COV_UTYPE, SSA_TITLE_UTYPE
+    ACCESS_FORMAT, ACCESS_URL, CLOUD_ACCESS, DATALINK_COL_NAMES, DEFAULT_TNAME_OPTIONS, obsPrefix, OBSTAP_CNAMES,
+    S_REGION, SSA_COV_UTYPE, SSA_TITLE_UTYPE
 } from './VoConst.js';
 import {getObsTabColEntry, getTableModel} from './VoCoreUtils.js';
 import {getServiceDescriptors, hasServiceDescriptors, isDataLinkServiceDesc} from './VoDataLinkServDef.js';
@@ -194,7 +193,7 @@ export function hasDataLinkSvcDesc(tableOrId) {
 
 export function isDatalinkTable(tableOrId) {
     const columns = getTableModel(tableOrId)?.tableData?.columns?.map( (c) => c?.name?.toLowerCase() ?? '') ?? [];
-    return SERVICE_DESC_COL_NAMES.every((cname) => columns.includes(cname));
+    return DATALINK_COL_NAMES.every((cname) => columns.includes(cname));
 }
 
 function columnMatches(table, cName) {
@@ -366,10 +365,11 @@ export function getProdTypeGuess(tableOrId, rowIdx) {
  * Guess if this table has enough ObsCore attributes to be considered an ObsCore table.
  * - any column contains utype with 'obscore:' prefix
  * - matches 3 or more of ObsCore column names
- * @param {TableModel} tableModel
+ * @param {TableModel|String} tableOrId - a table model or a table id
  * @returns {boolean}
  */
-export function isObsCoreLike(tableModel) {
+export function isObsCoreLike(tableOrId) {
+    const tableModel= getTableModel(tableOrId);
     if (!tableModel) return false;
     const cols = getColumns(tableModel);
     if (cols.findIndex((c) => get(c, 'utype', '').startsWith(obsPrefix)) >= 0) {
@@ -449,16 +449,6 @@ export function isSSATable(tableOrId) {
     return foundParts.length>=2;
 }
 
-export function getSSATitle(tableOrId,row) {
-    const table= getTableModel(tableOrId);
-    if (!table) return false;
-    const foundCol= table.tableData.columns
-        .filter((c) => {
-            if (c?.utype?.toLowerCase().includes(SSA_TITLE_UTYPE )) return true;
-        });
-    return foundCol.length>0 ? getCellValue(table,row,foundCol[0].name) : undefined;
-}
-
 
 export function getSearchTargetFromTable(tableOrId) {
     const table= getTableModel(tableOrId);
@@ -516,8 +506,19 @@ function extractWorldPtFromADQL(adql) {
     }
 }
 
-export function obsCoreTableHasOnlyImages(table) {
+/**
+ *
+ * @param {TableModel} table
+ * @param {Array.<DatalinkData>} dataLinkData - if defined, drill down to see if each datalink is an image
+ * @return {boolean}
+ */
+export function obsCoreTableHasOnlyImages(table, dataLinkData=undefined) {
     if (!table) return false;
+
+    if (dataLinkData?.length) {
+        const imDatalink= dataLinkData.every( (dl) => dl.dlAnalysis.maybeImage);
+        if (!imDatalink) return false;
+    }
 
     const propTypeCol = getObsCoreProdTypeCol(table);
     if (propTypeCol?.enumVals) {

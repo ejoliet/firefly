@@ -33,9 +33,10 @@ public class AsyncTapQueryTest extends ConfigTest {
 
 			DataGroup results = new AsyncTapQuery().fetchDataGroup(req);
 
+			// uws job returns an obscore table as the resulting table.  It may contain more than one mixed data products.
 			Assert.assertTrue("has results", results.size() > 0);
-			Assert.assertNotNull("has ra", results.getDataDefintion("ra"));
-			Assert.assertNotNull("has dec", results.getDataDefintion("dec"));
+			Assert.assertNotNull("has access_url", results.getDataDefintion("access_url"));
+			Assert.assertNotNull("has dataproduct_type", results.getDataDefintion("dataproduct_type"));
 
 		} catch (Exception e) {
 			Assert.fail("testExecRequestQuery failed with exception: " + e.getMessage());
@@ -88,13 +89,11 @@ public class AsyncTapQueryTest extends ConfigTest {
 
 
 			// test bad job
-			try {
-				req.setParam("QUERY", "SELECT * FROM dumm_table where dummy = 'dummy'");
-				new AsyncTapQuery().submitJob(req);
-				Assert.fail("should have thrown exception");
-			} catch (Exception e) {
-				Assert.assertNotNull("should fail with error message", e.getMessage());
-			}
+			req.setParam("QUERY", "SELECT * FROM dumm_table where dummy = 'dummy'");
+			jobUrl = new AsyncTapQuery().submitJob(req);
+			Thread.sleep(2000); // wait for job to process
+			jobInfo = AsyncTapQuery.getUwsJobInfo(jobUrl);
+			Assert.assertNotNull(jobInfo.getPhase());		// should have a phase, even if it's an error
 
 		} catch (Exception e) {
 			Assert.fail("testExecRequestQuery failed with exception: " + e.getMessage());

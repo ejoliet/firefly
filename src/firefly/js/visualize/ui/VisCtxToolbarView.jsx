@@ -12,6 +12,7 @@ import React, {Fragment, memo} from 'react';
 import shallowequal from 'shallowequal';
 import {dispatchExtensionActivate} from '../../core/ExternalAccessCntlr.js';
 import {makePlotSelectionExtActivateData} from '../../core/ExternalAccessUtils.js';
+import {Format} from '../../data/FileAnalysis';
 import {sprintf} from '../../externalSource/sprintf';
 import {ActionsDropDownButton, isSpacialActionsDropVisible} from '../../ui/ActionsDropDownButton.jsx';
 import {SingleColumnMenu} from '../../ui/DropDownMenu.jsx';
@@ -93,13 +94,15 @@ function HipsOptionsDropdown({pv}) {
     const plot= primePlot(pv);
     if (!plot) return undefined;
     const {plotId}= plot;
-    const csysText= plot.imageCoordSys===CoordinateSys.GALACTIC ? 'Gal' : 'Equ';
+    const csysText= plot.imageCoordSys===CoordinateSys.GALACTIC
+        ? 'Gal'
+        : plot.imageCoordSys===CoordinateSys.EQ_J2000
+            ? 'Equ' : 'Ecl';
     const projText= isHiPSAitoff(plot) ? AITOFF_TEXT : SPHER_TEXT;
-
-    // const canConvertHF= canConvertBetweenHipsAndFits(pv);
-    // const text= canConvertHF ? 'Coverage Options' : `${csysText} / ${projText}`;
     const text= `${csysText} / ${projText}`;
 
+    const centerAndChangeCsys=(coordSys) => dispatchChangeHiPS({
+        plotId, coordSys, centerProjPt:makeWorldPt(0, 0, coordSys)});
 
     const dropDown= (
         <SingleColumnMenu sx={ (theme) => ({
@@ -114,18 +117,24 @@ function HipsOptionsDropdown({pv}) {
                                    hasCheckBox={true}
                                    checkBoxOn={plot.imageCoordSys===CoordinateSys.GALACTIC}
                                    onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.GALACTIC})}/>
-                    <ToolbarButton text='Eq J2000' tip='Use Equatorial J2000 coordinate system' key={'eqj'}
+                    <ToolbarButton text='Equatorial J2000' tip='Use Equatorial J2000 coordinate system' key={'eqj'}
                                    hasCheckBox={true}
                                    checkBoxOn={plot.imageCoordSys===CoordinateSys.EQ_J2000}
                                    onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.EQ_J2000})}/>
+                    <ToolbarButton text='Ecliptic J2000' tip='Use Ecliptic J2000 coordinate system' key={'eqj'}
+                                   hasCheckBox={true}
+                                   checkBoxOn={plot.imageCoordSys===CoordinateSys.ECL_J2000}
+                                   onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.ECL_J2000})}/>
                     <DropDownVerticalSeparator useLine={true}/>
-                    <ToolbarButton text='Center Galactic' tip='Align Aitoff HiPS to Galactic 0,0'
+                    <ToolbarButton text='Center Galactic' tip='Align HiPS to Galactic 0,0'
                                    sx={{button:{px:0}}}
-                                   onClick={() => dispatchChangeHiPS({
-                                       plotId:pv.plotId,
-                                       coordSys:CoordinateSys.GALACTIC,
-                                       centerProjPt:makeWorldPt(0, 0, CoordinateSys.GALACTIC) })
-                                   } />
+                                   onClick={() => centerAndChangeCsys(CoordinateSys.GALACTIC) } />
+                    <ToolbarButton text='Center Equatorial' tip='Align HiPS to Equatorial J2000 0,0'
+                                   sx={{button:{px:0}}}
+                                   onClick={() => centerAndChangeCsys(CoordinateSys.EQ_J2000) } />
+                    <ToolbarButton text='Center Ecliptic ' tip='Align HiPS to Ecliptic J2000 0,0'
+                                   sx={{button:{px:0}}}
+                                   onClick={() => centerAndChangeCsys(CoordinateSys.ECL_J2000) } />
                     <DropDownVerticalSeparator useLine={true}/>
                     <Tooltip title='Choose the projection for the all-sky HiPS image'>
                         <Typography>Projection</Typography>
@@ -402,7 +411,8 @@ export function MultiImageControllerView({plotView:pv}) {
             const {attributes:att, plotDesc:desc=''}= plot;
             const hduNum= getHDU(plot);
             startStr= 'Image: ';
-            startStr= att[HDU_TITLE_DESC] ? att[HDU_TITLE_DESC] + ': ': `HDU (#${hduNum}): `;
+            const imagePartStr= plot.plotState.getFileType()!==Format.ASDF ? 'HDU' : 'Image';
+            startStr= att[HDU_TITLE_DESC] ? att[HDU_TITLE_DESC] + ': ': `${imagePartStr} (#${hduNum}): `;
 
             const hduTitleHeader= att[HDU_TITLE_HEADER] ;
             const reqHeaderTitle= hduTitleHeader ? `${getHeader(plot,hduTitleHeader)}` : '';
@@ -417,7 +427,7 @@ export function MultiImageControllerView({plotView:pv}) {
             if (hasPlaneOnlyWLInfo(plot)) {
                 const wl= doFormat(getPtWavelength(plot,undefined, plot.cubeIdx),4);
                 const unitStr= getFormattedWaveLengthUnits(plot);
-                wlStr= `${wl} ${unitStr}`;
+                wlStr= wl ? `${wl} ${unitStr}` : '';
             }
         }
         tooltip+= `, Image Count: ${cIdx+1} / ${length}`;
@@ -459,7 +469,11 @@ MultiImageControllerView.propTypes= {
     plotView : object.isRequired,
 };
 
-const doFormat= (v,precision) => precision>0 ? sprintf(`%.${precision}f`,v) : Math.trunc(v)+'';
+const doFormat= (v,precision) => isNaN(v)
+    ? ''
+    : precision>0
+        ? sprintf(`%.${precision}f`,v)
+        : Math.trunc(v)+'';
 
 function getHipsCubeDesc(plot) {
     if (!isHiPS(plot)) return '';

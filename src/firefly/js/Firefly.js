@@ -40,7 +40,7 @@ import {recordHistory} from './core/History.js';
 import {GatorProtocolRootPanel} from './visualize/ui/GatorProtocolRootPanel';
 import {setDefaultImageColorTable} from './visualize/WebPlotRequest.js';
 import {initWorkerContext} from './threadWorker/WorkerAccess.js';
-import {getTAPServicesByName} from './ui/tap/TapKnownServices.js';
+import {makeTAPDefaultServicesByName} from './ui/tap/TapKnownServices.js';
 import {loadAllJobs} from './core/background/BackgroundUtil.js';
 import {
     makeDefImageSearchActions, makeDefTableSearchActions, makeDefTapSearchActions, makeExternalSearchActions
@@ -219,7 +219,7 @@ const defFireflyOptions = {
         ...makeDefImageSearchActions(),
     ],
     tap : {
-        services: getTAPServicesByName( ['IRSA', 'NED', 'ExoplanetArchive', 'KOA', 'HEASARC', 'MASTImages',
+        services: makeTAPDefaultServicesByName( ['IRSA', 'NED', 'ExoplanetArchive', 'KOA', 'HEASARC', 'MASTImages',
                                    'CADC', 'CANFARyoucat', 'VizieR', 'Simbad', 'Gaia', 'GAVO', 'HSA', 'NOIRLab'] ),
         defaultMaxrec: 50000
     },
@@ -236,7 +236,7 @@ const defFireflyOptions = {
             label: 'Job Monitor',    // label for the background monitor button
             note: `
                 Note: The listed jobs are limited to your current session, where "session" may refer to your browser or archive, 
-                or account with which you're currently logged in. Jobs older than 14 days will not appear.
+                or account with which you're currently logged in. Jobs are removed once they reach their destruction time.
             `.trim(),
         }
     },

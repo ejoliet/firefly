@@ -131,6 +131,7 @@ export const WPConst= {
     GCS_PROJECT: 'GCSProject',
     GCS_BUCKET: 'GCSBucket',
     GCS_OBJ_NAME: 'GCSObjName',
+    EXPECT_STATIC_FILE: 'ExpectStaticFile',
     FILTER: 'filter',
 
 // keys - client side operations
@@ -174,7 +175,7 @@ const clientSideKeys = [WPConst.PREFERENCE_COLOR_KEY, WPConst.GRID_ON,
         ];
 
 
-let defColorTable= 0;
+let defColorTable= '0';
 
 export const setDefaultImageColorTable= (ct) => defColorTable=ct;
 export const getDefaultImageColorTable= () => defColorTable;
@@ -616,6 +617,9 @@ export class WebPlotRequest extends ServerRequest {
     setURL(url) { this.setSafeParam(WPConst.URLKEY, url); }
 
     getURL() { return this.getSafeParam(WPConst.URLKEY); }
+
+    setExpectStaticFile(isStaticFile) {this.setParam(WPConst.EXPECT_STATIC_FILE, Boolean(isStaticFile)+''); }
+    getExpectStaticFile() {this.getBooleanParam(WPConst.EXPECT_STATIC_FILE); }
 
     setURLCheckForNewer(check) { this.setSafeParam(WPConst.URL_CHECK_FOR_NEWER, check+''); }
     getURLCheckForNewer() { return this.getBooleanParam(WPConst.URL_CHECK_FOR_NEWER); }

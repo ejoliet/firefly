@@ -21,7 +21,7 @@ import {useStoreConnector} from '../../../ui/SimpleComponent.jsx';
 import {updateSet} from '../../../util/WebUtil.js';
 import {hideColSelectPopup} from '../ColSelectView.jsx';
 import {addColorbarChanges} from '../../dataTypes/FireflyHeatmap.js';
-import {colorsOnTypes, getChartProps, toRGBA, TRACE_COLORS, uniqueChartId} from '../../ChartUtil.js';
+import {colorsOnTypes, getChartProps, toRGBA, TRACE_COLORS, uniqueChartId, isSpectrum} from '../../ChartUtil.js';
 import {colorscaleNameToVal} from '../../Colorscale.js';
 import {DEFAULT_PLOT2D_VIEWER_ID} from '../../../visualize/MultiViewCntlr.js';
 
@@ -117,10 +117,10 @@ export function basicFieldReducer({chartId, activeTrace}) {
             if (action.type === VALUE_CHANGE) {
                 fieldKey = get(action.payload, 'fieldKey');
                 ['x','y'].forEach((a) => {
-                    if (fieldKey === `_tables.data.${activeTrace}.${a}`) {
-                        // if needed in other chart types, uncomment the following line and only disable it for spectrum
-                        // (because spectrumReducer changes axes labels as _tables.data changes, and they need to be persisted)
-                        // inFields = updateSet(inFields, [`layout.${a}axis.title.text`, 'value'], undefined);
+                    if (fieldKey === `_tables.data.${activeTrace}.${a}`) { // column name or expression changed
+                        // unset the axis title so that the chart generates a title based on the changed column name
+                        // but not in spectrum because spectrumReducer changes axes labels itself which need to be persisted
+                        if (!isSpectrum(chartId)) inFields = updateSet(inFields, [`layout.${a}axis.title.text`, 'value'], undefined);
 
                         inFields = updateSet(inFields, [`fireflyLayout.${a}axis.min`, 'value'], undefined);
                         inFields = updateSet(inFields, [`fireflyLayout.${a}axis.max`, 'value'], undefined);
@@ -469,10 +469,11 @@ function filterOptions(options, opts) {
 
 /*
  * This function returns a collection of components using `useCallback`, ensuring they are not recreated between re-renders.
- * To modify this behavior, you can set the `deps` parameter accordingly.
+ * To modify this behavior, you can set the `deps` parameter accordingly. By default, `deps` is set to activeTrace so that
+ * components re-render when the active trace changes.
  */
 export const useBasicOptions = ({activeTrace:pActiveTrace, chartId, tbl_id, groupKey, isXNotNumeric,
-                                  isYNotNumeric, xNoLog, yNoLog, orientation='horizontal'}, deps=[]) => {
+                                  isYNotNumeric, xNoLog, yNoLog, orientation='horizontal'}, deps=[pActiveTrace]) => {
     const {activeTrace, data, layout, fireflyLayout, color, ...rest} = getChartProps(chartId, tbl_id, pActiveTrace);
     xNoLog = xNoLog ?? rest.xNoLog;
     yNoLog = yNoLog ?? rest.yNoLog;
@@ -562,14 +563,21 @@ export const useBasicOptions = ({activeTrace:pActiveTrace, chartId, tbl_id, grou
             const colorPicker = (
                 <div style={{display: 'inline-block', paddingLeft: 2, verticalAlign: 'top'}}
                      title='Select trace color'
-                     onClick={() => showColorPickerDialog(getFieldVal(groupKey, `data.${activeTrace}.marker.color`), true, false,
-                         (ev) => {
-                             if (ev) {
-                                 const {r, g, b, a} = ev.rgb;
-                                 const rgbStr = `rgba(${r},${g},${b},${a})`;
-                                 dispatchValueChange({fieldKey: `data.${activeTrace}.marker.color`, groupKey, value: rgbStr, valid: true});
-                             }
-                         }, groupKey, 'plots.colorpicker', .5)}>
+                     onClick={() => showColorPickerDialog({
+                             colorStr:getFieldVal(groupKey, `data.${activeTrace}.marker.color`),
+                             callbackOnOKOnly:true,
+                             postTitle: groupKey ? `: ${groupKey}` : '',
+                             helpId: 'plots.colorpicker',
+                             presetAlpha:.5,
+                             cb:(ev) => {
+                                 if (ev) {
+                                     const {r, g, b, a} = ev.rgb;
+                                     const rgbStr = `rgba(${r},${g},${b},${a})`;
+                                     dispatchValueChange({fieldKey: `data.${activeTrace}.marker.color`, groupKey, value: rgbStr, valid: true});
+                                 }
+                             },
+                         }
+                     )}>
                     <ToolbarButton icon={MAGNIFYING_GLASS}/>
                 </div>
             );

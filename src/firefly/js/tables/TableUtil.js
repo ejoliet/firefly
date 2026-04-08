@@ -1020,8 +1020,11 @@ export function isSubHighlightRow(tableOrId, rowIdx, hlRowIdx) {
     const highlightedRow= hlRowIdx ?? tableModel.highlightedRow;
 
     const makeCellKey= (row) => colNameAry.map((cname) => getCellValue(tableModel, row, cname)).join('|');
-        
-    return makeCellKey(highlightedRow) === makeCellKey(rowIdx);
+
+    const hKey= makeCellKey(highlightedRow);
+    const rKey= makeCellKey(rowIdx);
+    if (!hKey && !rKey) return false;
+    return hKey===rKey;
 }
 
 export function hasSubHighlightRows(tableOrId) {
@@ -1568,6 +1571,7 @@ export function splitVals(values='') {
 }
 
 export function parseError(error) {
+    if (!error) return {message: 'Unknown error', cause: 'Unknown error'};
     const message = error?.message ?? error;
     const colonRegex = /^((?:\S+\s*){1,3}?):(.+)/s; // colon appears at most 3 words after the beginning of the string
 
@@ -1626,6 +1630,26 @@ export function ensureEnumVals(tableModel) {
             }
         }
     });
+}
+
+/**
+ * smartly decides the next tbl title given the existing table titles, to avoid duplicates
+ * @param {string} [inTitle] the default title
+ * @return {string} returns a numbered title (if the given title already exists), else return the default title as is
+ */
+export function makeNumberedTitle(inTitle) {
+    if (getTblIdsByGroup().map((tbl_id) => getTblById(tbl_id)?.title).every( (t) => t!==inTitle)) {
+        return inTitle;
+    }
+    const numList = getTblIdsByGroup()
+        .map((tbl_id) => getTblById(tbl_id)?.title)
+        .filter((title) => title && title.startsWith(inTitle))
+        .map((title) => title?.substring(inTitle.length).trim().split('-')?.[1])
+        .map(Number)
+        .filter(Boolean);
+
+    const maxNum = numList?.length ? Math.max(...numList) : 0;
+    return inTitle + ` - ${maxNum + 1}`;
 }
 
 

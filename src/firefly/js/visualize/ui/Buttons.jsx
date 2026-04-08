@@ -65,7 +65,7 @@ import FillIcon from '@mui/icons-material/OpenInFullOutlined';
 import OneXIcon from '@mui/icons-material/TimesOneMobiledataOutlined';
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 import ChangeCircleIcon from '@mui/icons-material/ChangeCircle';
-
+import ReverseIcon from '@mui/icons-material/FlipCameraAndroidOutlined';
 
 import FiberManualRecordRoundedIcon from '@mui/icons-material/FiberManualRecordRounded';
 
@@ -113,10 +113,14 @@ export const PDFButton= (props) =>(
 
 
 export const LockImages= ({locked, ...props}) =>{
-    const sx={position:'absolute', transform: 'scale(1.2,1.2)', top:1, left:4};
+    const sx={position:'absolute', transform: 'scale(1.2,1.2)', top:1, left:4, };
     const icon= (
         <Box sx={{width:24,height:24}}>
-            {locked ? <LinkIcon {...{sx}}/> : <LinkOffIcon {...{sx}}/>}
+            {locked
+                ? <LinkIcon {...{sx: (theme) =>
+                        ({fill: `rgba(${theme.vars.palette.danger.mainChannel} / 1)`,  ...sx}) }}/>
+                : <LinkOffIcon {...{sx}}/>
+            }
         </Box>
     );
     return (<DropDownToolbarButton {...{ icon, dropPosition:{left:6,bottom:-2}, ...props, }}  />);
@@ -255,6 +259,10 @@ export const StatsButton= (props) => ( <TB {...{ icon: <FunctionsOutlinedIcon/>,
 export const ExpandAll= (props) => ( <TB {...{icon: <UnfoldMoreOutlinedIcon/>, ...props}}/>);
 export const CollapseAll= (props) => ( <TB {...{icon: <UnfoldLessOutlinedIcon/>, ...props}}/>);
 export const ChangeSearch= (props) => ( <TB {...{icon: <ChangeCircleIcon/>, ...props}}/>);
+
+export const ReverseButton= (props) =>(
+    <ToolbarButton {...{
+        icon: (<ReverseIcon sx={{transform: 'scale(.7)'}}/>), ...props }}/>);
 
 export const FiltersOffButton= (props) => ( <TB {...{ icon: <ClearFilterIco/>, ...props}}/>);
 

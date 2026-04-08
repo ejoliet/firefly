@@ -6,7 +6,7 @@ import React, {useCallback, useEffect, useRef} from 'react';
 import {Box, Typography} from '@mui/joy';
 import {arrayOf, array, bool, func, instanceOf, number, object, objectOf, shape, string} from 'prop-types';
 import {Column, Table} from 'fixed-data-table-2';
-import {wrapResizer} from '../../ui/SizeMeConfig.js';
+import {wrapResizeMonitor} from '../../ui/ResizeMonitor';
 import {get, set, isEmpty, isUndefined, omitBy, pick} from 'lodash';
 
 import {
@@ -152,7 +152,7 @@ const BasicTableViewInternal = React.memo(({ selectable:selectableIn= false, sho
         const changes = {};
         if (!isEmpty(columns)){
             const calcWidth = width-15-( selectable ? 25 : 0);
-            if (isSingleColumnTable(columns) && (!columnWidths || columnWidths[0]!==calcWidth)) {
+            if (calcWidth > 0 && isSingleColumnTable(columns) && (columnWidths?.[0]!==calcWidth)) {
                 // set 1st (only visible) column's width to table's width minus scrollbar's width (15px)
                 changes.columnWidths = [calcWidth, ...Array(columns.length - 1).fill(0)];
             } else if(columnWidths?.length !== columns.length) {
@@ -279,7 +279,7 @@ BasicTableViewInternal.defaultProps = {
     currentPage: -1
 };
 
-export const BasicTableView = wrapResizer(BasicTableViewInternal);
+export const BasicTableView = wrapResizeMonitor(BasicTableViewInternal);
 
 export const BasicTableViewWithConnector = React.memo((props) => {
     const {tbl_ui_id=uniqueTblUiId()} = props;

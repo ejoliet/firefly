@@ -141,7 +141,7 @@ export class PlotlyWrapper extends Component {
                 if (!this.isUnmounted && this.state.showMask) {
                     this.setState(() => ({showMask:false}));
                 }
-            },0);
+            }, MASKING_DELAY);
         }
     }
 
@@ -172,9 +172,10 @@ export class PlotlyWrapper extends Component {
             detectedResize= true;
         }
 
+
         const {data,layout, config, dataUpdate, layoutUpdate}= this.props;
-        const { maskOnLayout, maskOnRestyle, maskOnResize, maskOnNewPlot,
-                autoSizePlot, doingResize, autoDetectResizing }= np;
+        const { maskOnLayout=true, maskOnRestyle=false, maskOnResize=false, maskOnNewPlot=true,
+                autoSizePlot=false, doingResize=false, autoDetectResizing=false }= np;
 
         const treatAsResize= doingResize || (autoDetectResizing && detectedResize);
 
@@ -193,7 +194,12 @@ export class PlotlyWrapper extends Component {
                 this.updateRenderType(maskOnLayout, treatAsResize, RenderType.RELAYOUT);
             }
             else if (detectedResize && autoSizePlot) {
-                this.updateRenderType(maskOnResize, true, RenderType.RESIZE);
+                // there is a race condition that I don't understand, maybe the plotly update,
+                // this condition no longer seems to work especially on firefox,
+                // it also may be because of other changes to the file.
+                // it happens out of order and adds a permanent mask
+                // for now I am just commenting this out. probably detectedResize could be removed
+                //this.updateRenderType(maskOnResize, false, RenderType.RESIZE);
             }
             else { // in this case- the important props have not changed, therefore return on state (showMask) change
                    // everywhere else the props have changed so we return true
@@ -426,15 +432,4 @@ PlotlyWrapper.propTypes = {
     autoDetectResizing : PropTypes.bool,
     doingResize: PropTypes.bool,
     thumbnail: PropTypes.bool
-};
-
-PlotlyWrapper.defaultProps = {
-    maskOnLayout : true,
-    maskOnRestyle : false,
-    maskOnResize : true,
-    maskOnNewPlot : true,
-
-    autoSizePlot : false,
-    autoDetectResizing : false,
-    doingResize: false
 };

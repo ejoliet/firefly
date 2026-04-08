@@ -1,4 +1,5 @@
-import React, {useCallback, useContext, useEffect, useState, useTransition} from 'react';
+import PropTypes from 'prop-types';
+import React, {use, useCallback, useContext, useEffect, useState, useTransition} from 'react';
 import {isEmpty, isUndefined, uniqueId} from 'lodash';
 import shallowequal from 'shallowequal';
 import {flux} from '../core/ReduxFlux.js';
@@ -37,30 +38,26 @@ export function useStoreConnector(stateGetter, deps=[], markAsTransition=false) 
     const [val, setter] = useState(stateGetter());
     const [isPending,startTransition]= useTransition();
 
-    let isMounted = true;
     useEffect(() => {
         let cState = val;
-        const remover = flux.addListener(() => {
-            if (isMounted) {
-                const nState = stateGetter(cState);      // if getter returns oldState then no state update
-                if (nState===cState) return;             // comparator might be overridden, use === first for efficiency
-                if ( !comparator(cState, nState) ) {
-                    cState = nState;
-                    if (markAsTransition) {
-                        startTransition(() =>{
-                           setter(cState);
-                        });
-                    }
-                    else {
-                        setter(cState);
-                    }
-                }
+        const syncFromStore = () => {
+            const nState = stateGetter(cState);      // if getter returns oldState then no state update
+            if (nState===cState || comparator(cState, nState)) return; // comparator might be overridden, use === first for efficiency
+            cState = nState;
+            if (markAsTransition) {
+                startTransition(() =>{
+                   setter(cState);
+                });
             }
-        });
-        return () => {
-            isMounted = false;
-            remover && remover();
+            else {
+                setter(cState);
+            }
         };
+        const remover = flux.addListener(syncFromStore);
+        //call syncFromStore once in case there were updates between the first call to stateGetter and the time the listener was added
+        //re-read once in case the store changed after the initial snapshot but before subscription attached.
+        syncFromStore();
+        return () => remover?.();
     }, deps);     // defaults to run only once
 
     return val;
@@ -122,8 +119,7 @@ export function useBindFieldGroupToStore(groupKey) {
  * setValue(4,{value:false, message: '4 is not valid'}
  */
 export function useFieldGroupValue(fieldKey, gk) {
-    const context= useContext(FieldGroupCtx);
-    const groupKey= gk || context.groupKey;
+    const groupKey= gk || use(FieldGroupCtx).groupKey;
     const setValueToState= useState(undefined)[1]; // use state here is just to force re-renders on value change
     let mounted= true;
     let value= getFieldVal(groupKey,fieldKey);
@@ -314,4 +310,10 @@ export function Slot({component, slotProps={}, ...defProps}) {
     const {component:Component=component, ...nProps} = slotProps;
     const props = smartMerge(defProps, nProps);
     return Component ? <Component {...props}/> : false;
+}
+
+
+export function checkProps(props,f) {
+    if (f?.propTypes && f?.name && props) PropTypes.checkPropTypes(f.propTypes,props,'props',f.name);
+    return props;
 }

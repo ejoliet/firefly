@@ -5,16 +5,20 @@ package edu.caltech.ipac.firefly.server.cache;
 
 import edu.caltech.ipac.firefly.core.RedisService;
 import edu.caltech.ipac.firefly.core.Util;
+import edu.caltech.ipac.firefly.core.background.JobInfo;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.cache.Cache;
 import edu.caltech.ipac.util.cache.CacheKey;
 import edu.caltech.ipac.util.cache.StringKey;
-import redis.clients.jedis.Jedis;
+import edu.caltech.ipac.util.serialization.Serializer;
+import io.lettuce.core.api.StatefulRedisConnection;
 
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.function.Predicate;
+
+import static edu.caltech.ipac.util.serialization.Serializer.*;
 
 /**
  * This class provides an implementation of a distributed cache using Redis.
@@ -35,26 +39,26 @@ import java.util.function.Predicate;
  * @version $Id: EhcacheImpl.java,v 1.8 2009/12/16 21:43:25 loi Exp $
  */
 public class DistributedCache<T> implements Cache<T> {
-    public static final int DEF_TTL = AppProperties.getIntProperty("dist.cache.ttl.hours", 14*24) * 60 * 60;   // default to 14 days in seconds
+    public static final int DEF_TTL = AppProperties.getIntProperty("dist.cache.ttl.hours", 7*24) * 60 * 60;   // default to 7 days in seconds
     static final Logger.LoggerImpl LOG = Logger.getLogger();
     private static final String BASE64 = "BASE64::";
     private transient Predicate<T> getValidator;
 
-    private final Serializer<T> serializer;      // required; default is DefaultImpl
+    private final ValueSerializer<T> serializer;      // required; default is DefaultImpl
 
     public DistributedCache() {
         this(new DefaultImpl<>());
     }
-    public DistributedCache(Serializer<T> serializer) {
+    public DistributedCache(ValueSerializer<T> serializer) {
         this.serializer = serializer;
     }
 
 
-    String serialize(Object value) {
+    byte[] serialize(Object value) {
         return serializer.serialize(value);
     }
 
-    T deserialize(String value) throws Exception {
+    T deserialize(byte[] value) throws Exception {
         return serializer.deserialize(value);
     }
 
@@ -69,29 +73,30 @@ public class DistributedCache<T> implements Cache<T> {
 
     public void put(CacheKey key, Object value, int lifespanInSecs) {
             String keystr = key.getUniqueString();
-            try(Jedis redis = RedisService.getConnection()) {
-                if (redis != null) {
-                    if (value == null) {
-                        del(redis, keystr);
+            try {
+                var redis = RedisService.mainConn();
+                if (value == null) {
+                    del(redis, keystr);
+                } else {
+                    if (lifespanInSecs > 0) {
+                        setex(redis, keystr, serialize(value), lifespanInSecs);
                     } else {
-                        if (lifespanInSecs > 0) {
-                            setex(redis, keystr, serialize(value), lifespanInSecs);
-                        } else {
-                            set(redis, keystr, serialize(value));
-                        }
+                        set(redis, keystr, serialize(value));
                     }
                 }
             } catch (Exception ex) { LOG.error(ex); }
     }
 
     public void remove(CacheKey key) {
-        try(Jedis redis = RedisService.getConnection()) {
+        try {
+            var redis = RedisService.mainConn();
             del(redis, key.getUniqueString());
         } catch (Exception ex) { LOG.error(ex); }
     }
 
     public T get(CacheKey key) {
-        try(Jedis redis = RedisService.getConnection()) {
+        try {
+            var redis = RedisService.mainConn();
             T v = deserialize( get(redis, key.getUniqueString()) );
             if (v != null && getValidator != null && !getValidator.test(v)) {
                 del(redis, key.getUniqueString());
@@ -107,7 +112,8 @@ public class DistributedCache<T> implements Cache<T> {
     }
 
     public boolean isCached(CacheKey key) {
-        try(Jedis redis = RedisService.getConnection()) {
+        try {
+            var redis = RedisService.mainConn();
             return exists(redis, key.getUniqueString());
         } catch (Exception ex) { LOG.error(ex); }
         return false;
@@ -115,15 +121,15 @@ public class DistributedCache<T> implements Cache<T> {
 
     @Nonnull
     public List<StringKey> getKeys() {
-        try(Jedis redis = RedisService.getConnection()) {
-            return keys(redis).stream().map(StringKey::new).toList();
+        try {
+            return keys(RedisService.scanConn()).stream().map(StringKey::new).toList();
         } catch (Exception ex) { LOG.error(ex); }
         return List.of();
     }
 
-    public int getSize() {
-        try(Jedis redis = RedisService.getConnection()) {
-            return size(redis);
+    public long getSize() {
+        try {
+            return size(RedisService.mainConn());
         } catch (Exception ex) { LOG.error(ex); }
         return -1;
     }
@@ -132,64 +138,76 @@ public class DistributedCache<T> implements Cache<T> {
 // Implementation of redis string;  override for map, list, and set.
 //====================================================================
 
-    String  get(Jedis redis, String key) {
-        return redis.get(key);
+    byte[] get(StatefulRedisConnection<String, byte[]> redis, String key) {
+        return redis.sync().get(key);
     }
 
-    void del(Jedis redis, String key) {
-        redis.del(key);
+    void del(StatefulRedisConnection<String, byte[]> redis, String key) {
+        redis.sync().del(key);
     }
 
-    void set(Jedis redis, String key, String value) {
-        redis.set(key, value);
+    void set(StatefulRedisConnection<String, byte[]> redis, String key, byte[] value) {
+        redis.sync().set(key, value);
     }
 
-    void setex(Jedis redis, String key, String value, long lifespanInSecs) {
-        redis.setex(key, lifespanInSecs, value);
+    void setex(StatefulRedisConnection<String, byte[]> redis, String key, byte[] value, long lifespanInSecs) {
+        redis.sync().setex(key, lifespanInSecs, value);
     }
 
     @Nonnull
-    List<String> keys(Jedis redis) {
-        var keys = redis.keys("*");
+    List<String> keys(StatefulRedisConnection<String, byte[]> redis) {
+        var keys = redis.sync().keys("*");
         return keys == null ? List.of() : keys.stream().toList();
     }
 
-    boolean exists(Jedis redis, String key) {
-        return redis.exists(key);
+    boolean exists(StatefulRedisConnection<String, byte[]> redis, String key) {
+        return redis.sync().exists(key) > 0;
     }
 
-    int size(Jedis redis) {
-        return Math.toIntExact(redis.dbSize());
+    long size(StatefulRedisConnection<String, byte[]> redis) {
+        return redis.sync().dbsize();
     }
 
 //====================================================================
 //  Utility functions
 //====================================================================
 
-    public interface Serializer<T> {
-        String serialize(Object object);
-        T deserialize(String s) throws Exception;
+    public interface ValueSerializer<T> {
+        byte[] serialize(Object object);
+        T deserialize(byte[] s) throws Exception;
     }
 
     /**
      * Default implementation of the Serializer.  It serializes objects to Base64 strings
      * using java serialization.  When the object is a String, it returns the string directly.
      */
-    public static class DefaultImpl<T> implements Serializer<T> {
+    public static class DefaultImpl<T> implements ValueSerializer<T> {
 
-        public String serialize(Object object) {
+        public byte[] serialize(Object object) {
             if (object == null) return null;
-            if (object instanceof String v) {
-                return v;
+            return Serializer.toTypedMessagePack(object);
+        }
+
+        public T deserialize(byte[] raw) throws Exception {
+            if (raw == null) return null;
+            // prior to MsgPack, JobInfo was stored as JSON string
+            // for the time being, we will add special case here
+            // it may be removed in the future
+            if (looksLikeJson(raw)) {
+                try {
+                    return (T) Serializer.fromJson(toUtf8(raw), JobInfo.class);
+                } catch (Exception ignored) {}
+            }
+            var val = Serializer.fromTypedMessagePack(raw);
+            if (val instanceof String s) {
+                if (s.startsWith(BASE64)) {
+                    return (T) Util.deserialize(s.substring(BASE64.length()));
+                } else {
+                    return (T) s;
+                }
             } else {
-                return BASE64 + Util.serialize(object);
+                return (T) val;
             }
         }
-
-        public T deserialize(String s) throws Exception {
-            if (s == null) return null;
-            return !s.startsWith(BASE64) ? (T) s : (T) Util.deserialize(s.substring(BASE64.length()));
-        }
     }
-
 }

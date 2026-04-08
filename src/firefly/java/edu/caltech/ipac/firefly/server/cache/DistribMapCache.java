@@ -4,9 +4,10 @@
 package edu.caltech.ipac.firefly.server.cache;
 
 import edu.caltech.ipac.firefly.core.RedisService;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.params.ScanParams;
-import redis.clients.jedis.resps.ScanResult;
+import io.lettuce.core.MapScanCursor;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanCursor;
+import io.lettuce.core.api.StatefulRedisConnection;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,26 +33,34 @@ public class DistribMapCache<T> extends DistributedCache<T> {
         this(mapKey, ttl, new DefaultImpl<>());
     }
 
-    public DistribMapCache(String mapKey, long ttl, Serializer<T> serializer) {
+    public DistribMapCache(String mapKey, long ttl, ValueSerializer<T> serializer) {
         super(serializer);
         this.mapKey = mapKey;
         this.ttl = ttl;
     }
 
-    public List<T> getValuesFor(ScanParams scanParams) {
+    public List<T> getValuesFor(ScanArgs scanArgs) {
         List<T> result = new ArrayList<>();
-        try (Jedis jedis = RedisService.getConnection()) {
-            String cursor = ScanParams.SCAN_POINTER_START;
+        try {
+            var redis = RedisService.scanConn().sync();  // use your dedicated scan connection
+            ScanCursor cursor = ScanCursor.INITIAL;
+
             do {
-                ScanResult<Map.Entry<String, String>> scanResult = jedis.hscan(mapKey, cursor, scanParams);
-                for (Map.Entry<String, String> entry : scanResult.getResult()) {
-                    result.add(deserialize(entry.getValue()));
+                MapScanCursor<String, byte[]> scanResult = redis.hscan(mapKey, cursor, scanArgs);
+                for (Map.Entry<String, byte[]> entry : scanResult.getMap().entrySet()) {
+                    try {
+                        result.add(deserialize(entry.getValue()));
+                    } catch (Exception e) {
+                        LOG.error(e, "Error deserializing value for key {%s} in Redis hash {%s}: %s".formatted(entry.getKey(), mapKey, e.getMessage()));
+                    }
                 }
-                cursor = scanResult.getCursor();
-            } while (!cursor.equals(ScanParams.SCAN_POINTER_START));
+                cursor = scanResult;   // advance cursor
+            } while (!cursor.isFinished());
+
         } catch (Exception e) {
-            LOG.error(e.getMessage());
+            LOG.error(e, "Error scanning Redis hash {%s}: %s".formatted(mapKey, e.getMessage()));
         }
+
         return result;
     }
 
@@ -59,37 +68,38 @@ public class DistribMapCache<T> extends DistributedCache<T> {
 //  override for Redis Map implementation
 //====================================================================
 
-    String get(Jedis redis, String key) {
-        return redis.hget(mapKey, key);
+    byte[] get(StatefulRedisConnection<String, byte[]>  redis, String key) {
+        return redis.sync().hget(mapKey, key);
     }
 
-    void del(Jedis redis, String key) {
-        redis.hdel(mapKey, key);
+    void del(StatefulRedisConnection<String, byte[]>  redis, String key) {
+        redis.sync().hdel(mapKey, key);
     }
 
-    void set(Jedis redis, String key, String value) {
-        redis.hset(mapKey, key, value);
+    void set(StatefulRedisConnection<String, byte[]>  redis, String key, byte[] value) {
+        var sync = redis.sync();
+        sync.hset(mapKey, key, value);
         if (ttl > 0) {
-            redis.expire(mapKey, ttl);  // renew ttl on each update
-        } else if (redis.ttl(mapKey) > 0) {
-            redis.persist(mapKey);      // remove ttl if it was set (only needed for correction)
+            sync.expire(mapKey, ttl);  // renew ttl on each update
+        } else if (sync.ttl(mapKey) > 0) {
+            sync.persist(mapKey);      // remove ttl if it was set (only needed for correction)
         }
     }
 
-    void setex(Jedis redis, String key, String value, long ttl) {
+    void setex(StatefulRedisConnection<String, byte[]>  redis, String key, byte[] value, long ttl) {
         set(redis, key, value); // ttl is managed at the map level, not individual keys
     }
 
-    List<String> keys(Jedis redis) {
-        return new ArrayList<>(redis.hkeys(mapKey));
+    List<String> keys(StatefulRedisConnection<String, byte[]>  redis) {
+        return new ArrayList<>(redis.sync().hkeys(mapKey));
     }
 
-    boolean exists(Jedis redis, String key) {
-        return redis.hexists(mapKey, key);
+    boolean exists(StatefulRedisConnection<String, byte[]>  redis, String key) {
+        return redis.sync().hexists(mapKey, key);
     }
 
-    int size(Jedis redis) {
-        return (int) redis.hlen(mapKey);
+    long size(StatefulRedisConnection<String, byte[]>  redis) {
+        return redis.sync().hlen(mapKey);
     }
 
 }

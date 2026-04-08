@@ -10,6 +10,7 @@ import edu.caltech.ipac.table.io.FITSTableReader;
 import edu.caltech.ipac.table.io.IpacTableReader;
 import edu.caltech.ipac.table.io.VoTableReader;
 import edu.caltech.ipac.util.FormatUtil;
+import edu.caltech.ipac.util.asdf.AsdfAccess;
 
 import java.io.File;
 import java.io.IOException;
@@ -63,6 +64,13 @@ public class TableUtil {
             try {
                 // Switch to the new function:
                 return FITSTableReader.convertFitsToDataGroup(inf.getAbsolutePath(), request, tableIndex);
+            } catch (Exception e) {
+                throw new IOException("Unable to read FITS file:" + inf, e);
+            }
+        } else if (format == FormatUtil.Format.ASDF ) {
+            try {
+                // Switch to the new function:
+                return AsdfAccess.convertAsdfTableToDataGroup(inf, request, tableIndex);
             } catch (Exception e) {
                 throw new IOException("Unable to read FITS file:" + inf, e);
             }

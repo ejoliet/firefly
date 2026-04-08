@@ -5,7 +5,7 @@
 import {isUndefined} from 'lodash';
 import {DtoR, RtoD, computeDistance} from '../VisUtil.js';
 import { GNOMONIC, ORTHOGRAPHIC, NCP, AITOFF, CAR, LINEAR, PLATE,
-    ARC, SFL, CEA, TPV, STG, UNSPECIFIED, UNRECOGNIZED } from './Projection.js';
+    ARC, SFL, CEA, TPV, STG, HPX, UNSPECIFIED, UNRECOGNIZED } from './Projection.js';
 import {findCoordSys, EQUATORIAL_J, EQUATORIAL_B, GALACTIC_JSYS,
     ECLIPTIC_B, SUPERGALACTIC_JSYS, ECLIPTIC_J, NONCELESTIAL} from '../CoordSys.js';
 import {MAX_SIP_LENGTH} from './ProjectionUtil.js';
@@ -16,6 +16,10 @@ const CD1_1_HEADERS= ['CD1_1','CD001001'];
 const CD1_2_HEADERS= ['CD1_2','CD001002'];
 const CD2_1_HEADERS= ['CD2_1','CD002001'];
 const CD2_2_HEADERS= ['CD2_2','CD002002'];
+const PC1_1_HEADERS= ['PC1_1','PC001001'];
+const PC1_2_HEADERS= ['PC1_2','PC001002'];
+const PC2_1_HEADERS= ['PC2_1','PC002001'];
+const PC2_2_HEADERS= ['PC2_2','PC002002'];
 
 function getHeaderListD(parse, list, def, altWcs) {
 	const key= list.find( (i) =>  parse.header[i+altWcs]);
@@ -23,13 +27,14 @@ function getHeaderListD(parse, list, def, altWcs) {
 }
 
 
-function getPVArray(parse, idx, altWcs) {
+function getPVArrayTPV(parse, idx, altWcs) {
     const retval= [];
     for(let i=0; i<40; i++) {
         retval[i]= parse.getDoubleValue('PV'+idx+'_'+i+altWcs, i===1?1:0);
     }
     return retval;
 }
+
 
 function getSIPArray(parse, rootKey, length, altWcs) {
     let keyword;
@@ -153,6 +158,7 @@ export function parseSpacialHeaderInfo(header, altWcs='', zeroHeader) {
             case '-SFL': p.maptype = SFL; break;
             case '-GLS': p.maptype = SFL; break;
             case '-STG': p.maptype = STG; break;
+            case '-HPX': p.maptype = HPX; break;
             case '----':
             case '':     p.maptype = LINEAR; break;
             default :    p.maptype = UNRECOGNIZED;
@@ -187,10 +193,10 @@ export function parseSpacialHeaderInfo(header, altWcs='', zeroHeader) {
         parse.isDefinedHeaderList(CD2_2_HEADERS);
 
 
-    p.pc1_1 = parse.getDoubleValue('PC1_1'+altWcs, undefined);
-    p.pc1_2 = parse.getDoubleValue('PC1_2'+altWcs, undefined);
-    p.pc2_1 = parse.getDoubleValue('PC2_1'+altWcs, undefined);
-    p.pc2_2 = parse.getDoubleValue('PC2_2'+altWcs, undefined);
+    p.pc1_1 = getHeaderListD(parse, PC1_1_HEADERS, undefined, altWcs);
+    p.pc1_2 = getHeaderListD(parse, PC1_2_HEADERS, undefined, altWcs);
+    p.pc2_1 = getHeaderListD(parse, PC2_1_HEADERS, undefined, altWcs);
+    p.pc2_2 = getHeaderListD(parse, PC2_2_HEADERS, undefined, altWcs);
 
     const defined_pc = isFinite(p.pc1_1) || isFinite(p.pc1_2) || isFinite(p.pc2_1) || isFinite(p.pc2_2);
 
@@ -203,10 +209,15 @@ export function parseSpacialHeaderInfo(header, altWcs='', zeroHeader) {
     }
 
     if (p.maptype===TPV) {
-        p.pv1= getPVArray(parse,1, altWcs);
-        p.pv2= getPVArray(parse,2, altWcs);
+        p.pv1= getPVArrayTPV(parse,1, altWcs);
+        p.pv2= getPVArrayTPV(parse,2, altWcs);
+    } else if (p.maptype===HPX) {
+        p.pv2= [];
+        for(let i=1; i<3; i++) {
+            // default values PV2_1=4, PV2_2=3
+            p.pv2[i-1]= parse.getDoubleValue('PV2_'+i+altWcs, i===1?4:3);
+        }
     }
-
 
     p.datamax = parse.getDoubleValue('DATAMAX', NaN);
     p.datamin = parse.getDoubleValue('DATAMIN', NaN);
@@ -379,7 +390,7 @@ export function parseSpacialHeaderInfo(header, altWcs='', zeroHeader) {
 
 function getFluxUnits(parse, zeroHeader) {
     let bunit = parse.getValue(HdrConst.BUNIT, 'NONE');
-    if (bunit==='NONE') {
+    if (bunit==='NONE' || bunit.toLowerCase()==='null') {
         bunit= zeroHeader  ? getHeader(zeroHeader, 'BUNIT', EMPTY_BUNIT_DEFAULT) : EMPTY_BUNIT_DEFAULT;
     }
     if (bunit.startsWith('HITS')) return 'frames';
@@ -469,9 +480,3 @@ export function makeDirectFileAccessData(header,cubePlane) {
     }
     return miniHeader;
 }
-
-
-
-
-
-

@@ -4,21 +4,28 @@
 
 import React, {useEffect, useRef, useState} from 'react';
 import {string, number, func, bool, object, oneOfType, node} from 'prop-types';
-import {difference, isEmpty, isNil, isString, xor} from 'lodash';
+import {debounce, difference, isEmpty, isNil, isString, xor} from 'lodash';
 import Slider from 'react-slick';
 import 'slick-carousel/slick/slick.css';
 import 'slick-carousel/slick/slick-theme.css';
+import {dispatchAddWorkingTask} from '../../core/AppDataCntlr';
 import {getComponentState} from '../../core/ComponentCntlr';
 import {CutoutButton, SHOWING_CUTOUT, SHOWING_FULL} from '../../ui/CutoutSizeDialog';
+import {IfWorkingMaskById} from '../../ui/panel/MaskPanel';
 
 import {useFieldGroupValue, useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {getTblById, isFullyLoaded} from '../../tables/TableUtil.js';
-import {getCutoutSize, getCutoutTargetOverride, getPreferCutout} from '../../ui/tap/Cutout';
+import {getPreferCutout} from '../../ui/tap/Cutout';
+import {callWhileAwaiting} from '../../util/WebUtil';
+import {ImageViewerPlaceHolder} from '../iv/ImageViewer';
+import {onPlotComplete} from '../PlotCompleteMonitor';
+import {RotateType} from '../PlotState';
+import {UserZoomTypes} from '../ZoomUtil';
 import {MultiImageViewer} from './MultiImageViewer.jsx';
 import {dispatchReplaceViewerItems, getMultiViewRoot, getViewer, IMAGE, NewPlotMode,} from '../MultiViewCntlr.js';
 import {
     dispatchChangeActivePlotView, dispatchDeletePlotView,
-    dispatchPlotImage, dispatchRecenter, dispatchWcsMatch, visRoot, WcsMatchType
+    dispatchPlotImage, dispatchRecenter, dispatchRotate, dispatchWcsMatch, dispatchZoom, visRoot, WcsMatchType
 } from '../ImagePlotCntlr.js';
 import {SORT_ASC, SortInfo, UNSORTED} from '../../tables/SortInfo.js';
 import {CloseButton} from 'firefly/ui/CloseButton';
@@ -37,6 +44,9 @@ const MAX_IMAGE_CNT= 7;
 const IMAGE_CNT_KEY= 'imageCount';
 const IMAGE_TABLE_ERROR = 'Unable to load images because the required data table couldn\'t be retrieved.';
 
+const FORCE_RELOAD='FORCE_RELOAD';
+const TABLE_ROW='TABLE_ROW';
+const PAGE='PAGE';
 
 export function ImageTableRowViewer({viewerId, makeRequestFromRow, defaultCutoutSizeAS, tbl_id, defaultWcsMatchType,
                                        defaultImageCnt= 5, imageExpandedMode, insideFlex=true, cutoutWpt,
@@ -49,34 +59,36 @@ export function ImageTableRowViewer({viewerId, makeRequestFromRow, defaultCutout
     const cutoutState= useStoreConnector(() =>getComponentState(viewerId));
     const hasTable= Boolean(table);
 
+
     //flags to ensure that effects are fired only when active plot or highlighted row was changed through UI interaction
     //and not when they were changed through the synchronisation code
-    const activePlotChangedByUI = useRef(true);
+    // const activePlotChangedByUI = useRef(true);
     const hRowChangedByUI = useRef(true);
+    const layoutImageAbort = useRef();
 
     //keep track of slide index
     const [currentSlideIdx, setCurrentSlideIdx] = useState(0);
     const onSlideChange = (current, next) => setCurrentSlideIdx(next);
 
 
+    const layoutParams= {viewerId, imageCnt:Number(imageCnt), table, makeRequestFromRow, cutoutWpt};
+
     useEffect( ()=>{
         if (hasTable) recenterImages(viewerId) ;
     }, [viewerId, hasTable]);
 
-
     useEffect(() => {
-        if (isEmpty(cutoutState)) return;
-        layoutImages(viewerId, Number(imageCnt), table, makeRequestFromRow, table?.highlightedRow, cutoutWpt, true);
-    }, [cutoutState]);
+        if (isEmpty(cutoutState) || !table || !tblLoaded) return;
+        layoutImageAbort.current= layoutImages({
+            ...layoutParams, midSlideIdx:table?.highlightedRow, loadType:FORCE_RELOAD,
+            previousCallAbort:layoutImageAbort.current});
+    }, [cutoutState?.preferCutout?.LAST_PREF, cutoutState?.sdCutoutSize,
+        cutoutState?.sdCutoutWpOverride?.x, cutoutState?.sdCutoutWpOverride?.y, table?.request?.source, tblLoaded]);
 
     useEffect(()=>{
         if (!activePlotId?.startsWith(plotIdRoot(viewerId))) return;
-
-        if (activePlotChangedByUI.current) {
-            const activePlotRowNum = getPlotIdRowNum(viewerId, activePlotId);
-            changeHighlightedRow(table, activePlotRowNum, hRowChangedByUI); //synchronise highlighted row as per active plot
-        }
-        else activePlotChangedByUI.current = true;
+        const activePlotRowNum = getPlotIdRowNum(viewerId, activePlotId);
+        changeHighlightedRow(table, activePlotRowNum, hRowChangedByUI); //synchronise highlighted row as per active plot
     }, [activePlotId]);
 
     useEffect(() => {
@@ -84,8 +96,10 @@ export function ImageTableRowViewer({viewerId, makeRequestFromRow, defaultCutout
 
         if (hRowChangedByUI.current) {
             const midSlideIdx = table?.highlightedRow;
-            layoutImages(viewerId, Number(imageCnt), table, makeRequestFromRow, midSlideIdx, cutoutWpt);
-            changeActivePlot(viewerId, table, midSlideIdx, activePlotChangedByUI); //synchronise active plot as per highlighted row
+            layoutImageAbort.current= layoutImages({
+                ...layoutParams, midSlideIdx, loadType:TABLE_ROW,
+                previousCallAbort:layoutImageAbort.current}
+        );
             adjustImageSlider(sliderRef, table, Number(imageCnt), midSlideIdx);
         }
         else hRowChangedByUI.current = true;
@@ -97,26 +111,28 @@ export function ImageTableRowViewer({viewerId, makeRequestFromRow, defaultCutout
         const [beforeCnt, afterCnt] = getBeforeAfterMidCounts(Number(imageCnt));
         const midSlideIdx = currentSlideIdx + beforeCnt;
         const lastSlideIdx = midSlideIdx + afterCnt;
+        const updatedTable= getTblById(tbl_id);
 
-        const rowToHighlight = isNext ? table.highlightedRow + 1 : table.highlightedRow - 1;
+        const rowToHighlight = isNext ? updatedTable.highlightedRow + 1 : updatedTable.highlightedRow - 1;
         const midSlideIdxAfterSliding = isNext ? midSlideIdx + 1 : midSlideIdx - 1;
 
-        if((isNext && lastSlideIdx>=table.totalRows-1) || (!isNext && currentSlideIdx<=0) //at the edge
-            || (isNext && table.highlightedRow < midSlideIdx) || (!isNext && table.highlightedRow > midSlideIdx)) {
+        if((isNext && lastSlideIdx>=updatedTable.totalRows-1) || (!isNext && currentSlideIdx<=0) //at the edge
+            || (isNext && updatedTable.highlightedRow < midSlideIdx) || (!isNext && updatedTable.highlightedRow > midSlideIdx)) {
             // move highlighted row/plot but keep slider as it is, until it comes to the middle of slider
-            changeHighlightedRow(table, rowToHighlight, hRowChangedByUI);
-            changeActivePlot(viewerId, table, rowToHighlight, activePlotChangedByUI);
+            changeHighlightedRow(updatedTable, rowToHighlight, hRowChangedByUI);
+            changeActivePlot(viewerId, updatedTable, rowToHighlight);
             return false;
         }
-        else if((isNext && table.highlightedRow > midSlideIdx) || (!isNext && table.highlightedRow < midSlideIdx)) {
+        else if((isNext && updatedTable.highlightedRow > midSlideIdx) || (!isNext && updatedTable.highlightedRow < midSlideIdx)) {
             // keep highlighted row/plot as it is but move slider, until it comes to the middle of slider
-            layoutImages(viewerId, Number(imageCnt), table, makeRequestFromRow, midSlideIdxAfterSliding, cutoutWpt);
+            layoutImageAbort.current= layoutImages({
+                ...layoutParams, midSlideIdx:midSlideIdxAfterSliding, previousCallAbort:layoutImageAbort.current});
             return true;
         }
         else { //table.highlightedRow === midSlideIdx; move highlighted row/plot as well as slider
-            changeHighlightedRow(table, rowToHighlight, hRowChangedByUI);
-            layoutImages(viewerId,  Number(imageCnt), table, makeRequestFromRow, rowToHighlight, cutoutWpt);
-            changeActivePlot(viewerId, table, rowToHighlight, activePlotChangedByUI);
+            changeHighlightedRow(updatedTable, rowToHighlight, hRowChangedByUI);
+            layoutImageAbort.current= layoutImages({
+                ...layoutParams, midSlideIdx:rowToHighlight, previousCallAbort:layoutImageAbort.current});
             return true;
         }
     };
@@ -143,12 +159,16 @@ export function ImageTableRowViewer({viewerId, makeRequestFromRow, defaultCutout
     }
 
     return (
-        <MultiImageViewer
-            {...{viewerId, Toolbar, insideFlex, defaultImageCnt, maxImageCnt, tableId:tbl_id,
-                makeRequestFromRow,defaultCutoutSizeAS, defaultWcsMatchType, cutoutWpt,
-                wcsMatchType, activePlotId, makeCustomLayout, mouseReadoutEmbedded: false,
-                forceRowSize:1, canReceiveNewPlots: NewPlotMode.create_replace.key}}
-        />
+        <div style={{width:'100%', height:'100%', display:'flex', position: 'relative'}}>
+            <MultiImageViewer
+                {...{viewerId, Toolbar, insideFlex, defaultImageCnt, maxImageCnt, tableId:tbl_id,
+                    makeRequestFromRow,defaultCutoutSizeAS, defaultWcsMatchType, cutoutWpt,
+                    wcsMatchType, activePlotId, makeCustomLayout, mouseReadoutEmbedded: false,
+                    forceRowSize:1, canReceiveNewPlots: NewPlotMode.create_replace.key}}
+            />
+            <IfWorkingMaskById {...{id:'ImageTableRowViewer', message:'Searching Images',
+                           gridSize:{rows:1, cols:Number(imageCnt)}, sx:{top:34, bottom:20} }}/>
+        </div>
     );
 }
 
@@ -162,10 +182,11 @@ ImageTableRowViewer.propTypes= {
     maxImageCnt: number,
     imageExpandedMode: bool,
     insideFlex: bool,
-    makeRequestFromRow: func.isRequired,
+    makeRequestFromRow: func.isRequired, /*pass*/
     closeExpanded: func,
     tblErrorMsg: node,
 };
+
 
 
 function ImageSlider({viewerId, table, imageCnt, viewerItemIds, makeItemViewer, sliderRef, slideOnArrowClick, onSlideChange}) {
@@ -197,7 +218,6 @@ function ImageSlider({viewerId, table, imageCnt, viewerItemIds, makeItemViewer, 
         nextArrow: (<SliderArrow isNext={true}/>),
         prevArrow: (<SliderArrow isNext={false}/>),
         beforeChange: (current, next) => {
-            //console.log(current, next, viewerItemIds); //turn on for debugging slide changes
             onSlideChange(current, next);
         }
     };
@@ -223,7 +243,7 @@ function ImageSlider({viewerId, table, imageCnt, viewerItemIds, makeItemViewer, 
                             ? <Box sx={{display: 'inline-block', position: 'absolute', top: 0, width: 1, height: 1}}>
                                 {makeItemViewer(makePlotId(viewerId,i))}
                             </Box>
-                            : <span/> //empty placeholder-slide
+                            : <ImageViewerPlaceHolder plotId={makePlotId(viewerId,i)}/>
                         }
                     </div>
                 ))}
@@ -237,12 +257,18 @@ function Toolbar({viewerId, tableId:tbl_id, closeFunc=null, maxImageCnt, default
                      defaultWcsMatchType=WcsMatchType.Standard, wcsMatchType, activePlotId, cutoutWpt,
                      defaultCutoutSizeAS}) {
 
+    const {current:matchInit} = useRef({wcsMatchInitDone:false});
+
     useEffect(()=>{
-        if(wcsMatchType!==defaultWcsMatchType) {
+        if (matchInit.wcsMatchInitDone) return;
+        const pv= getPlotViewById(visRoot(),activePlotId);
+        const plotId= (!pv || pv.plotViewCtx.useForCoverage || !pv.plotViewCtx.useForSearchResults) ? undefined : activePlotId;
+        if(plotId && wcsMatchType!==defaultWcsMatchType) {
             //to make sure wcsMatch checkbox is checked on initial render
-            dispatchWcsMatch({matchType: defaultWcsMatchType, plotId: activePlotId});
+            matchInit.wcsMatchInitDone = true;
+            dispatchWcsMatch({matchType: defaultWcsMatchType, plotId});
         }
-    }, []);
+    }, [activePlotId]);
 
     const wcsMatch = (defaultWcsMatchType===WcsMatchType.Standard || defaultWcsMatchType===WcsMatchType.Target) && (
         <SwitchInputFieldView
@@ -308,7 +334,7 @@ Toolbar.propTypes= {
     closeFunc : func,
     defaultImageCnt: number,
     maxImageCnt: number,
-    makeRequestFromRow: func.isRequired,
+    makeRequestFromRow: func.isRequired, // passes viewerId, tbl_id, rowNum, centerWp then returns a Promise<WebPlotRequest>
     activePlotId: string,
     wcsMatchType: oneOfType([bool, object]),
     defaultWcsMatchType: object,
@@ -331,11 +357,14 @@ const doWcsMatch= (doWcsStandard, plotId) =>
 //     dispatchChangeViewerLayout(viewerId, value === 1 ? SINGLE : GRID, {count: value});
 // }
 //
-
 const adjustImageSlider = (sliderRef, table, imageCnt, midSlideIdx) => {
+    adjustImageSliderDebounce(sliderRef, table, imageCnt, midSlideIdx) ;
+};
+
+const adjustImageSliderDebounce = debounce((sliderRef, table, imageCnt, midSlideIdx) => {
     const [visiblePlotsStartIdx,] = getVisiblePlotsRange(midSlideIdx, table.totalRows, imageCnt);
     sliderRef.current?.slickGoTo(visiblePlotsStartIdx); //slider idx is always the 1st slide shown
-};
+}, 500);
 
 const changeHighlightedRow = (table, rowToHighlight, hRowChangedByUI) => {
     if (table && table.highlightedRow !== rowToHighlight) {
@@ -347,29 +376,38 @@ const changeHighlightedRow = (table, rowToHighlight, hRowChangedByUI) => {
     }
 };
 
-const changeActivePlot = (viewerId, table, plotIdxToActivate, activePlotChangedByUI) => {
+const changeActivePlot = (viewerId, table, plotIdxToActivate) => {
     const newActivePlotId = makePlotId(viewerId, plotIdxToActivate);
     if (getActivePlotView(visRoot())?.plotId !== newActivePlotId) {
         dispatchChangeActivePlotView(newActivePlotId);
-        if (plotIdxToActivate >= 0 && plotIdxToActivate < table?.totalRows) activePlotChangedByUI.current = false;
+        // if (plotIdxToActivate >= 0 && plotIdxToActivate < table?.totalRows) activePlotChangedByUI.current = false;
     }
 };
 
-function layoutImages(viewerId, imageCnt, table, makeRequestFromRow, midSlideIdx, cutoutWpt, forceReload=false) {
 
-    const cutoutSize= getCutoutSize(viewerId);
-    const useCutout= getPreferCutout(viewerId, table?.tbl_id);
-    const wp= getCutoutTargetOverride(viewerId) ?? cutoutWpt;
+function layoutImages({previousCallAbort, ...params}) {
+    let processingAborted= false;
+    const isProcessAborted= () => processingAborted;
+    previousCallAbort?.();
+    void doLayoutImages({...params, isProcessAborted});
+    return () => processingAborted= true;
+}
+
+async function doLayoutImages({viewerId, imageCnt, table, makeRequestFromRow,
+                                  midSlideIdx, cutoutWpt, loadType=PAGE, isProcessAborted}) {
+
     if (!table || isNil(midSlideIdx) || (table?.totalRows??0) < 1) return;
     const viewer= getViewer(getMultiViewRoot(),viewerId);
     if (!viewer) return;
 
-    const vr = visRoot();
+    let vr = visRoot();
     const newPlotIdAry = makePlotIds(viewerId, midSlideIdx, table.totalRows, imageCnt);
-    const exclusiveNewPlotIds = forceReload ? newPlotIdAry : difference(newPlotIdAry, viewer.itemIdAry);
-    exclusiveNewPlotIds.forEach((plotId) => {
+    const exclusiveNewPlotIds = loadType===FORCE_RELOAD ? newPlotIdAry : difference(newPlotIdAry, viewer.itemIdAry);
+    const promiseAry= exclusiveNewPlotIds.map( async (plotId) => {
         const rowNum = getPlotIdRowNum(viewerId,plotId);
-        const wpRequest= makeRequestFromRow(viewerId, table.tbl_id, rowNum, cutoutSize, wp, useCutout); //todo - needs documentation
+        const wpRequestPromise= makeRequestFromRow(viewerId, table.tbl_id, rowNum, cutoutWpt); //todo - needs documentation
+        const wpRequest= await callWhileAwaiting(wpRequestPromise,
+            (promise) => loadType===PAGE && dispatchAddWorkingTask(plotId,promise,'Searching Image'), 400 );
         if (!wpRequest) return;
 
         const pv = getPlotViewById(vr, plotId);
@@ -377,12 +415,19 @@ function layoutImages(viewerId, imageCnt, table, makeRequestFromRow, midSlideIdx
             wpRequest.setRotateNorth(true);
             dispatchPlotImage({
                 plotId, wpRequest,
+                viewerId,
                 setNewPlotAsActive: false,
                 holdWcsMatch: true,
                 pvOptions: {userCanDeletePlots: false}
             });
         }
     });
+
+    // wait for all the request to resolve
+
+    await callWhileAwaiting(Promise.all(promiseAry),
+        (promise) => loadType!==PAGE && dispatchAddWorkingTask('ImageTableRowViewer',promise), 500);
+    if (isProcessAborted()&& loadType!==FORCE_RELOAD) return;
 
     if (xor(viewer.itemIdAry,newPlotIdAry).length>0) { //check if any of the two arrays has a unique element
         dispatchReplaceViewerItems(viewerId, newPlotIdAry, IMAGE );
@@ -391,12 +436,33 @@ function layoutImages(viewerId, imageCnt, table, makeRequestFromRow, midSlideIdx
     const {mpwWcsPrimId} = visRoot();
     const root= plotIdRoot(viewerId);
 
+
+
+    const finishedPromiseAry= exclusiveNewPlotIds.map( (plotId) => onPlotComplete(plotId));
+    await Promise.all(finishedPromiseAry); // wait for all the plots to complete
+    if (isProcessAborted() && loadType!==FORCE_RELOAD) return;
+
+    if (loadType===FORCE_RELOAD) {
+        vr= visRoot();
+        const plotId= exclusiveNewPlotIds.find( (plotId) => getPlotViewById(vr, plotId).serverCall==='success');
+        dispatchChangeActivePlotView(plotId);
+        dispatchRotate({plotId, rotateType:RotateType.NORTH });
+        dispatchZoom({ plotId, userZoomType: UserZoomTypes.FIT, });
+        dispatchRecenter({plotId});
+    }
+    else {
+        const plotId= newPlotIdAry.find( (id) => id.endsWith(midSlideIdx+''));
+        if (plotId) dispatchChangeActivePlotView(plotId);
+    }
+
     const keepPlotIdAry = makePlotIds(viewerId, midSlideIdx, table.totalRows, MAX_IMAGE_CNT);
-    getPlotViewAry(visRoot())
-        .filter(({plotId}) => plotId.startsWith(root))
-        .filter(({plotId}) => plotId !== mpwWcsPrimId)
-        .filter(({plotId}) => !keepPlotIdAry.includes(plotId))
-        .forEach(({plotId}) => dispatchDeletePlotView({plotId, holdWcsMatch: true}));
+    if (loadType!==PAGE) {
+        getPlotViewAry(visRoot()) // clean up old plots
+            .filter(({plotId}) => plotId.startsWith(root))
+            .filter(({plotId}) => plotId !== mpwWcsPrimId)
+            .filter(({plotId}) => !keepPlotIdAry.includes(plotId))
+            .forEach(({plotId}) => dispatchDeletePlotView({plotId, holdWcsMatch: true}));
+    }
 }
 
 function recenterImages(viewerId) {

@@ -28,7 +28,7 @@ import {ListBoxInputFieldView} from '../ListBoxInputField.jsx';
 import {useFieldGroupMetaState, useFieldGroupValue} from '../SimpleComponent.jsx';
 import {SwitchInputField} from '../SwitchInputField.jsx';
 import {ConstraintContext, getHelperConstraints, getUploadConstraint, isTapUpload} from './Constraints.js';
-import {TitleCustomizeButton} from './TableSearchHelpers';
+import {TapTitleCustomizeButton} from './TableSearchHelpers';
 import {TapViewType} from './TapViewType.jsx';
 import {getAdqlQuery, onTapSearchSubmit} from 'firefly/ui/tap/TapSearchSubmit';
 
@@ -193,7 +193,7 @@ function TapSearchPanelImpl({initArgs= {}, titleOn=true, lockService=false, lock
 
     return (
         <Box width={1} height={1}>
-            <ConstraintContext.Provider value={ctx}>
+            <ConstraintContext value={ctx}>
                 <FormPanel  onSuccess={(request) => onTapSearchSubmit({request, serviceUrl, tapBrowserState: tapState})}
                             cancelText=''
                             help_id = {tapHelpId('form')}
@@ -215,7 +215,7 @@ function TapSearchPanelImpl({initArgs= {}, titleOn=true, lockService=false, lock
                         lockedSchemaName, srvNameKey,
                         initArgs, selectBy, setSelectBy, serviceUrl, onTapServiceOptionSelect, titleOn, tapOps, obsCoreEnabled}} />
                 </FormPanel>
-            </ConstraintContext.Provider>
+            </ConstraintContext>
         </Box>
     );
 
@@ -425,7 +425,7 @@ function makeExtraWidgets(groupKey, initArgs, selectBy, setSelectBy, getUserTitl
             },
         }}/>)
     ];
-    extraWidgets.push( <TitleCustomizeButton {...{key:'setTitle', groupKey,
+    extraWidgets.push( <TapTitleCustomizeButton {...{key:'setTitle', groupKey,
         tapBrowserState,selectBy, getADQL: () => getFieldVal(groupKey,ADQL_QUERY_KEY,'') }}/> );
 
     extraWidgets.push(

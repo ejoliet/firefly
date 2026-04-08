@@ -132,7 +132,7 @@ export function makePlotView(plotId, req, pvOptions= {}) {
         plots:[],
         visible: pvOptions.visible ?? true,
         subHighlight: Boolean(pvOptions.subHighlight ?? false),
-        request: req && req.makeCopy(),
+        request: req?.makeCopy(),
         plottingStatusMsg:'Plotting...',
         serverCall:'success', // one of 'success', 'working', 'fail'
         primeIdx: -1,
@@ -153,12 +153,12 @@ export function makePlotView(plotId, req, pvOptions= {}) {
 
 /**
  *
- * @param {WebPlotRequest} req
- * @param {PVCreateOptions} pvOptions
+ * @param {WebPlotRequest} [req]
+ * @param {PVCreateOptions} [pvOptions]
  * @return {PlotViewContextData}
  */
-function createPlotViewContextData(req, pvOptions={}) {
-    const attributes= req.getAttributes();
+export function createPlotViewContextData(req=undefined, pvOptions={}) {
+    const attributes= req?.getAttributes() ?? {};
     const plotViewCtx= {
         menuItemKeys: {...getDefMenuItemKeys(), ...pvOptions.menuItemKeys},
         userCanDeletePlots: pvOptions?.userCanDeletePlots ?? true,
@@ -181,6 +181,7 @@ function createPlotViewContextData(req, pvOptions={}) {
         multiHdu:false, // this is updated when plots are added
         cubeCnt: 0,     // this is updated when plots are added
         hduPlotStartIndexes: [0], // this is updated when plots are added
+        markOutOfMemory: false,
     };
 
     const {hipsImageConversion:hi}= pvOptions;
@@ -319,7 +320,7 @@ export function updatePlotViewScrollXY(plotView,newScrollPt) {
  * @return {Array.<PlotView>} new plotView array after return a plotview
  */
 export function replacePlotView(plotViewAry,newPlotView) {
-    return plotViewAry.map( (pv) => pv.plotId===newPlotView.plotId ? newPlotView : pv);
+    return plotViewAry.map( (pv) => pv.plotId===newPlotView?.plotId ? newPlotView : pv);
 }
 
 /**

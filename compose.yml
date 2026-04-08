@@ -4,6 +4,8 @@ services:
     build:
       context: ../
       dockerfile: firefly/docker/Dockerfile
+      args:
+        BUILDPLATFORM: ${BUILDPLATFORM:-linux/amd64}
     ports:
       - "8080:8080"
     env_file:
@@ -13,7 +15,7 @@ services:
     build:
       context: ../
       dockerfile: firefly/docker/Dockerfile
-      target: deps
+      target: base
     command: bash -c "cd firefly && gradle firefly:test"
     volumes: &volInfo
       - ../firefly_test_data:/opt/work/firefly_test_data

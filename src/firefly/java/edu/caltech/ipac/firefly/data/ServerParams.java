@@ -104,6 +104,7 @@ public class ServerParams {
     public static final String HIPS_LIST_SOURCE_NAME= "hipsListSourceName";
     public static final String ENSURE_SOURCE= "ensureSource";
     public static final String ADHOC_SOURCE = "adhocSource";
+    public static final String ADHOC_MOC_INCLUDE= "AdhocMOCInclude";
     public static final String HIPS_DATATYPES = "hipsDataTypes";
     public static final String HIPS_MERGE_PRIORITY = "mergedListPriority";
     public static final String HIPS_TABLE_TYPE= "hipsTableType";
@@ -197,6 +198,8 @@ public class ServerParams {
     public static final String BACK_TO_URL= "backToUrl";
     public static final String MASK_DATA= "maskData";
     public static final String MASK_BITS= "maskBits";
+    public static final String TILE_ACTION= "tileAction";
+    public static final String TILE_NUMBER= "tileNumber";
 
     //Workspaces
     public static final String WS_LIST = "wsList"; // Gets the list of content/files

@@ -4,12 +4,13 @@
 
 import {Badge, Box, Button, Checkbox, Divider, IconButton, Stack, Tooltip} from '@mui/joy';
 import {isString} from 'lodash';
-import React, {useRef, useEffect, forwardRef, useCallback, useImperativeHandle} from 'react';
-import {bool, element, func, node, number, object, oneOfType, shape, string} from 'prop-types';
+import React, {useRef, useEffect, useCallback, useImperativeHandle} from 'react';
+import {any, bool, element, func, number, object, oneOfType, shape, string} from 'prop-types';
 import {dispatchHideDialog} from '../core/ComponentCntlr.js';
 import {DROP_DOWN_KEY} from './DropDownToolbarButton.jsx';
 import ArrowDropDownRoundedIcon from '@mui/icons-material/ArrowDropDownRounded';
 import BrowserInfo, {Platform} from 'firefly/util/BrowserInfo.js';
+import {checkProps} from './SimpleComponent';
 
 
 function getShortCutInfo(shortcutKey) {
@@ -41,99 +42,105 @@ function makeImage(icon,style={},className='') {
 
 /**
  *
- * @param icon icon to display
- * @param text text to display, if icon specified, icon task precidents
- * @param tip tooltip
- * @param badgeCount if greater than 0 a badge is shown on the button
- * @param enabled if false, show faded view
- * @param dropDownCB callback for the dropdown, will pass the div element
- * @param onClick function to call on click
- * @param visible if false then don't show button
- * @param active
- * @param imageStyle
- * @param lastTextItem
- * @param style - a style to apply
- * @return {object}
- */
-export const ToolbarButton = forwardRef((props,fRef) => {
-    const {
-        icon,text='',badgeCount=0,badgeAlert=false, enabled=true, visible=true,
-        imageStyle={}, iconButtonSize, shortcutKey='', color='neutral', variant='plain',
-        disableHiding, active, sx, CheckboxOnIcon, CheckboxOffIcon, value,
-        useDropDownIndicator= false, hasCheckBox=false, checkBoxOn=false, pressed=false,
-        component, slotProps={}, dropPosition={}, dropDownCB, onClick} = props;
+ * @param {Object} props
+ * @param props.icon icon to display
+ * @param props.text text to display, if icon specified, icon task takes precedents
+ * @param props.tip tooltip
+ * @param props.badgeCount if greater than 0 a badge is shown on the button
+ * @param props.enabled if false, show faded view
+ * @param props.dropDownCB callback for the dropdown, will pass the div element
+ * @param props.onClick function to call on click
+ * @param props.visible if false then don't show button
+ * @param props.active
+ * @param props.imageStyle
+ * @param props.lastTextItem
+ * @param props.ref
+ * @param props.style - a style to apply
+* @return {object}
+*/
+export function ToolbarButton(props) {
+const {
+    icon,text='',badgeCount=0,badgeAlert=false, enabled=true, visible=true,
+    imageStyle={}, iconButtonSize, shortcutKey='', color='neutral', variant='plain', buttonSize='md',
+    disableHiding, active, sx, CheckboxOnIcon, CheckboxOffIcon, value,
+    useDropDownIndicator= false, hasCheckBox=false, checkBoxOn=false, pressed=false,
+    component, slotProps={}, dropPosition={}, dropDownCB, onClick, ref:fRef} = props;
+checkProps(props, ToolbarButton);
 
-    const tip= props.tip || props.title || '';
-    const buttonPressed= pressed || active;
-    const {current:divElementRef}= useRef({divElement:undefined});
-    useImperativeHandle(fRef, () => divElementRef.divElement);
-    const setupRef  = useCallback((c) => divElementRef.divElement= c, [divElementRef]);
+const tip= props.tip || props.title || '';
+const buttonPressed= pressed || active;
+const {current:divElementRef}= useRef({divElement:undefined});
+useImperativeHandle(fRef, () => divElementRef.divElement);
+const setupRef  = useCallback((c) => divElementRef.divElement= c, [divElementRef]);
 
-    const handleClick= useCallback((ev) => {
-        onClick?.(divElementRef.divElement,ev);
-        dropDownCB ? dropDownCB(divElementRef.divElement) : dispatchHideDialog(DROP_DOWN_KEY);
-    },[onClick,dropDownCB,divElementRef.divElement]);
+const handleClick= useCallback((ev) => {
+    onClick?.(divElementRef.divElement,ev);
+    dropDownCB ? dropDownCB(divElementRef.divElement) : dispatchHideDialog(DROP_DOWN_KEY);
+},[onClick,dropDownCB,divElementRef.divElement]);
 
-    useEffect( () => {
-        const {cnrl,meta,key,hasShortcut}= getShortCutInfo(shortcutKey);
-        if (!hasShortcut) return;
-        const listener= (ev) => {
-            if (cnrl && !ev.ctrlKey) return;
-            if (meta && !ev.metaKey) return;
-            ev.key===key && handleClick();
-        };
-        window.document.addEventListener('keydown', listener);
-        return () => window.document.removeEventListener('keydown', listener);
-    });
-    if (!visible) return false;
-    const allowInput= disableHiding?'allow-input':'normal-button-hide';
-
-
-    const image= makeImage(icon,imageStyle,allowInput);
-    const iSize= iconButtonSize ? {'--IconButton-size': iconButtonSize} : {};
-
-    // const image= icon ? <img src={icon} style={imageStyle} className={allowInput} /> : undefined;
-    const useIconButton= icon && !text;
-    // const dropDownIndicator= useDropDownIndicator ? makeImage(DROP_DOWN_ICON,undefined,allowInput) : undefined;
-    const dropDownIndicator= useDropDownIndicator ? <ArrowDropDownRoundedIcon sx={{transform:'scale(1.75)'}}/> : undefined;
-
-    // <ArrowDropDownRoundedIcon viewBox='8 8 10 10' sx={{position:'absolute', transform:'scale(1.5)', width:10,height:10, left:0, bottom:0}}/>
+useEffect( () => {
+    const {cnrl,meta,key,hasShortcut}= getShortCutInfo(shortcutKey);
+    if (!hasShortcut) return;
+    const listener= (ev) => {
+        if (cnrl && !ev.ctrlKey) return;
+        if (meta && !ev.metaKey) return;
+        ev.key===key && handleClick();
+    };
+    window.document.addEventListener('keydown', listener);
+    return () => window.document.removeEventListener('keydown', listener);
+});
+if (!visible) return false;
+const allowInput= disableHiding?'allow-input':'normal-button-hide';
 
 
+const image= makeImage(icon,imageStyle,allowInput);
+const iSize= iconButtonSize ? {'--IconButton-size': iconButtonSize} : {};
 
-    const b=  (
-        <Tooltip followCursor={true} title={tip} {...slotProps?.tooltip}>
-            <Stack {...{direction:'row', sx, value, alignItems:'center', ref:setupRef, position:'relative' }} {...slotProps?.root}>
-                <TbCheckBox {...{hasCheckBox, CheckboxOnIcon, CheckboxOffIcon, checkBoxOn, onClick:handleClick}}/>
-                {useIconButton ?
-                    (<IconButton {...{
-                        sx: (theme) => (
-                             {minHeight:'unset', minWidth:'unset', p:1/4, backgroundColor:'transparent',
-                                 '& svg' : {
-                                     color: enabled?
-                                         theme.vars.palette[color]?.plainColor :
-                                         theme.vars.palette[color]?.softDisabledColor,
-                                 },
-                                 opacity: enabled ? '1' : '0.3',
-                                 ...makeBorder(active,theme,color),
-                                 ...iSize,
-                                 ['&[aria-pressed="true"]']: {
-                                     ...theme.variants.outlinedActive.neutral,
-                                     borderColor: theme.vars.palette.neutral.outlinedHoverBorder,
-                                 },
-                             }),
+// const image= icon ? <img src={icon} style={imageStyle} className={allowInput} /> : undefined;
+const useIconButton= icon && !text;
+// const dropDownIndicator= useDropDownIndicator ? makeImage(DROP_DOWN_ICON,undefined,allowInput) : undefined;
+const dropDownIndicator= useDropDownIndicator ? <ArrowDropDownRoundedIcon sx={{transform:'scale(1.75)'}}/> : undefined;
 
-                        className:'ff-toolbar-iconbutton ' + allowInput,
-                        value,
-                        component,
-                        variant:'soft', color:'neutral' ,
-                        'aria-pressed': buttonPressed ? 'true' : 'false',
-                        'aria-label':tip, onClick:handleClick, disabled:!enabled}}>
-                        {image}
-                    </IconButton>) :
-                    <Button {...{color, variant, value,
+// <ArrowDropDownRoundedIcon viewBox='8 8 10 10' sx={{position:'absolute', transform:'scale(1.5)', width:10,height:10, left:0, bottom:0}}/>
+
+
+const tbCheckBoxProps= slotProps.tbCheckBox ?? {};
+const iconButton= slotProps.iconButton ?? {};
+
+const b=  (
+    <Tooltip followCursor={true} title={tip} {...slotProps?.tooltip}>
+        <Stack {...{direction:'row', sx, value, alignItems:'center', ref:setupRef, position:'relative' }} {...slotProps?.root}>
+            <TbCheckBox {...{hasCheckBox, CheckboxOnIcon, CheckboxOffIcon, checkBoxOn, onClick:handleClick, ...tbCheckBoxProps}}/>
+            {useIconButton ?
+                (<IconButton {...{
+                    sx: (theme) => (
+                         {minHeight:'unset', minWidth:'unset', p:1/4, backgroundColor:'transparent',
+                             '& svg' : {
+                                 color: enabled?
+                                     theme.vars.palette[color]?.plainColor :
+                                     theme.vars.palette[color]?.softDisabledColor,
+                             },
+                             opacity: enabled ? '1' : '0.3',
+                             ...makeBorder(active,theme,color),
+                             ...iSize,
+                             ['&[aria-pressed="true"]']: {
+                                 ...theme.variants.outlinedActive.neutral,
+                                 borderColor: theme.vars.palette.neutral.outlinedHoverBorder,
+                             },
+                             ...iconButton?.sx
+                         }),
+
+                    className:'ff-toolbar-iconbutton ' + allowInput,
+                    value,
+                    component,
+                    variant:'soft', color:'neutral' ,
+                    'aria-pressed': buttonPressed ? 'true' : 'false',
+                    'aria-label':tip, onClick:handleClick, disabled:!enabled}}>
+                    {image}
+                </IconButton>) :
+                (Boolean(text || icon || shortcutKey || image) && <Button {...{color, variant, value,
                         'aria-label':tip, disabled:!enabled, onClick:handleClick,
-                        size:'md',
+                        size:buttonSize,
                         className:'ff-toolbar-button ' + allowInput,
                         startDecorator: image,
                         component,
@@ -141,18 +148,19 @@ export const ToolbarButton = forwardRef((props,fRef) => {
                         'aria-pressed':buttonPressed ? 'true' : 'false',
                         sx:(theme) => ({whiteSpace:'nowrap', py:1/4, minHeight: 'unset',
                             color: enabled? undefined : theme.vars.palette.neutral?.softDisabledColor,
-                            ...makeFontSettings(theme),
+                            ...makeFontSettings(theme,buttonSize),
                             ...makeBorder(active,theme,color),
                             ['&[aria-pressed="true"]']: {
-                               ...theme.variants.outlinedActive.neutral,
-                               borderColor: theme.vars.palette.neutral.outlinedHoverBorder,
-                             },
+                                ...theme.variants.outlinedActive.neutral,
+                                borderColor: theme.vars.palette.neutral.outlinedHoverBorder,
+                            },
                         }),
                         ...slotProps?.button
                     }}>
-                        {makeTextLabel(text,shortcutKey)}
-                    </Button>
+                        {makeTextLabel(text, shortcutKey)}
+                    </Button>)
                 }
+
                 {useIconButton && useDropDownIndicator &&
                     <DropDownIndicator {...{dropPosition,enabled,onClick:handleClick,className:allowInput}}/>}
             </Stack>
@@ -162,11 +170,11 @@ export const ToolbarButton = forwardRef((props,fRef) => {
     return (!badgeCount&&!badgeAlert) ? b : <Badge {...{badgeContent:badgeAlert?'!':badgeCount,
         color:badgeAlert?'danger':undefined,
         sx:{'& .MuiBadge-badge': {top:'.7rem', right:'.4rem'}}}}> {b} </Badge>;
-} );
+}
 
 ToolbarButton.propTypes= {
-    icon : oneOfType([element,string]),
-    text : oneOfType([element,string]),
+    icon : any,
+    text : any,
     tip : string,
     value: string,
     title: oneOfType([element,string]),
@@ -181,18 +189,22 @@ ToolbarButton.propTypes= {
     useDropDownIndicator: bool,
     hasCheckBox: bool,
     checkBoxOn: bool,
-    CheckboxOnIcon:  element,
-    CheckboxOffIcon: element,
+    CheckboxOnIcon:  oneOfType([element,object]),
+    CheckboxOffIcon: oneOfType([element,object]),
     onClick : func,
     dropDownCB : func,
     disableHiding: bool,
     shortcutKey: string,
     color: string,
+    buttonSize: string,
     iconButtonSize : string,
+    ref: oneOfType([element,func]),
     slotProps: shape({
         root: object,     // because there are already too many props, this is used specifically to pass custom props to top level component
         tooltip: object,
         button: object,
+        tbCheckBox: object,
+        iconButton: object,
     }),
     active: bool,
     sx: oneOfType([object,func]),
@@ -218,16 +230,16 @@ const DropDownIndicator= ({dropPosition,enabled, onClick,className=''}) => (
     </Box>
 );
 
-function TbCheckBox({hasCheckBox, CheckboxOnIcon, CheckboxOffIcon, checkBoxOn, onClick}) {
+function TbCheckBox({hasCheckBox, CheckboxOnIcon, CheckboxOffIcon, checkBoxOn, onClick, sx, slotProps={}}) {
     if (!hasCheckBox) return undefined;
-    if (CheckboxOnIcon && CheckboxOffIcon) {
+    if (CheckboxOnIcon || CheckboxOffIcon) {
         return (
-            <Box onClick={onClick}>
+            <Box onClick={onClick} sx={{minWidth: 20, ...sx}}>
                 {checkBoxOn ? CheckboxOnIcon : CheckboxOffIcon}
             </Box>);
     }
-    return (<Checkbox {...{variant:'plain', checked:checkBoxOn, onClick,
-        sx:{ '.MuiCheckbox-checkbox': { background:'transparent' } }
+    return (<Checkbox {...{variant:'plain', checked:checkBoxOn, onClick, slotProps,
+        sx:{ '.MuiCheckbox-checkbox': { background:'transparent', ...sx} }
     }}/>);
 }
 
@@ -236,9 +248,9 @@ function makeBorder(active,theme,color) {
     return { border: `1px solid ${borderC}` };
 }
 
-function makeFontSettings(theme) {
+function makeFontSettings(theme,size) {
     return {
-        fontSize:theme.fontSize.md,
+        fontSize:theme.fontSize[size],
         fontWeight:theme.fontWeight.md,
     };
 }
@@ -246,7 +258,7 @@ function makeFontSettings(theme) {
 function makeTextLabel(text,shortcutKey) {
     const {meta,key,hasShortcut}= getShortCutInfo(shortcutKey);
     if (!hasShortcut) return text;
-    if (hasShortcut && meta && BrowserInfo.isPlatform(Platform.MAC)) {
+    if (hasShortcut && meta && BrowserInfo.isPlatform(Platform.MACOS)) {
         shortcutKey= String.fromCharCode(0x2318) + '-'+key;
     }
     return (

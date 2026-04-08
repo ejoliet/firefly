@@ -29,14 +29,14 @@ public class PTFNameResolver {
         String obj= null;
         String urlStr= CGI_CMD+objName;
         try {
-            obj= URLDownload.getDataFromURL(new URL(urlStr), null, null, reqHeaders).getResultAsString();
+            obj= URLDownload.getDataFromURL(new URL(urlStr), null, reqHeaders).getResultAsString();
             if (obj.endsWith("\n")) obj= obj.substring(0,obj.indexOf("\n"));
 
             String[] sAry= obj.split(" +", 3);
             if (sAry.length!=3) throw new FailedRequestException("Object not found", "server returned bad data: "+ obj);
 
             ResolvedWorldPt wp= new ResolvedWorldPt(Double.parseDouble(sAry[1]), Double.parseDouble(sAry[2]),
-                    objName, Resolver.PTF);
+                    objName, Resolver.PTF,null);
             return new ResolveResult(Resolver.PTF, objName, wp);
         } catch (MalformedURLException e) {
             throw new FailedRequestException("bad url: " + urlStr);

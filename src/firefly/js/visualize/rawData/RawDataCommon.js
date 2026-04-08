@@ -1,103 +1,99 @@
-import {isArrayBuffer} from 'lodash';
+import {isArrayBuffer, once} from 'lodash';
 import BrowserInfo from '../../util/BrowserInfo.js';
-import {getGpuJs} from './GpuJsConfig.js';
-import {getGPUOps} from './RawImageTilesGPU.js';
-import {createTransitionalTileWithCPU} from './RawImageTilesCPU.js';
-import {
-    AJAX_REQUEST, getGlobalObj,
-    isGPUAvailableInWorker,
-    isImageBitmap,
-    isOffscreenCanvas, MEG,
-    REQUEST_WITH
-} from '../../util/WebUtil.js';
-import {getColorModel} from './rawAlgorithm/ColorTable.js';
-import {RawDataThreadActions} from 'firefly/threadWorker/WorkerThreadActions.js';
+import {createTileWithGPU} from './RawImageTilesGPU.js';
+import {MEG} from '../../util/WebUtil.js';
+import {getColorModelByGPUType} from './ColorTable.js';
 
 export const HALF= 'HALF';
 export const QUARTER= 'QUARTER';
 export const FULL= 'FULL';
+export const HALF_FULL= 'HALF_FULL';
+export const QUARTER_HALF= 'QUARTER_HALF';
+export const QUARTER_HALF_FULL= 'QUARTER_HALF_FULL';
 
-const abortControllers= new Map(); // map of imagePlotId and AbortController
 export const TILE_SIZE = 3000;
-export const MAX_FULL_DATA_SIZE = 1500*MEG; //max size of byte data that can be loaded, file size will be 4x to 8x bigger
-const USE_GPU = true;
+export const MAX_FULL_DATA_SIZE = 1200*MEG; //max size of byte data that can be loaded, file size will be 4x to 8x bigger
 
 export function shouldUseGpuInWorker() {
-    if (BrowserInfo.isSafari()) return false;
-    return isGPUAvailableInWorker();
+    if (BrowserInfo.isSafari() && !BrowserInfo.isVersionAtLeast(17)) return false;
+    return Boolean(globalThis.OffscreenCanvas);
+}
+
+export const isImageBitmap= (b) => globalThis.ImageBitmap && (b instanceof globalThis.ImageBitmap);
+export const isOffscreenCanvas= (b) => globalThis.OffscreenCanvas && (b instanceof globalThis.OffscreenCanvas);
+
+
+
+export const logGpuState= once(() => {
+    const gpuType= BrowserInfo.supportsWebGpu() ? 'webgpu' : 'webgl (using gpu.js)';
+    const outStr= shouldUseGpuInWorker()
+        ? `Images: gpu in worker, gpu: ${gpuType}`
+        : `Images: gpu in main thread: ${gpuType}`;
+    console.log(outStr);
+});
+
+/**
+ *
+ * @param {Object} obj
+ * @param obj.rawTileDataGroup
+ * @param obj.colorModel
+ * @param obj.mask
+ * @param {String} obj.maskColor
+ * @param {number} obj.bias
+ * @param {number} obj.contrast
+ * @param {boolean} obj.bandUse
+ * @return {Promise}
+ */
+async function populateTileDataInWorker(obj) {
+    const {rawTileDataGroup, colorModel, mask=false, maskColor, bias, contrast, bandUse={}}= obj;
+    const pResult = rawTileDataGroup.rawTileDataAry.map( async (inData) => ({
+        ...inData,
+        workerBitMapTile: await createTileWithGPU(inData, colorModel, mask, maskColor, bias, contrast, bandUse)
+    }));
+    return Promise.all(pResult);
 }
 
 /**
  *
- * @param rawTileDataAry
- * @param colorModel
- * @param {boolean} isThreeColor
- * @param mask
- * @param {String} maskColor
- * @param {number} bias
- * @param {number} contrast
- * @param {boolean} bandUse
- * @param {String} rootUrl
+ * @param {Object} obj
+ * @param obj.rawTileDataGroup
+ * @param obj.colorTableId
+ * @param obj.isThreeColor
+ * @param obj.mask
+ * @param obj.maskColor
+ * @param obj.bias
+ * @param obj.contrast
+ * @param [obj.bandUse]
+ * @param obj.rootUrl
+ * @param obj.nanPixelColor
  * @return {Promise}
  */
-async function populateRawTileDataArray(rawTileDataAry, colorModel, isThreeColor, mask, maskColor, bias, contrast, bandUse, rootUrl) {
-    const GPU = USE_GPU ? await getGpuJs(rootUrl) : undefined;
-    const createTransitionalTile = USE_GPU ? getGPUOps(GPU).createTransitionalTileWithGPU : createTransitionalTileWithCPU;
-    const presult = rawTileDataAry.map((id) => createTransitionalTile(id, colorModel, isThreeColor, mask, maskColor, bias, contrast, bandUse));
-    return await Promise.all(presult);
-}
-
-export async function populateRawImagePixelDataInWorker(rawTileDataGroup, colorTableId, isThreeColor, mask, maskColor, bias, contrast, bandUse, rootUrl) {
-    if (shouldUseGpuInWorker() && !mask) {
-        const colorModel = getColorModel(colorTableId);
-        const rawTileDataAry = await populateRawTileDataArray(rawTileDataGroup.rawTileDataAry, colorModel, isThreeColor,  mask, maskColor, bias, contrast, bandUse, rootUrl);
+export async function populateRawImagePixelDataInWorker(obj) {
+    const {rawTileDataGroup, colorTableId, mask, nanPixelColor, threeColor=false}= obj;
+    if (shouldUseGpuInWorker()) {
+        const colorModel = !mask && !threeColor && getColorModelByGPUType(colorTableId,nanPixelColor);
+        const rawTileDataAry = await populateTileDataInWorker({...obj,colorModel});
 
 
-        const localRawTileDataGroup = {...rawTileDataGroup, rawTileDataAry, colorTableId};
+        const localRawTileDataGroup = {...rawTileDataGroup, rawTileDataAry, colorTableId, nanPixelColor};
         const retRawTileDataGroup = {...localRawTileDataGroup};
         retRawTileDataGroup.rawTileDataAry = retRawTileDataGroup.rawTileDataAry.map((rt) =>
-            ({
-                ...rt,
-                pixelData3C: undefined,
-                pixelDataStandard: undefined,
-            }));
+            ({ ...rt, pixelData3C: undefined, pixelDataStandard: undefined, }));
         return {localRawTileDataGroup, retRawTileDataGroup};
     } else {
-        const localRawTileDataGroup = {...rawTileDataGroup, colorTableId};
+        const localRawTileDataGroup = {...rawTileDataGroup, colorTableId, nanPixelColor};
         localRawTileDataGroup.rawTileDataAry = localRawTileDataGroup.rawTileDataAry.map((rt) =>
             ({
                 ...rt,
-                pixelData3C: rt.pixelData3C && rt.pixelData3C.map((a) => a && a.buffer),
-                pixelDataStandard: rt.pixelDataStandard && rt.pixelDataStandard.buffer
+                pixelData3C: rt.pixelData3C?.map((a) => a?.buffer),
+                pixelDataStandard: rt.pixelDataStandard?.buffer
             }));
         const retRawTileDataGroup = {...localRawTileDataGroup};
         return {localRawTileDataGroup, retRawTileDataGroup};
     }
 }
 
-export function makeFetchOptions(plotImageId, params) {
-    const options= {
-        method: 'post',
-        mode: 'cors',
-        credentials: 'include',
-        cache: 'default',
-        params,
-        headers: {
-            [REQUEST_WITH]: AJAX_REQUEST,
-        }
-    };
-    const ac= getGlobalObj().AbortController && new AbortController();
-    if (ac) {
-        abortControllers.set(plotImageId,ac);
-        options.signal= ac.signal;
-    }
-    return options;
-}
 
-export async function abortFetch({plotImageId}) {
-    abortControllers.get(plotImageId)?.abort();
-    return {data:{success:true, type: RawDataThreadActions.ABORT_FETCH}};
-}
 
 export function getTransferable(result) {
     if (!result?.rawTileDataGroup) return [];
@@ -114,12 +110,12 @@ export function getTransferable(result) {
     }
     if (!tran.length) {
         tran = rawTileDataAry
-            .map((e) => isArrayBuffer(e.workerTmpTile) ? e.workerTmpTile : undefined)
+            .map((e) => isArrayBuffer(e.workerBitMapTile) ? e.workerBitMapTile : undefined)
             .filter((e) => e);
     }
     if (!tran.length) {
         tran= rawTileDataAry
-            .map( (e) => isOffscreenCanvas(e.workerTmpTile) || isImageBitmap(e.workerTmpTile) ? e.workerTmpTile : undefined)
+            .map( (e) => isOffscreenCanvas(e.workerBitMapTile) || isImageBitmap(e.workerBitMapTile) ? e.workerBitMapTile : undefined)
             .filter( (e) => e);
     }
     return tran;
@@ -150,10 +146,6 @@ export function getRealDataDim( dataCompress, dataWidth, dataHeight) {
 
 }
 
-// export function getDataCompress(plotImageId) {
-//     return getEntry(plotImageId)?.rawTileDataGroup?.dataCompress;
-// }
-
 
 /**
  * @typedef {Object} RawTileData
@@ -164,7 +156,7 @@ export function getRealDataDim( dataCompress, dataWidth, dataHeight) {
  * @prop {number} height
  * @prop {Number} lastPixel
  * @prop {Number} lastLine
- * @prop {ArrayBuffer|ImageBitmap|Canvas} workerTmpTile - the input to make a canvas tile with
+ * @prop {ImageBitmap} workerBitMapTile - the worker produces a ImageBitmap with new browsers
  * @prop {Uint8Array|ArrayBuffer|undefined} pixelDataStandard
  * @prop {Array.<Uint8Array|ArrayBuffer>} pixelData3C
  * @prop {*|undefined} imageMask
@@ -175,5 +167,6 @@ export function getRealDataDim( dataCompress, dataWidth, dataHeight) {
  * @typedef RawTileDataGroup
  * @prop {String} dataCompress - should be 'FULL' or 'HALF' or 'QUARTER'
  * @prop {number} colorTableId
+ * @prop {Array.<Number>} nanPixelColor
  * @prop {Array.<RawTileData>} rawTileData
  */

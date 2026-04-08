@@ -19,7 +19,7 @@ process.traceDeprecation = true;
  * @param {boolean=true} [config.use_loader]  generate a loader to load compiled JS script(s).  Defaults to true
  * @param {string}  [config.project]  project name
  * @param {string}  [config.filename]  name of the generated JS script.
- * @param {string}  [config.baseWarName]  name of the the war file base, defaults to config.name
+ * @param {string}  [config.baseWarName]  name of the war file base, defaults to config.name
  * @param {function}  [config.doFirst]  execute with the original config param if given.
  * @param {function}  [config.doLast]   execute with the created webpack_config param if given.
  * @returns {Object} a webpack config object.
@@ -32,6 +32,11 @@ export default function makeWebpackConfig(config) {
     const ENV_DEV_MODE= process.env.DEV_MODE;
     const {BUILD_ENV='local'}   = process.env;
     const localBuild= BUILD_ENV === 'local';
+    const MIN_SAFARI_VERSION= '17';
+    const MIN_CHROME_VERSION= '130';
+    const MIN_FIREFOX_VERSION= '134';
+    const MIN_EDGE_VERSION= '130';
+    const useReactCompiler = false;
 
     if (!process.env.NODE_ENV) {
         process.env.NODE_ENV = ['local', 'dev'].includes(BUILD_ENV) ? 'development' : 'production';
@@ -79,11 +84,17 @@ export default function makeWebpackConfig(config) {
         });
     }
 
+
+
     const globals = {
         __PROPS__       : {
             BUILD_ENV   : JSON.stringify(process.env.BUILD_ENV),
             SCRIPT_NAME : JSON.stringify(script_names),
-            MODULE_NAME : JSON.stringify(config.name)
+            MODULE_NAME : JSON.stringify(config.name),
+            MIN_SAFARI_VERSION,
+            MIN_CHROME_VERSION,
+            MIN_FIREFOX_VERSION,
+            MIN_EDGE_VERSION,
         }
 
     };
@@ -137,17 +148,22 @@ export default function makeWebpackConfig(config) {
                         ['@babel/preset-env',
                             {
                                 targets: {
-                                    browsers: ['safari >= 15', 'chrome >= 115', 'firefox >= 115', 'edge >= 115']
+                                    browsers: [
+                                        'safari >= '+MIN_SAFARI_VERSION,
+                                        'chrome >= '+MIN_CHROME_VERSION,
+                                        'firefox >= '+MIN_FIREFOX_VERSION,
+                                        'edge >= '+MIN_EDGE_VERSION
+                                    ],
                                 },
                                 debug: false,
                                 modules: false,  // preserve application module style - in our case es6 modules
                                 useBuiltIns : 'usage',
-                                corejs: '3.37' // should specify the minor version: https://babeljs.io/docs/babel-preset-env#corejs
+                                corejs: '3.46' // should specify the minor version: https://babeljs.io/docs/babel-preset-env#corejs
                             }
                         ],
                         '@babel/preset-react'
                     ],
-                    plugins: [ '@babel/plugin-transform-runtime', 'lodash' ]
+                    plugins: [...(useReactCompiler?['react-compiler']:[]), '@babel/plugin-transform-runtime', 'lodash']
                 }
             }
         },

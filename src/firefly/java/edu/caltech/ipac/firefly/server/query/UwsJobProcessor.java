@@ -5,7 +5,6 @@ package edu.caltech.ipac.firefly.server.query;
 
 import edu.caltech.ipac.firefly.core.background.Job;
 import edu.caltech.ipac.firefly.core.background.JobManager;
-import edu.caltech.ipac.firefly.core.background.JobUtil;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.server.network.HttpServiceInput;
 import edu.caltech.ipac.firefly.server.network.HttpServices;
@@ -29,6 +28,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.text.ParseException;
 import java.time.Instant;
@@ -90,7 +90,7 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                     // instead, we will query the jobUrl directly to see if it's aborted
                     JobInfo jobInfo = Try.it(() -> getUwsJobInfo(jobUrl)).get();
                     if (jobInfo == null || jobInfo.getPhase() != Phase.ABORTED) {
-                        String msg = ifNotNull(jobInfo.getError().msg()).getOrElse("Job cannot be aborted");
+                        String msg = ifNotNull(jobInfo.getErrorSummary().message()).getOrElse("Job cannot be aborted");
                         return new Status(400, "Failed to abort: %s".formatted(msg) );
                     }
                     return Status.ok();         // aborted or no longer active
@@ -99,7 +99,8 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
         if (status.isError()) {
             logger.warn(status.getErrMsg());
             sendJobUpdate(ji -> {
-                ji.setError(new JobInfo.Error(status.getStatusCode(), status.getErrMsg()));
+                ji.setPhase(Phase.ERROR);
+                ji.setErrorSummary(new ErrorSummary(status.getErrMsg()));
             });
         } else {
             logger.info("UWS job aborted: " + jobUrl);
@@ -117,21 +118,19 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                 // a previously submitted job
                 jobUrl = ifNotNull(JobManager.getJobInfo(req.getJobId()))
                         .get(j -> j.getAux().getJobUrl());
-            } else {
-                jobUrl = req.getParam(JOB_URL);
             }
+            jobUrl = jobUrl == null ? req.getParam(JOB_URL) : jobUrl;
             if (jobUrl == null) {
                 jobUrl = submitJob(req);
                 if (jobUrl != null) runJob(jobUrl);
                 updateJob(ji -> {
                     ji.setPhase(Phase.QUEUED);
-                    ji.getMeta().setProgress(0, "UWS job submitted");
                 });
             }
         } catch (Exception e) {
             updateJob(ji -> {
-                ji.setError(new JobInfo.Error(400, e.getMessage()));
-                ji.getMeta().setProgress(100);
+                ji.setPhase(Phase.ERROR);
+                ji.setErrorSummary(new ErrorSummary(e.getMessage()));
             });
             throw new DataAccessException(e.getMessage());
         } finally {
@@ -147,48 +146,46 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                 JobInfo uwsJob = getUwsJobInfo(jobUrl);
                 if (uwsJob == null) {
                     String msg = "Failed to retrieve UWS job info";
-                    sendJobUpdate(ji -> ji.setError(new JobInfo.Error(500, msg)));
+                    sendJobUpdate(ji -> {
+                        ji.setPhase(Phase.ERROR);
+                        ji.setErrorSummary(new ErrorSummary(msg));
+                    });
                     throw new DataAccessException(msg);
                 }
-
-                sendJobUpdate(ji -> ji.copyFrom(uwsJob));
-                Phase phase = ifNotNull(uwsJob.getPhase()).getOrElse(Phase.UNKNOWN);
-
-                if (phase == Phase.COMPLETED) {
-                    return getResult(req);
-                } else if (phase == Phase.ABORTED) {
-                    throw new DataAccessException.Aborted();        // exit; stop tracking
-                } else if (phase == Phase.HELD) {
-                    updateJob(ji -> ji.setPhase(Phase.HELD));
-                    throw new DataAccessException("The job is HELD pending execution and will not automatically be executed");
-                } else if (phase == Phase.PENDING) {
-                    updateJob(ji -> ji.setPhase(Phase.PENDING));
-                    throw new DataAccessException("The job was submitted, but no execution request has been made.");
-                } else if (phase == Phase.ERROR) {
-                    JobInfo.Error error = getError(uwsJob, jobUrl);
-                    updateJob(ji -> ji.setError(error));
-                    throw new DataAccessException("Job has failed with the error: " + error.msg());
-                } else if (phase == Phase.UNKNOWN) {
-                    updateJob(ji -> ji.setError(new JobInfo.Error(500, "Unknown phase")));
-                    throw new DataAccessException("The job is in an unknown state");
-                } else {
-                    int wait = cnt < 3 ? 500 : cnt < 20 ? 1000 : 2000;
-                    TimeUnit.MILLISECONDS.sleep(wait);
-                    if (phase == Phase.EXECUTING) {
-                        int progress = (int)(95 * (1 - Math.pow(2.0 / 3.0, cnt)));
-                        sendJobUpdate(ji -> {
-                            ji.getMeta().setProgress(progress, "Job is being processed");
-                            ji.setPhase(phase);
-                        });
+                try {
+                    updateJob(ji -> ji.copyFrom(uwsJob));
+                    Phase phase = ifNotNull(uwsJob.getPhase()).getOrElse(Phase.UNKNOWN);
+                    switch (phase) {
+                        case Phase.COMPLETED:
+                            return getResult(req);
+                        case Phase.ABORTED :
+                            throw new DataAccessException.Aborted();        // exit; stop tracking
+                        case Phase.HELD:
+                            throw new DataAccessException("The job is HELD pending execution and will not automatically be executed");
+                        case Phase.PENDING:
+                            throw new DataAccessException("The job was submitted, but no execution request has been made.");
+                        case Phase.ERROR:
+                            throw new DataAccessException("Job has failed with the error: " + uwsJob.getErrorSummary().message());
+                        case Phase.UNKNOWN: {
+                            if (cnt > 70) {
+                                updateJob(ji -> {
+                                    ji.setPhase(Phase.ABORTED);
+                                    ji.setErrorSummary(new ErrorSummary("Job aborted: unknown phase for over 2 minutes"));
+                                });
+                                throw new DataAccessException("Job aborted: unknown phase for over 2 minutes");
+                            }
+                        }
+                        default:
+                            // continue to wait
                     }
+                } finally {
+                    sendJobUpdate(null);        // send update to client on each poll.
                 }
+                int wait = cnt < 3 ? 500 : cnt < 20 ? 1000 : 2000;
+                TimeUnit.MILLISECONDS.sleep(wait);
             }
         } catch (InterruptedException e) {
             throw new DataAccessException.Aborted();
-        } finally {
-            sendJobUpdate(ji -> {
-                ji.getMeta().setProgress(100);
-            });
         }
     }
 
@@ -235,15 +232,11 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
         JobInfo jobInfo = ifNotNull(getJob()).get(j -> getJobInfo(j.getJobId()));
         if (jobInfo == null) jobInfo = getUwsJobInfo(jobUrl);           // there's no job when it's not running in the background
 
-        if (jobInfo == null || jobInfo.getResults().size() < 1) {
+        if (jobInfo == null || jobInfo.getResults().isEmpty()) {
             throw createDax("UWS job completed without results", jobUrl, null);
         } else {
             List<JobInfo.Result> results = jobInfo.getResults();
-            if (results.size() == 1) {
-                return getTableResult(results.get(0).href(), QueryUtil.getTempDir(request));
-            } else {
-                return convertResultsToObsCoreTable(results);
-            }
+            return convertResultsToObsCoreTable(results);
         }
     }
 
@@ -325,8 +318,9 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
             }
         });
         if (status.isError()) throw createDax("Fail to fetch UWS job info", jobUrl, status.getException());
-
-        return jInfo.get();
+        JobInfo jobInfo = jInfo.get();
+        if (jobInfo != null) jobInfo.getAux().setJobUrl(jobUrl);
+        return jobInfo;
     }
 
     public static Phase getPhase(String jobUrl) throws DataAccessException {
@@ -344,8 +338,8 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
         }
     }
 
-    public static JobInfo.Error getError(JobInfo uwsJob, String jobUrl)  {
-        JobInfo.Error jobError = uwsJob.getError();
+    public static ErrorSummary getError(JobInfo uwsJob, String jobUrl)  {
+        ErrorSummary jobError = uwsJob.getErrorSummary();
         if (jobError != null) return jobError; // error is a part of the job resource
         else { // error document maybe present at /error endpoint of the job
             String errorUrl = jobUrl + "/error";
@@ -356,7 +350,7 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                     return new HttpServices.Status(500, "Unexpected exception: " + e.getMessage());
                 }
             });
-            return new JobInfo.Error(status.getStatusCode(), status.getErrMsg());
+            return new ErrorSummary(status.getErrMsg());
         }
     }
 
@@ -427,9 +421,9 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
                 for (int i = 0; i < plist.getLength(); i++) {
                     Node p = plist.item(i);
                     String key = getAttr(p, "id");
-                    String val = jobInfo.getParams().get(key);
-                    val = isEmpty(val) ? p.getTextContent() : val + PARAM_DELIM + p.getTextContent();
-                    jobInfo.getParams().put(key, val);
+                    String val = jobInfo.getParameters().get(key);
+                    val = isEmpty(val) ? getText(p) : val + PARAM_DELIM + getText(p);
+                    jobInfo.getParameters().put(key, val);
                 }
             });
 
@@ -450,13 +444,22 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
 
             applyIfNotEmpty(getEl(root, prefix + ERROR_SUMMARY), errsum -> {
                 String type = errsum.getAttribute(ERROR_TYPE);
-                int code = type.equals("transient") ? 500 : 400;
+                String hasDetails = errsum.getAttribute(ERROR_HAS_DETAILS);
                 String msg = getVal(errsum, prefix + ERROR_MSG);
                 if (!isEmpty(msg)) {
-                    jobInfo.setError(new JobInfo.Error(code, msg));
+                    jobInfo.setErrorSummary(new ErrorSummary(msg, type, Boolean.parseBoolean(hasDetails)));
                 }
             });
 
+            Element progress = ifNotEmpty(getEl(root, prefix + JOB_INFO))
+                    .get(el -> getEl(el, PROGRESS));
+            if (progress != null) {
+                int pctComplete = getIntVal(progress, "percentComplete", -1);
+                String message = getVal(progress, "message");
+                int itemsProcessed = getIntVal(progress, "itemsProcessed", -1);
+                int itemsTotal = getIntVal(progress, "totalItems", -1);
+                jobInfo.getAux().setProgress(new Progress(pctComplete, itemsProcessed, itemsTotal, message));
+            }
             return jobInfo;
         }
         throw new ParseException("Invalid UWS job document", 0);
@@ -505,7 +508,17 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
      */
     private static String getVal(Element from, String tag) {
         NodeList rval = from.getElementsByTagName(tag);
-        return (rval.getLength() > 0) ? rval.item(0).getTextContent() : null;
+        return (rval.getLength() > 0) ? getText(rval.item(0)) : null;
+    }
+
+    private static int getIntVal(Element from, String tag, int defaultVal) {
+        String val = getVal(from, tag);
+        if (isEmpty(val)) return defaultVal;
+        try {
+            return Integer.parseInt(val.trim());
+        } catch (Exception e) {
+            return defaultVal;
+        }
     }
 
     private static Element getEl(Element from, String tag) {
@@ -515,7 +528,11 @@ public class UwsJobProcessor extends EmbeddedDbProcessor {
 
     private static String getAttr(Node from, String name) {
         Node a = from.getAttributes().getNamedItem(name);
-        return a == null ? null : a.getTextContent();
+        return a == null ? null : getText(a);
+    }
+
+    private static String getText(Node from) {
+        return ifNotNull(from.getTextContent()).get(String::trim);
     }
 
 }

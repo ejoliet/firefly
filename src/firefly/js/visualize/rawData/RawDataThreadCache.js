@@ -16,7 +16,7 @@ import {Band} from '../Band.js';
 
 
 
-export const {addRawDataToCache, getEntry, getEntryByBand, removeRawData}= (() => {
+export const {addRawDataToCache, getEntry, getEntryByBand, removeRawData, getEntryCount}= (() => {
 
     let rawDataStore= [];
 
@@ -40,11 +40,6 @@ export const {addRawDataToCache, getEntry, getEntryByBand, removeRawData}= (() =
         }
     };
 
-    const updateCacheData= (plot, cacheData) => {
-        //todo  this should update the cache
-        //       make getEntry clone the results, so updateCacheData must be called
-    };
-
     const removeRawData= (plotImageId) => {
         rawDataStore= rawDataStore.filter( (s) => s.plotImageId!==plotImageId);
         return rawDataStore.length;
@@ -52,7 +47,9 @@ export const {addRawDataToCache, getEntry, getEntryByBand, removeRawData}= (() =
     const getEntry= (plotImageId) => rawDataStore.find( (e)  => e.plotImageId===plotImageId);
     const getEntryByBand= (plotImageId,band) => getEntry(plotImageId)?.[band.key];
 
-    return { addRawDataToCache, removeRawData, getEntry, getEntryByBand};
+    const getEntryCount= () => rawDataStore.length;
+
+    return { addRawDataToCache, removeRawData, getEntry, getEntryByBand, getEntryCount};
 
 })();
 

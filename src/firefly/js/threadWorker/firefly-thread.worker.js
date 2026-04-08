@@ -1,11 +1,11 @@
+import PlotState from '../visualize/PlotState';
 import {doRawDataWork} from '../visualize/rawData/ManageRawDataThread.js';
-import {getGlobalObj} from '../util/WebUtil.js';
 import {RawDataThreadActions} from './WorkerThreadActions.js';
 
 
 const rdActionList= Object.keys(RawDataThreadActions);
 
-getGlobalObj().onmessage= (event) => {
+globalThis.onmessage= (event) => {
     const action= event.data;
     const {callKey,type}= action;
     try {
@@ -19,7 +19,17 @@ getGlobalObj().onmessage= (event) => {
 
 function handleRawDataActions(action) {
     const {callKey}= action;
-    doRawDataWork(action)
+    let sendStatus= () => undefined;
+    if (action.payload.plotId && action.payload.plotStateSerialized) {
+        sendStatus= (messageText) => {
+            const plotState= PlotState.parse(action.payload.plotStateSerialized);
+            postMessage({statusMessage:true,
+                messageText,
+                plotId:action.payload.plotId,
+                requestKey:plotState.getWebPlotRequest().getRequestKey()});
+        };
+    }
+    doRawDataWork({...action,sendStatus})
         .then( ({data,transferable}) => postMessage({success:true, ...data, callKey}, transferable) )
         .catch( (error) => postMessage({error,callKey, success:false}) );
 }

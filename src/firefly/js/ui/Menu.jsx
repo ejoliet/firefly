@@ -8,7 +8,7 @@ import {
 } from '@mui/joy';
 import {tabClasses} from '@mui/joy/Tab';
 import {debounce, isFunction} from 'lodash';
-import React, {forwardRef, useCallback, useContext, useEffect, useRef, useState} from 'react';
+import React, {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import shallowequal from 'shallowequal';
 import {
     COMMAND, dispatchAddPreference, dispatchSetMenu, getAppOptions,
@@ -20,7 +20,7 @@ import {
     dispatchShowDropDown,
     dispatchUpdateMenuTabNodes,
     getLayouInfo, getMenuTabNodes,
-    getResultCounts,
+    getResultCounts, isResultsViewDropdown, resultsViewDropdown,
 } from '../core/LayoutCntlr.js';
 import QuizOutlinedIcon from '@mui/icons-material/QuizOutlined';
 import {AppPropertiesCtx} from './AppPropertiesCtx.jsx';
@@ -62,8 +62,7 @@ export function Menu() {
     const {appTitle, showUserInfo} = useContext(AppPropertiesCtx);
     const menu= useStoreConnector(() => getMenu());
     const {menuItems=[]} = menu;
-    const layoutInfo= getLayouInfo() ?? {};
-    const {dropDown={}}=  layoutInfo;
+    const dropDown=  useStoreConnector(() => getLayouInfo()?.dropDown ?? {});
     const selected= getSelectedMenuItem(menu,dropDown);
 
     useEffect(() => {
@@ -94,6 +93,11 @@ export function Menu() {
             updateMenu(appTitle, {...menu, menuItems:newMenuItems, selected});
         }
     }, [selected,ready]);
+
+    useEffect(() => {
+        // if layoutInfo.dropdown in the store updated to results view, set selected menu tab to '' (results)
+        if (isResultsViewDropdown(dropDown) && menu?.selected !== '') dispatchSetMenu({...menu, selected: ''});
+    }, [dropDown]);
 
     if (!ready) return <div/>;
 
@@ -209,10 +213,11 @@ function setupTabCss(theme,size) {
 }
 
 
-function MenuTabBar({menuTabItems=[], size, selected, dropDown, displayMask, setElement}) {
+function MenuTabBar({menuTabItems=[], size, selected, displayMask, setElement}) {
     const tabSelected= selected || ResultCmd;
     const variant='soft';
     const color='primary';
+    const adjustedDisplayMask= displayMask?.slice(1);
 
     const tabItems= [
         <ResultsTab {...{key:'results-tab', size, color, variant, ref: (el) => setElement('results-tab ', el)}}/>,
@@ -229,7 +234,7 @@ function MenuTabBar({menuTabItems=[], size, selected, dropDown, displayMask, set
                 return tip ? <Tooltip key={idx} title={tip}>{tab}</Tooltip> : tab;
             }
             )
-            .filter((item,idx) => displayMask ? displayMask[idx] : true)
+            .filter((item,idx) => adjustedDisplayMask?.[idx] ?? true)
     ];
 
     return (
@@ -284,7 +289,8 @@ function updateMenu(appTitle, menu) {
 
 function getTabBarRealWidth(tabBarElement) {
     const {left: tabBarLeft, width: tabBarWidth} = tabBarElement.getBoundingClientRect() ?? {width: 0, left: 0};
-    const tabBarRealWidth = (window.innerWidth < (tabBarLeft + tabBarWidth)) ? window.innerWidth - tabBarLeft : tabBarWidth;
+    const docWidth= Math.min(document.documentElement.clientWidth, window.innerWidth);
+    const tabBarRealWidth = (docWidth < (tabBarLeft + tabBarWidth)) ? docWidth - tabBarLeft : tabBarWidth;
     return tabBarRealWidth;
 }
 
@@ -386,7 +392,7 @@ export function SideBarMenu({closeSideBar, allowMenuHide}) {
     const {haveResults}= useStoreConnector(getCounts);
     const uploadItem= menu.menuItems?.find(({action}) => action===UploadCmd);
     const menuItems= menu.menuItems?.filter(({type,action}) => type !== COMMAND && action!==UploadCmd);
-    const {dropDown={visible:false}}= getLayouInfo() ?? {};
+    const {dropDown=resultsViewDropdown}= getLayouInfo() ?? {};
     const selected= getSelectedMenuItem(menu,dropDown);
     const categoryList= menuItems ? [...new Set(menuItems.map( (mi) => mi.category ?? ''))] : [];
 
@@ -533,7 +539,7 @@ export const workingIndicator= (
     />);
 
 
-const ResultsTab= forwardRef(({size, color, variant},ref) =>{
+function ResultsTab({size, color, variant,ref}) {
     const {tableLoadingCnt, imageLoadingCnt}= useStoreConnector(getCounts);
     const loading= (tableLoadingCnt+imageLoadingCnt)>0;
 
@@ -558,7 +564,7 @@ const ResultsTab= forwardRef(({size, color, variant},ref) =>{
     );
 
     return <ResultsTip>{tab}</ResultsTip>;
-});
+}
 
 function ResultsTip({useBadge=false,children}) {
     const {haveResults,tableCnt,tableLoadingCnt, imageCnt, imageLoadingCnt, bgTableCnt, pinChartCnt}= useStoreConnector(getCounts);

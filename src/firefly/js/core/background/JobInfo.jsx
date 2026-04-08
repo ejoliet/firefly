@@ -1,18 +1,20 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 
-import {getJobInfo, isTapJob, isUWS} from './BackgroundUtil.js';
-import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
-import {KeywordBlock} from '../../tables/ui/TableInfo.jsx';
+import {getElapsedTime, getJobInfo, getJobPctComplete, getProgressMsg, isActive, isTapJob, isUWS} from './BackgroundUtil.js';
+import {Slot, useStoreConnector} from '../../ui/SimpleComponent.jsx';
+import {KeywordBlockOpt, KeywordBlock} from '../../tables/ui/TableInfo.jsx';
 import {PopupPanel} from '../../ui/PopupPanel.jsx';
 import DialogRootContainer from '../../ui/DialogRootContainer.jsx';
 import {dispatchHideDialog, dispatchShowDialog, isDialogVisible} from '../ComponentCntlr.js';
 import {HelpIcon} from '../../ui/HelpIcon.jsx';
 import {CollapsibleItem, CollapsibleGroup} from '../../ui/panel/CollapsiblePanel.jsx';
 import {uwsJobInfo} from 'firefly/rpc/SearchServicesJson.js';
-import {Box, Card, Skeleton, Stack, Typography} from '@mui/joy';
+import {Box, Card, Grid, LinearProgress, Sheet, Skeleton, Stack, Typography} from '@mui/joy';
 import {TableErrorMsg} from 'firefly/tables/ui/TablePanel.jsx';
 import {showInfoPopup} from 'firefly/ui/PopupUtil';
 import {PrismADQLAware} from '../../ui/tap/AdvancedADQL';
+import {getFieldVal} from '../../fieldGroup/FieldGroupUtils';
+import {jobMonitorGroupKey, ResultsBlock, toDateString, useLocalTimeKey} from '../../core/background/JobMonitor';
 
 const dialogID = 'show-job-info';
 
@@ -20,7 +22,7 @@ const popupSx = {
     justifyContent: 'space-between',
     resize: 'both',
     overflow: 'auto',
-    minHeight: 200, minWidth: 500,
+    minHeight: 200, minWidth: 525,
     width: '45vh'
 };
 
@@ -81,8 +83,9 @@ export function JobInfo({jobId, ...props}) {
 }
 
 export function UwsJobInfo({jobInfo, sx, isOpen=false}) {
-    const {results, parameters, errorSummary, jobInfo:aux} = jobInfo;
+    const {results, parameters, errorSummary} = jobInfo;
     const hrefs = results?.map((r) => r.href);
+    const {progress, ...aux} = jobInfo?.jobInfo ?? {};
     const hasMoreSection = hrefs || parameters || errorSummary || aux;
     return (
         <Stack spacing={1} p={1} sx={sx}>
@@ -91,9 +94,9 @@ export function UwsJobInfo({jobInfo, sx, isOpen=false}) {
             {/*{ meta?.runId && <KeywordBlock key='localRunId' label='local runId' value={meta.runId}/>}*/}
             { hasMoreSection && (
                 <CollapsibleGroup>
-                    <OptionalBlock label='Error Summary' title='Referred to as "errorSummary" in UWS' value={errorSummary} isOpen={isOpen}/>
+                    <OptionalBlock label='Error Summary' title='Referred to as "errorSummary" in UWS' value={errorSummary} Component={ErrorBlock} job={jobInfo} isOpen={isOpen}/>
                     <OptionalBlock label='Parameters' title='Referred to as "parameters" in UWS' value={parameters} isOpen={isOpen}/>
-                    <OptionalBlock label='Results' title='Referred to as "results" in UWS' value={hrefs} asLink={true} isOpen={isOpen}/>
+                    <OptionalBlock label='Results' title='Referred to as "results" in UWS' value={results} Component={ResultsBlock} job={jobInfo} isOpen={isOpen}/>
                     <OptionalBlock label='Extra Information' title='Referred to as "jobInfo" in UWS' value={aux} isOpen={isOpen}/>
                 </CollapsibleGroup>
             )}
@@ -101,9 +104,43 @@ export function UwsJobInfo({jobInfo, sx, isOpen=false}) {
     );
 }
 
-const toDate = (d) => d && new Date(d);
+export function JobProgress({jobInfo, ...props}) {
+    const [elapsed, setElapsed] = useState(0);
+    const msg = getProgressMsg(jobInfo);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setElapsed(getElapsedTime(jobInfo)); // triggers re-render
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [jobInfo]);
+
+    if (!isActive(jobInfo)) return null;
+
+    const pct = getJobPctComplete(jobInfo);
+    const lpProps =  pct >= 0 ? {determinate:true, value:pct} : {};
+    return (
+        <Stack spacing={.25} {...props} sx={{flex: 1, ...props?.sx}}>
+            <Stack direction='row' spacing={1} alignItems='baseline'>
+                <Typography level='title-sm'>Progress:</Typography>
+                <Typography level='body-sm' title={msg}
+                            sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                    {msg}
+                </Typography>
+                <Typography level='body-sm' color='primary'
+                            sx={{fontVariantNumeric: 'tabular-nums', flexGrow: 1, textAlign: 'right'}}>
+                    {elapsed}
+                </Typography>
+            </Stack>
+            <LinearProgress variant='solid' thickness={2} {...lpProps}/>
+        </Stack>
+    );
+}
 
 function JobInfoDetails({jobInfo={}}) {
+    const useLocalTime = useStoreConnector(() => getFieldVal(jobMonitorGroupKey, useLocalTimeKey));
+    const toDate = (d) => d && new Date(d);
     const {ownerId, phase, executionDuration} = jobInfo;
     const startTime = toDate(jobInfo.startTime);
     const endTime = toDate(jobInfo.endTime);
@@ -114,22 +151,44 @@ function JobInfoDetails({jobInfo={}}) {
     const duration =  executionDuration ? executionDuration + 's' : '';
     const dateProps = {width: '18rem', justifyContent:'space-between'};
     return (
-        <Stack direction='row' spacing={4}>
-            <Stack>
+        <Grid container spacing={.5}>
+            <GridRow>
                 <KeywordBlock label='Phase' title='Referred to as "phase" in UWS' value={phase} mb={1}/>
-                <KeywordBlock label='Created' title='Referred to as "creationTime" in UWS' value={creationTime?.toISOString()}  {...dateProps}/>
-                <KeywordBlock label='Start Time' title='Referred to as "startTime" in UWS' value={startTime?.toISOString()} {...dateProps}/>
-                <KeywordBlock label='End Time' title='Referred to as "endTime" in UWS' value={endTime?.toISOString()} {...dateProps}/>
-                <KeywordBlock label='Planned end' title='Referred to as "quote" in UWS' value={quote?.toISOString()} {...dateProps}/>
-                <KeywordBlock label='Destruction' title='Referred to as "destruction" in UWS' value={destruction?.toISOString()} {...dateProps}/>
-            </Stack>
-            <Stack>
                 <JobIdWrapper jobInfo={jobInfo}/>
+            </GridRow>
+            <GridRow>
+                <JobProgress jobInfo={jobInfo} sx={{mb: 1, mr: 1}}/>
+            </GridRow>
+            <GridRow>
+                <KeywordBlock label='Creation Time' title='Referred to as "creationTime" in UWS' value={toDateString(creationTime, useLocalTime)}  {...dateProps}/>
                 <KeywordBlock label='Owner' title='Referred to as "ownerId" in UWS' value={ownerId}/>
+            </GridRow>
+            <GridRow>
+                <KeywordBlock label='Start Time' title='Referred to as "startTime" in UWS' value={toDateString(startTime, useLocalTime)} {...dateProps}/>
                 <KeywordBlock label='Run time limit' title='Referred to as "executionDuration" in UWS' value={duration}/>
+            </GridRow>
+            <GridRow>
+                <KeywordBlock label='End Time' title='Referred to as "endTime" in UWS' value={toDateString(endTime, useLocalTime)} {...dateProps}/>
                 <KeywordBlock label='Actual run time' title='The difference of the "End" and "Start" times.' value={actualRt}/>
-            </Stack>
-        </Stack>
+            </GridRow>
+            <GridRow>
+                <KeywordBlock label='Planned End Time' title='Referred to as "quote" in UWS' value={toDateString(quote, useLocalTime)} {...dateProps}/>
+            </GridRow>
+            <GridRow>
+                <KeywordBlock label='Destruction Time' title='Referred to as "destruction" in UWS' value={toDateString(destruction, useLocalTime)} {...dateProps}/>
+            </GridRow>
+        </Grid>
+    );
+}
+
+function GridRow({children}) {
+    const [left, right] = React.Children.toArray(children);
+    const lw = right ? 7 : 12;
+    return (
+        <>
+            <Grid xs={lw}>{left}</Grid>
+            {right && <Grid xs={5}>{right}</Grid>}
+        </>
     );
 }
 
@@ -162,19 +221,43 @@ function JobIdWrapper({jobInfo}) {
     return <KeywordBlock value={jobId} mb={1} asLink={!!href} {...{href, label, title}} />;
 }
 
-function OptionalBlock({label, value, asLink, isOpen}) {
+function OptionalBlock({label, value, asLink, isOpen, Component=KeyValueBlock, ...rest}) {
     if (!value) return null;
     return (
         <CollapsibleItem componentKey={`JobInfo-${label}`} header={label} isOpen={isOpen}>
             <Stack spacing={.5}>
-                {Object.entries(value).map(([k, v]) =>
-                    v?.split(':::').map((val, idx) => {           // matches ':::' delimiter used by Server's JobInfo.parameters
-                        const isLink = asLink ?? /^https?:\/\//.test(val?.toLowerCase?.());
-                        return <KeywordBlock key={k+idx} label={k} value={val} asLink={isLink}/>;
-                        })
-                    )
-                }
+                <Component asLink={asLink} value={value} {...rest}/>
             </Stack>
         </CollapsibleItem>
+    );
+}
+
+export function ErrorBlock({job}) {
+    if (!job?.errorSummary) return null;
+    const {message, type, hasDetail=[]} = job.errorSummary;
+    const detailUrl = hasDetail && job.jobInfo?.jobUrl && `${job.jobInfo?.jobUrl}/error`;
+    return (
+        <>
+            <KeywordBlockOpt label='Message' title={message} value={message}/>
+            <Stack direction='row' alignItems='baseline' spacing={1} overflow='hidden'>
+                <KeywordBlockOpt label='Type' value={type}/>
+                <KeywordBlockOpt label='Details' value={detailUrl} asLink={true} overflow='hidden'/>
+            </Stack>
+        </>
+    );
+}
+
+// value can be an object with string values or an array of strings.
+// If a value contains the ':::' delimiter, it will be split into multiple values with the same key.
+function KeyValueBlock({asLink, value, ...rest}) {
+    return (
+        <>
+            {Object.entries(value).map(([k, v]) =>
+                String(v).split(':::').map((val, idx) => {           // matches ':::' delimiter used by Server's JobInfo.parameters
+                    const isLink = asLink ?? /^https?:\/\//.test(val?.toLowerCase?.());
+                    return <KeywordBlock key={k+idx} label={k} value={val} asLink={isLink} {...rest}/>;
+                })
+            )}
+        </>
     );
 }

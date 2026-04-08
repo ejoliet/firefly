@@ -59,6 +59,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -67,6 +68,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.FF_SESSION_ID;
 import static edu.caltech.ipac.firefly.data.TableServerRequest.TBL_ID;
 import static edu.caltech.ipac.firefly.visualize.WebPlotRequest.URL_CHECK_FOR_NEWER;
@@ -150,10 +152,30 @@ public class QueryUtil {
     }
 
     public static File resolveFileFromSource(String source,TableServerRequest request) throws DataAccessException {
-        return resolveFileFromSource(source,
+        File rval = resolveFileFromSource(source,
                 request.getBooleanParam(URL_CHECK_FOR_NEWER, true),
                 tmpFileForUrl(source, request.getRequestId() + "_", QueryUtil.getTempDir(request))
         );
+        if (rval != null && isExternalSource(source)) request.setMeta(TableMeta.DATA_ORIGIN, "external");
+        return rval;
+    }
+
+    private static boolean isExternalSource(String source) {
+        String sourceBase = getBaseDomain(source);
+        if (sourceBase == null) return false;
+        String hostBase = getBaseDomain(ServerContext.getRequestOwner().getBaseUrl());
+        boolean isExternal = !sourceBase.equals(hostBase);
+        if (isExternal) Logger.getLogger().trace("External source detected. sourceBase: " + sourceBase + " hostBase: " + hostBase);
+        return isExternal;
+    }
+
+    private static String getBaseDomain(String source) {
+        URI uri = Util.Try.it(() -> new URI(source.toLowerCase())).get();
+        if (uri == null) return null;
+        String host = ifNotNull(uri.getHost()).getOrElse("");
+        String[] parts = host.split("\\.");
+        if (parts.length < 2) return host;
+        return parts[parts.length - 2] + "." + parts[parts.length - 1];
     }
 
     /**
@@ -171,9 +193,9 @@ public class QueryUtil {
             if (uri==null) {
                 // file path based source
                 File f = ServerContext.convertToFile(source);
-                if (f == null) return null;
-                if (!f.canRead()) throw new SecurityException("Access is not permitted.");
-
+                if (f == null) throw new SecurityException("Access is not permitted.");
+                if (!f.exists()) throw new SecurityException("File no longer exists.");
+                if (!f.canRead()) throw new SecurityException("Insufficient permission to read the file.");
                 return f;
             } else {
                 HttpServiceInput inputs = new HttpServiceInput(source);
@@ -183,16 +205,16 @@ public class QueryUtil {
                     throw new DataAccessException("Disk Error: Failed to create temporary file");       // should not happen
                 }
 
+                URLDownload.Options ops= URLDownload.Options.def();
                 if (res == null) {
-                    FileInfo finfo = RetrieveUtil.download(uri, outFile, inputs.getCookies(), inputs.getHeaders(),
-                            URLDownload.Options.defWithRedirect());
+                    FileInfo finfo = RetrieveUtil.download(uri, outFile, inputs.getCookies(), inputs.getHeaders(),ops);
                     checkForFailures(finfo);
                     res = outFile;
                     CacheManager.getCache().put(key, res);
                 } else if (checkForUpdates) {
                     FileUtil.writeStringToFile(outFile, "workaround");
                     outFile.setLastModified(res.lastModified());
-                    URLDownload.Options ops= URLDownload.Options.modifiedOp(false);
+                    ops.setOnlyIfModified(false);
                     FileInfo finfo = RetrieveUtil.download(uri, outFile, inputs.getCookies(), inputs.getHeaders(), ops);
                     if (finfo.getResponseCode() != HttpURLConnection.HTTP_NOT_MODIFIED) {
                         checkForFailures(finfo);

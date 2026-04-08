@@ -4,6 +4,7 @@
 
 package edu.caltech.ipac.firefly.data;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import edu.caltech.ipac.firefly.visualize.RequestType;
 import edu.caltech.ipac.firefly.visualize.WebPlotRequest;
 
@@ -15,6 +16,11 @@ import java.util.stream.Stream;
 /**
 * @author Trey Roby
 */
+@JsonAutoDetect(
+        fieldVisibility = JsonAutoDetect.Visibility.ANY,
+        getterVisibility = JsonAutoDetect.Visibility.NONE,
+        setterVisibility = JsonAutoDetect.Visibility.NONE
+)
 public class RelatedData implements Serializable, HasSizeOf {
     public static final String IMAGE_OVERLAY= "IMAGE_OVERLAY";
     public static final String IMAGE_MASK= "IMAGE_MASK";
@@ -28,12 +34,15 @@ public class RelatedData implements Serializable, HasSizeOf {
     private Map<String,String> searchParams= new HashMap<>();
     private Map<String,String> availableMask= new HashMap<>();
     private int primaryHduIdx =0;
+    private boolean parallelCubePlane = false;
     private String hduName= null;
     private int hduVersion= 1;
     private int hduLevel= 1;
     private int hduIdx= -1;
     private long size= 0;
 
+
+    protected RelatedData() {this(null, null, null);}
 
     private RelatedData(String dataType, String dataKey, String desc) {
         this.dataType= dataType;
@@ -50,13 +59,13 @@ public class RelatedData implements Serializable, HasSizeOf {
      * @param dataKey - should be a unique string for a fits file
      * @return RelatedData
      */
-    public static RelatedData makeMaskRelatedData(int primaryHduIdx, String fileName, Map<String,String> availableMask, int extensionNumber, String dataKey) {
+    public static RelatedData makeMaskRelatedData(int primaryHduIdx, String fileName, Map<String,String> availableMask, boolean parallelCubePlane, int extensionNumber, String dataKey) {
         Map<String,String> searchParams= new HashMap<>();
         searchParams.put(WebPlotRequest.FILE, fileName);
         searchParams.put(WebPlotRequest.PLOT_AS_MASK, "true");
         searchParams.put(WebPlotRequest.TYPE, RequestType.FILE+"");
-        searchParams.put(WebPlotRequest.MULTI_IMAGE_IDX, extensionNumber+"");
-        return makeMaskRelatedData(primaryHduIdx, searchParams, availableMask, dataKey);
+        searchParams.put(WebPlotRequest.MULTI_IMAGE_EXTS, extensionNumber+"");
+        return makeMaskRelatedData(primaryHduIdx, searchParams, availableMask, parallelCubePlane, dataKey);
     }
 
     /**
@@ -66,11 +75,12 @@ public class RelatedData implements Serializable, HasSizeOf {
      * @param dataKey - should be a unique string for a fits file
      * @return RelatedData
      */
-    public static RelatedData makeMaskRelatedData(int primaryHduIdx, Map<String,String> searchParams, Map<String,String> availableMask, String dataKey) {
+    public static RelatedData makeMaskRelatedData(int primaryHduIdx, Map<String,String> searchParams, Map<String,String> availableMask, boolean parallelCubePlane, String dataKey) {
         RelatedData d= new RelatedData(IMAGE_MASK, dataKey, "Mask");
         d.availableMask= availableMask;
         d.searchParams= searchParams;
         d.primaryHduIdx = primaryHduIdx;
+        d.parallelCubePlane = parallelCubePlane;
         return d;
     }
 
@@ -154,5 +164,6 @@ public class RelatedData implements Serializable, HasSizeOf {
     public int getHduLevel() {return hduLevel;}
     public int getHduIdx() { return hduIdx;}
     public int getPrimaryHduIdx() { return primaryHduIdx;}
+    public boolean isParallelCubePlane() { return parallelCubePlane;}
 }
 

@@ -5,18 +5,19 @@
 
 import {Box, Stack} from '@mui/joy';
 import React, {memo, useEffect, useState} from 'react';
-import {object, array, bool, string, func} from 'prop-types';
+import {object, array, string, func} from 'prop-types';
 import shallowequal from 'shallowequal';
 import {isEmpty,omit} from 'lodash';
 import {getSearchActions} from '../../core/AppDataCntlr.js';
 import HpxCatalog from '../../drawingLayers/hpx/HpxCatalog';
 import {getTblById} from '../../tables/TableUtil';
+import {wrapResizeMonitor} from '../../ui/ResizeMonitor';
 import {EXPANDED_MODE_RESERVED, getMultiViewRoot, getViewer, GRID, IMAGE} from '../MultiViewCntlr.js';
 import {getPlotGroupById}  from '../PlotGroup.js';
 import {ExpandType, dispatchChangeActivePlotView, MOUSE_CLICK_REASON} from '../ImagePlotCntlr.js';
 import {ExpandButton} from '../ui/Buttons.jsx';
 import {VisCtxToolbarView, ctxToolbarBG} from '../ui/VisCtxToolbarView';
-import {VisInlineToolbarView} from '../ui/VisInlineToolbarView.jsx';
+import {PvControlsAndFeedback} from '../ui/PvControlsAndFeedback.jsx';
 import {
     primePlot, isActivePlotView, getAllDrawLayersForPlot, getPlotViewById, canConvertBetweenHipsAndFits
 } from '../PlotViewUtil.js';
@@ -28,7 +29,6 @@ import {AREA_SELECT,LINE_SELECT,POINT} from '../../core/ExternalAccessUtils.js';
 import {PlotTitle} from './PlotTitle.jsx';
 import Catalog, {CatalogType} from '../../drawingLayers/Catalog.js';
 import LSSTFootprint from '../../drawingLayers/ImageLineBasedFootprint';
-import {wrapResizer} from '../../ui/SizeMeConfig.js';
 import {getNumFilters} from '../../tables/FilterInfo';
 import {ZoomButton, ZoomType} from 'firefly/visualize/ui/ZoomButton.jsx';
 import {expand} from 'firefly/visualize/ui/VisMiniToolbar.jsx';
@@ -45,7 +45,6 @@ const isCatalogPtData= (dl) => isCatDl(dl) && dl.catalogType===CatalogType.POINT
 
 
 /**
- * todo
  * show the select and filter button show?
  * @param pv
  * @param dlAry
@@ -75,7 +74,6 @@ function showClearFilter(pv,dlAry) {
 
 
 /**
- * todo
  * show the unselect button?
  * @param pv
  * @param dlAry
@@ -209,8 +207,8 @@ function arePropsEquals(props, np) {
     if (!shallowequal(omit(np,omitList), omit(props,omitList))) return false;
     // if (props.mousePlotId!==np.mousePlotId && (props.mousePlotId===plotId || np.mousePlotId===plotId)) return false;
     if (props.mousePlotId!==np.mousePlotId) return false;
-    if (props.plotId!==np.plotId) return false;
-    return true;
+    return props.plotId === np.plotId;
+
 } //todo: look at closely for optimization
 
 
@@ -252,21 +250,21 @@ function ZoomGroup({visRoot, pv, show}) {
 }
 
 const ImageViewerDecorate= memo((props) => {
-    const {plotView:pv,drawLayersAry,extensionList,visRoot,mousePlotId, workingIcon,makeToolbar,
-        size:{width,height}}= props;
+    const {plotView:pv,drawLayersAry,extensionList,visRoot,mousePlotId,
+        makeToolbar, makeLegend, size:{width,height}}= props;
 
-    const [showDelAnyway, setShowSelAnyway]= useState(false);
+    const [showDelAnyway, setShowDelAnyway]= useState(false);
 
     useEffect(() => {
         const mousePlotIdExist= Boolean(getPlotViewById(visRoot,mousePlotId));
         if (mousePlotIdExist) {
-            setShowSelAnyway(false);
+            setShowDelAnyway(false); // eslint-disable-line react-hooks/set-state-in-effect
             return;
         }
-        setShowSelAnyway(true);
-        const id= setTimeout(() => setShowSelAnyway(false), 5000);
+        setShowDelAnyway(true);
+        const id= setTimeout(() => setShowDelAnyway(false), 5000);
         return () => clearTimeout(id);
-    },[mousePlotId]);
+    },[mousePlotId, visRoot]);
 
     const showDelete= pv.plotViewCtx.userCanDeletePlots;
     const ctxToolbar= contextToolbar(pv,drawLayersAry,extensionList,width, makeToolbar);
@@ -297,7 +295,7 @@ const ImageViewerDecorate= memo((props) => {
 
     const makeActive= () => pv?.plotId && dispatchChangeActivePlotView(pv.plotId,MOUSE_CLICK_REASON);
     const showZoom= mousePlotId===pv?.plotId;
-    const showDel= showDelAnyway || mousePlotId===pv?.plotId || !plot || pv.nonRecoverableFail;
+    const controlsVisible= showDelAnyway || mousePlotId===pv?.plotId || !plot || pv.nonRecoverableFail;
 
     return (
         <Box style={outerStyle} className='disable-select' onTouchStart={makeActive} onClick={makeActive} >
@@ -307,10 +305,11 @@ const ImageViewerDecorate= memo((props) => {
                                        width={iWidth} height={iHeight}
                                        externalWidth={width} externalHeight={height}/>
                     {ctxToolbar}
-                    {(plot) ? <PlotTitle brief={brief}  plotView={pv} working={workingIcon} /> : undefined}
+                    {plot ? <PlotTitle brief={brief}  plotView={pv}/> : undefined}
                     <ZoomGroup visRoot={visRoot} pv={pv} show={showZoom} />
                 </Stack>
-                <VisInlineToolbarView pv={pv} showDelete={showDelete} deleteVisible={showDel}/>
+                <PvControlsAndFeedback {...{pv, showDelete, controlsVisible, makeLegend }}/>
+
             </Stack>
         </Box>
         );
@@ -325,8 +324,8 @@ ImageViewerDecorate.propTypes= {
     extensionList : array.isRequired,
     mousePlotId : string,
     size : object.isRequired,
-    workingIcon: bool,
     makeToolbar: func,
+    makeLegend : func,
 };
 
-export const ImageViewerView= wrapResizer(ImageViewerDecorate);
+export const ImageViewerView= wrapResizeMonitor(ImageViewerDecorate,0);

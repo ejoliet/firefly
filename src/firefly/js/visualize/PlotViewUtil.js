@@ -127,7 +127,7 @@ export function getPlotViewIdListByPositionLock(visRoot, pvOrId) {
         .filter( (id) => getPlotViewById(visRoot,id)?.plots?.length );
 }
 /**
- * Return an array of plotId's that are in the plot group associated with the the pvOrId parameter.
+ * Return an array of plotId's that are in the plot group associated with the pvOrId parameter.
  * @param {VisRoot} visRoot - root of the visualization object in store
  * @param pvOrId this parameter will take the plotId string or a plotView objects
  * @returns {Array.<String>}
@@ -228,8 +228,10 @@ export const getOverlayByPvAndId = (ref,plotId,imageOverlayId) =>
 
 
 export function removeRawDataByPlotView(pv) {
-    pv?.plots.forEach( (p) => removeRawData(p.plotImageId));
-    pv?.overlayPlotViews?.forEach( (oPv) => oPv?.plot?.plotImageId && removeRawData(oPv.plot.plotImageId) );
+    pv?.plots.forEach( (p) => removeRawData(p.plotImageId,p.plotState));
+    pv?.overlayPlotViews?.forEach( (opv) => {
+        opv.plots.forEach( (p) => p?.plotImageId && removeRawData(p.plotImageId,p.plotState) );
+    } );
 }
 
 /**
@@ -407,13 +409,14 @@ export const primePlotType= (pv) => primePlot(pv)?.plotType ?? 'image';
  * Perform an operation on all the PlotViews in a group except the source, get the plotViewAry and group from the store.
  * The operations are only performed if the group is locked.
  * @param {VisRoot} visRoot - root of the visualization object in store
- * @param {PlotView} sourcePv
+ * @param {PlotView|undefined} sourcePv
  * @param {Function} operationFunc
  * @param {boolean} ignoreThreeColor
  * @param {boolean} anyPlotType
  * @return {Array} new plotView array after the operation
  */
 export function operateOnOthersInOverlayColorGroup(visRoot,sourcePv,operationFunc, ignoreThreeColor=false, anyPlotType= false) {
+    if (!sourcePv) return;
     const plotGroup= getPlotGroupById(visRoot,sourcePv.plotGroupId);
     const srcType= primePlotType(sourcePv);
     if (hasOverlayColorLock(sourcePv,plotGroup)) {
@@ -465,7 +468,7 @@ export function matchPlotViewByPositionGroup(vr, sourcePv, plotViewAry, matchAny
     const srcType= primePlotType(sourcePv);
     if (vr.positionLock) {
         plotViewAry= plotViewAry.map( (pv) => {
-            return (pv.plotId!==sourcePv.plotId && (primePlotType(pv)===srcType || matchAnyType)) ?
+            return (pv.plotId!==sourcePv?.plotId && (primePlotType(pv)===srcType || matchAnyType)) ?
                 operationFunc(pv) : pv;
         });
     }
@@ -990,8 +993,8 @@ export const getPtWavelength= (plot, pt, cubeIdx, band) => getPtSpectralCoords(p
 export function getPtSpectralCoords(plot, pt, cubeIdx, band= Band.NO_BAND) {
     if (!plot?.wlDataAry?.[band.value] || !hasWLInfo(plot)) return [0,0];
     const ipt= CCUtil.getImageCoords(plot,pt);
-    if (!ipt) return [0,0];
-    return getWavelength(ipt, cubeIdx, plot.wlDataAry[band.value]) ?? [0,0];
+    if (!ipt && plot?.wlData?.hasPixelLevelCoordInfo) return [0,0];
+    return getWavelength(ipt||makeImagePt(0,0), cubeIdx, plot.wlDataAry[band.value]) ?? [0,0];
 }
 
 //=============================================================
@@ -1115,10 +1118,6 @@ const isNorthCountingRotation = (pv, plot) => pv.plotViewCtx.rotateNorthLock || 
 
 export function hasLocalStretchByteData(plot) {
     return hasLocalStretchByteDataInStore(plot);
-}
-
-export function hasClearedByteData(plot) {
-    return hasClearedDataInStore(plot);
 }
 
 export function isAllStretchDataLoaded(vr) {

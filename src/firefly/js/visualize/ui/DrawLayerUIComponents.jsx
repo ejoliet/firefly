@@ -19,12 +19,15 @@ import {
 const symbolSize= 10;
 
 
-export function makeColorChange(color, modifyColor, sx= {}) {
+export function makeColorChange(color, modifyColor, sx= {}, text='Color') {
     const feedBackStyle= { width:symbolSize, height:symbolSize, backgroundColor: color};
+    if (!text) {
+        return <Chip onClick={() => modifyColor()}> <div style={feedBackStyle} /> </Chip> ;
+    }
     return (
-            <Chip onClick={() => modifyColor()} sx={{px:.5}} startDecorator={<div style={feedBackStyle} />}>
-                Color
-            </Chip>
+        <Chip onClick={() => modifyColor()} sx={{px:.5}} startDecorator={<div style={feedBackStyle} />}>
+            {text}
+        </Chip>
     );
 
 }
@@ -56,9 +59,9 @@ export function drawOnCanvas(c,drawingDef, w, h) {
     DrawUtil.drawSymbol(ct, x, y, drawingDef, null,false);
 }
 
-export function getMinMaxWidth(maxTitleChars) {
-    const minW = maxTitleChars*.3 < 30 ? Math.max(maxTitleChars*.3, 10) : 30;
-    const maxW = maxTitleChars*.7 > 10 ? Math.min(maxTitleChars*.7, 30) : 10;
+export function getMinMaxWidth(maxTitleChars, minMin=10, maxMax=30) {
+    const minW = maxTitleChars*.3 < 30 ? Math.max(maxTitleChars*.3, minMin) : maxMax;
+    const maxW = maxTitleChars*.7 > 10 ? Math.min(maxTitleChars*.7, maxMax) : minMin;
     return {minW,maxW};
 }
 
@@ -107,8 +110,10 @@ export function makeTableColorTitle(color, drawLayerId, plotId, tbl_id) {
 
 export function modifyDrawColor(inDl, plotId, tbl_id, postTitle, topComponent) {
     hideColorPickerDialog();
-    showColorPickerDialog(inDl.drawingDef.color, inDl.canUserChangeColor === ColorChangeType.STATIC, false,
-        (ev) => {
+    showColorPickerDialog({
+        colorStr:inDl.drawingDef.color, postTitle, topComponent,
+        callbackOnOKOnly:inDl.canUserChangeColor === ColorChangeType.STATIC,
+        cb:(ev) => {
             const {r, g, b, a} = ev.rgb;
             const rgbStr = `rgba(${r},${g},${b},${a})`;
 
@@ -129,19 +134,26 @@ export function modifyDrawColor(inDl, plotId, tbl_id, postTitle, topComponent) {
                 const dl = getDrawLayersByDisplayGroup(getDlAry(), inDl.displayGroupId);
                 dispatchChangeDrawingDef(dl.displayGroupId, Object.assign({}, dl.drawingDef, {color: rgbStr}), plotId, dl.titleMatching);
             }
-        }, '', undefined, undefined, undefined, postTitle, topComponent);
+        }
+    });
 }
 
-export function getTitleTag(title, maxTitleChars, autoFormatTitle) {
+export function getTitleTag(title, maxTitleChars, autoFormatTitle, level, sx, maxMax=30) {
     if (!autoFormatTitle) {
         return isFunction(title) ? title() : title;
     }
-    const {minW,maxW}= getMinMaxWidth(maxTitleChars);
+    const {minW,maxW}= getMinMaxWidth(maxTitleChars,10,maxMax);
 
     return (
         <Typography {...{
-            whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
-            minWidth: minW + 'em', maxWidth: maxW + 'em'}}>
+            component:'div',
+            level,
+            sx : {
+                whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
+                minWidth: minW + 'em', maxWidth: maxW + 'em',
+                ...sx
+            },
+            }}>
             {title}
         </Typography>
     );

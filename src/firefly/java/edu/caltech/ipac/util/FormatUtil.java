@@ -41,6 +41,7 @@ public class FormatUtil {
         TEXT("text", "txt"),
         FIXEDTARGETS("fixed-targets", ".tbl"),
         FITS("fits",".fits"),
+        ASDF("asdf",".asdf"),
         JSON("json", ".json"),
         PDF("pdf", ".pdf"),
         TAR("tar", ".tar"),
@@ -78,7 +79,7 @@ public class FormatUtil {
      * @return A String representing the MIME type of the file, or "application/x-unknown" otherwise
      */
     public static DuckDbAdapter.MimeDesc getMimeType(File inFile) {
-        return DuckDbAdapter.getMimeType(inFile);
+        return DuckDbAdapter.getMimeType(inFile.getAbsolutePath());
     }
 
     /**
@@ -92,7 +93,7 @@ public class FormatUtil {
     public static Format detect(File inFile) throws IOException {
 
         Format format = null;
-        DuckDbAdapter.MimeDesc mimeDesc = DuckDbAdapter.getMimeType(inFile);
+        DuckDbAdapter.MimeDesc mimeDesc = DuckDbAdapter.getMimeType(inFile.getAbsolutePath());
         String mime = mimeDesc.mime();
         format = mapToFormat(mimeDesc.mime(), mimeDesc.desc());
         LOGGER.trace("detectFormat: " + inFile, "mime-type: " + mime, "description: " + mimeDesc.desc());
@@ -200,6 +201,9 @@ public class FormatUtil {
             line = line == null ? "" : line.trim();
             if (line.startsWith("SIMPLE  = ")) {
                 return FITS;
+            } else if (line.startsWith("#ASDF")) {      // not reliable
+                return ASDF;
+
             } else if (line.startsWith("{")) {      // not reliable
                 return JSON;
             }

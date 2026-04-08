@@ -21,7 +21,7 @@ import {visRoot} from './ImagePlotCntlr.js';
 import {getDrawLayerByType, getPlotViewById, primePlot} from './PlotViewUtil.js';
 import {parseWorldPt} from './Point.js';
 import {CONE_AREA_OPTIONS, CONE_CHOICE_KEY, POLY_CHOICE_KEY} from './ui/CommonUIKeys.js';
-import {SelectAreaButton} from './ui/SelectAreaDropDownView.jsx';
+import {SelectAreaButton} from './ui/SelectAreaUIComponents.jsx';
 import {closeToolbarModalLayers, getModalEndInfo} from './ui/ToolbarToolModalEnd.js';
 import {
     convertStrToWpAry, convertWpAryToStr, initSearchSelectTool, markOutline, SEARCH_REFINEMENT_DIALOG_ID,
@@ -139,14 +139,14 @@ function SearchRefinementTool({searchActions, plotId, searchAreaInDeg, wp, polyg
     },[pv]);
 
     useEffect(() => { // if target or radius field change then hips plot to reflect it
-        updatePlotOverlayFromUserInput(plotId, whichOverlay, parseWorldPt(getWP()),
-            Number(hasRadius ? getSize() : .0002), convertStrToWpAry(getPoly()));
+        updatePlotOverlayFromUserInput({plotId, whichOverlay, wp: parseWorldPt(getWP()),
+            radius: Number(hasRadius ? getSize() : .0002), polygonAry: convertStrToWpAry(getPoly())});
     }, [getWP, getSize, getPoly, whichOverlay]);
 
     const cenWpt= parseWorldPt(getWP()??wp);
 
     return (
-        <ConnectionCtx.Provider value={{controlConnected:true, setControlConnected: () => undefined}}>
+        <ConnectionCtx value={{controlConnected:true, setControlConnected: () => undefined}}>
             <FieldGroup groupKey={GROUP_KEY} style={{display:'flex', flexDirection:'column'}}>
                 <Stack {...{alignItems: 'center', minWidth: 480}}>
                     <HelpLines {...{whichOverlay, usingToggle}}/>
@@ -188,7 +188,7 @@ function SearchRefinementTool({searchActions, plotId, searchAreaInDeg, wp, polyg
                     </Stack>
                 </Stack>
             </FieldGroup>
-        </ConnectionCtx.Provider>
+        </ConnectionCtx>
     );
 }
 

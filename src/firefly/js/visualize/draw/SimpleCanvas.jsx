@@ -2,17 +2,13 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import React, {memo, useRef} from 'react';
+import React, {useCallback} from 'react';
 import PropTypes from 'prop-types';
 
-export const SimpleCanvas= memo(({drawIt, width, height, id, backgroundColor}) => {
-    const {current:canvasRef} = useRef({canvas:undefined});
-    const setUpCanvas=(c) => {
-        canvasRef.canvas= c;
-        drawIt?.(c);
-    };
+export const SimpleCanvas= ({drawIt: drawInit, width=0, height=0, id, backgroundColor}) => {
+    const setUpCanvas=useCallback( (c) => drawInit?.(c), [drawInit]);
     return ( <canvas width={width+''} height={height+''} id={id} style={{backgroundColor}} ref={setUpCanvas}/> );
-});
+};
 
 SimpleCanvas.propTypes= {
     drawIt : PropTypes.func.isRequired,

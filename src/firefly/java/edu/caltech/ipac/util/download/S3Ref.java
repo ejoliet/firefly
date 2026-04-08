@@ -8,17 +8,19 @@ package edu.caltech.ipac.util.download;
 
 import edu.caltech.ipac.util.StringUtils;
 
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Objects;
+
+import static edu.caltech.ipac.util.download.URLDownload.firstParamValUsingKeyList;
+import static edu.caltech.ipac.util.download.URLDownload.makeURL;
 
 /**
  * @author Trey Roby
  *
  */
-public record S3Ref(String region, String bucket, String key) {
+public record S3Ref(String region, String bucket, String key, String accessKey, String signature) {
+
+    public S3Ref(String region, String bucket, String key) {this(region,bucket,key,null,null);}
 
     public S3Ref {
         Objects.requireNonNull(bucket, "bucket cannot be null");
@@ -28,6 +30,9 @@ public record S3Ref(String region, String bucket, String key) {
     private static final String AMAZON = "amazonaws.com";
     private static final String defRegion = "aws-global";
     private static final int amazonLen = AMAZON.length();
+    public static final String[] S3_SIG_PARAMS = new String[] {"Signature", "X-Amz-Signature"};
+    public static final String[] S3_CRED_PARAMS = new String[] {"AWSAccessKeyId", "X-Amz-Credential"};
+    private static final boolean ENABLE_SIGNED = false; // we don't support signed calls yet
 
     public String toString() {
         return String.format("%s - %s - %s", region, bucket, key);
@@ -45,6 +50,9 @@ public record S3Ref(String region, String bucket, String key) {
         return String.format("s3://%s/%s", region, key);
     }
 
+    public boolean hasCredentials() {
+        return !StringUtils.isEmpty(accessKey) && !StringUtils.isEmpty(signature);
+    }
 
     public static S3Ref makeFromUri(Object uri) {
         return switch (uri) {
@@ -68,30 +76,59 @@ public record S3Ref(String region, String bucket, String key) {
             String bucket = path.substring(0, idx);
             return new S3Ref(null, bucket, key);
         } else if (s.toLowerCase().startsWith("https")) {
-            try {
-                URL url = new URI(s).toURL();
-                var path = url.getPath();
-                if (path.length() < 2) return null;
-                if (!StringUtils.isEmpty(url.getQuery())) return null;
-                var host = url.getHost().toLowerCase();
-                if (!host.endsWith(AMAZON) || !host.contains("s3.")) return null;
-                var cleanPath = path.substring(1);
-                var workingHost = host.substring(0, host.length() - amazonLen - 1);
+            URL url= makeURL(s);
+            if (url == null) return null;
+            var path = url.getPath();
+            if (path.length() < 2) return null;
+            var host = url.getHost().toLowerCase();
+            if (!host.endsWith(AMAZON) && !host.contains("s3.")) return null;
+            var cleanPath = path.substring(1);
+            var workingHost = host.substring(0, host.length() - amazonLen - 1);
 
-                if (workingHost.startsWith("s3.")) { // s3 path style
-                    var region = workingHost.substring(3);
-                    var sAry = cleanPath.split("/",2);
-                    if (sAry.length != 2) return null;
-                    return new S3Ref(region, sAry[0], sAry[1]);
-                } else { // s3 host style
-                    var sAry = workingHost.split("\\.s3\\.");
-                    if (sAry.length != 2) return null;
-                    return new S3Ref(sAry[1], sAry[0], cleanPath);
-                }
-            } catch (MalformedURLException | URISyntaxException e) {
-                return null;
+            S3Ref s3Ref=null;
+            if (workingHost.startsWith("s3.")) { // s3 path style
+                var region = workingHost.substring(3);
+                var sAry = cleanPath.split("/",2);
+                if (sAry.length != 2) return null;
+                s3Ref= new S3Ref(region, sAry[0], sAry[1]);
+            } else if (workingHost.contains(".s3.")){ // s3 host style
+                var sAry = workingHost.split("\\.s3\\.");
+                if (sAry.length != 2) return null;
+                s3Ref= new S3Ref(sAry[1], sAry[0], cleanPath);
             }
+            if (s3Ref==null) return null;
+
+            var signedUrl= isS3SignedURL(s);
+            if (signedUrl) {
+                var params= URLDownload.getQueryParams(url);
+                if (params.size()>=2) {
+                    String sig= firstParamValUsingKeyList(params, S3_SIG_PARAMS);
+                    String accessKey= firstParamValUsingKeyList(params, S3_CRED_PARAMS);
+                    if (sig!=null && accessKey!=null) {
+                        s3Ref= new S3Ref( s3Ref.region, s3Ref.bucket, s3Ref.key, accessKey, sig);
+                    }
+                }
+            }
+            if (ENABLE_SIGNED && signedUrl) return s3Ref;
+            return (StringUtils.isEmpty(url.getQuery())) ? s3Ref : null;
         }
         return null;
+    }
+
+
+    public static boolean isS3SignedURL(String s) {
+        if (s==null) return false;
+        if (!s.toLowerCase().startsWith("https")) return false;
+        URL url = makeURL(s);
+        if (url == null) return false;
+        var path = url.getPath();
+        if (path.length() < 2) return false;
+        if (StringUtils.isEmpty(url.getQuery())) return false;
+        var host = url.getHost().toLowerCase();
+        if (!host.endsWith(AMAZON) && !host.contains("s3.")) return false;
+        var params= URLDownload.getQueryParams(url);
+        String sig= firstParamValUsingKeyList(params, S3_SIG_PARAMS);
+        String accessKey= firstParamValUsingKeyList(params, S3_CRED_PARAMS);
+        return (sig!=null && accessKey!=null);
     }
 }
