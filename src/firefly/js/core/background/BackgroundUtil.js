@@ -8,7 +8,7 @@ import moment from 'moment';
 
 import {flux} from '../ReduxFlux';
 import {BACKGROUND_PATH, BG_JOB_INFO, dispatchBgLoadJobs, dispatchJobAdd} from './BackgroundCntlr.js';
-import {getCmdSrvAsyncURL} from '../../util/WebUtil.js';
+import {getCmdSrvAsyncURL, isURL} from '../../util/WebUtil.js';
 import {COMPONENT_STATE_CHANGE, dispatchComponentStateChange, getComponentState} from '../ComponentCntlr.js';
 import {dispatchAddActionWatcher} from '../MasterSaga.js';
 import {jsonFetch} from '../JsonUtils.js';
@@ -18,7 +18,7 @@ import {logger} from '../../util/Logger';
 import * as TblUtil from 'firefly/tables/TableUtil';
 import {copyRequestOptions, getRequestFromJob, getTblId, makeFileRequest} from 'firefly/tables/TableRequestUtil';
 import {dispatchTableRemove, dispatchTableSearch, dispatchTableUpdate} from 'firefly/tables/TablesCntlr';
-import WebPlotRequest from 'firefly/visualize/WebPlotRequest';
+import WebPlotRequest, {TitleOptions} from 'firefly/visualize/WebPlotRequest';
 import {getAViewFromMultiView, getMultiViewRoot, IMAGE} from 'firefly/visualize/MultiViewCntlr';
 import {dispatchPlotImage} from 'firefly/visualize/ImagePlotCntlr';
 import {dispatchFormSubmit} from 'firefly/core/AppDataCntlr';
@@ -271,19 +271,19 @@ export function handleJobResult({jobInfo, hlRowIdx}) {
 }
 
 export function fixTapResults(jobInfo) {
-    if (isTapJob(jobInfo) && jobInfo?.results?.length !==1) {
-        const jobUrl = jobInfo?.jobInfo?.jobUrl;
-        if (jobUrl) {
-            const copy = cloneDeep(jobInfo);
-            copy.results = [{
-                href: `${jobUrl}/results/result`,
-                mimeType: 'application/x-votable+xml',
-                id: 'result',
-            }];
-            return copy;
-        }
+    if (!isTapJob(jobInfo)) return jobInfo;
+
+    const jobUrl = jobInfo?.jobInfo?.jobUrl;
+    if (jobUrl) {       // if jobUrl is available, we can construct the result URL for TAP job since it's in the standard.
+        const copy = cloneDeep(jobInfo);
+        copy.results = [{
+            href: `${jobUrl}/results/result`,
+            mimeType: 'application/x-votable+xml',
+            id: 'result',
+        }];
+        return copy;
     }
-    return jobInfo;
+    return jobInfo;     // otherwise, return as is and hope the server provides the result URL correctly in the jobInfo.
 }
 
 
@@ -295,13 +295,28 @@ export function loadJobResult({jobInfo, resultIdx}) {
     }
 }
 
+const FITS_EXTS = ['fits', 'fit'];
+const TABLE_EXTS = ['csv', 'tbl', 'tsv', 'txt', 'vot', 'xml'];
+const COMPRESSION_EXTS = ['gz'];
+
+function parseHrefExtension(href) {
+    const resource = new URL(href).pathname.split('/').pop();
+    if (!resource?.includes('.')) return null;
+
+    const parts = resource.toLowerCase().split('.');
+    const rawExt = parts.at(-1);
+    const wrapper = COMPRESSION_EXTS.includes(rawExt) ? parts.pop() : null;
+    const ext = parts.length > 1 ? parts.at(-1) : null;
+
+    return { resource, rawExt, ext, wrapper, isFile: ext !== null };
+}
+
 function  getMimeLoader(mimeType, href) {
     if (!mimeType && href) {
-        const qstr = href.split('?')[0].split('#')[0];
-        const ext = qstr.substring(qstr.lastIndexOf('.') + 1).toLowerCase();
-        if (['fits', 'fit', 'fts'].includes(ext)) {
+        const {ext} = parseHrefExtension(href) ?? {};
+        if (FITS_EXTS.includes(ext)) {
             mimeType = 'application/fits';
-        } else if (['csv', 'tbl', 'tsv', 'txt', 'vot', 'xml'].includes(ext)) {
+        } else if (TABLE_EXTS.includes(ext)) {
             mimeType = 'application/x-votable+xml';             // just to trigger table loader
         }
     }
@@ -326,6 +341,10 @@ const handleLayoutChanges = (jobInfo) => {
 
 export function loadTableResult({jobInfo, request, href}) {
     const {tbl_id} = getMetadata({jobInfo});
+    if (!isURL(href)) {
+        dispatchTableUpdate(TblUtil.createErrorTbl(tbl_id, `Invalid result URL: ${href}`));
+    }
+
     const tblRequest= makeFileRequest(null, href, null, {tbl_id});
     copyRequestOptions(request, tblRequest);
 
@@ -349,10 +368,17 @@ export function loadMixedResult({jobInfo, href}) {
     loadImageResult({jobInfo, href});      // placeholder for mixed content loader to be implemented later
 }
 
-export function loadImageResult({jobInfo, href}) {
+export function loadImageResult({jobInfo, request, href}) {
     const wpRequest = WebPlotRequest.makeURIPlotRequest(href);
     const {viewerId=''} = getAViewFromMultiView(getMultiViewRoot(), IMAGE) || {};
     wpRequest.setPlotGroupId(viewerId);
+
+    const requestTitle = request?.META_INFO?.title;
+    if (requestTitle) {
+        wpRequest.setTitleOptions(TitleOptions.NONE);
+        wpRequest.setTitle(requestTitle);
+    }
+
     const plotId = `${href.replace('.', '_')}-${jobInfo.jobId}`;
     dispatchPlotImage({plotId, wpRequest, viewerId});
     handleLayoutChanges(jobInfo);

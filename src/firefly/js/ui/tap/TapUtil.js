@@ -50,9 +50,9 @@ export function getMaxrecHardLimit() {
 
 export const tapHelpId = (id) => `tapSearches.${id}`;
 
-export function makeUploadSchema(uploadFileName,serverFile, columns, totalRows, fileSize, table=ADQL_UPLOAD_TABLE_NAME, asTable= 'ut') {
+export function makeUploadSchema(uploadFileName,serverFile, columns, totalRows, fileSize, table=ADQL_UPLOAD_TABLE_NAME, uploadTableAlias= 'ut') {
     return {
-        [uploadFileName] : { serverFile, uploadFileName, totalRows, fileSize, table, asTable, columns}
+        [uploadFileName] : { serverFile, uploadFileName, totalRows, fileSize, table, uploadTableAlias, columns}
     };
 }
 
@@ -61,11 +61,11 @@ export function makeUploadSchema(uploadFileName,serverFile, columns, totalRows, 
  * @typedef {Object} TapBrowserState
  *
  * @prop  columnsModel
- * @props {String} serviceUrl
+ * @prop {String} serviceUrl
  * @prop schemaOptions
  * @prop tableOptions
- * @props {String} schemaName
- * @props {String} tableName
+ * @prop {String} schemaName
+ * @prop {String} tableName
  * @prop {Map<String, String>} constraintFragments
  * @prop obsCoreTableModel
  * @prop {boolean} obsCoreEnabled
@@ -345,8 +345,8 @@ function makeTapSchemaRequest(serviceUrl, QUERY, title) {
 
 async function loadSchemaDefJoin(serviceUrl) {
     const QUERY = ` SELECT *
-                    FROM tap_schema.schemas
-                    INNER JOIN tap_schema.tables ON  tap_schema.tables.schema_name = tap_schema.schemas.schema_name
+                    FROM TAP_SCHEMA.schemas
+                    INNER JOIN TAP_SCHEMA.tables ON  TAP_SCHEMA.tables.schema_name = TAP_SCHEMA.schemas.schema_name
                 `;
 
     const tableModel= await doFetchTable(makeTapSchemaRequest(serviceUrl, QUERY, 'loadSchemaDefJoin'));
@@ -388,8 +388,8 @@ function modifyModelForOldTap(tableModel) {
 
 async function loadSchemaDefNoJoin(serviceUrl) {
 
-    const schemasQuery = 'SELECT * FROM tap_schema.schemas';
-    const tablesQuery  = 'SELECT * FROM tap_schema.tables';
+    const schemasQuery = 'SELECT * FROM TAP_SCHEMA.schemas';
+    const tablesQuery  = 'SELECT * FROM TAP_SCHEMA.tables';
 
 
     const [schemas,tables]= await Promise.all([
@@ -474,13 +474,13 @@ export const loadSchemaDef = memoize(async (serviceUrl) => {
 export const loadTapKeys = memoize(async (serviceUrl) => {
 
     const QUERY = `
-        SELECT tap_schema.keys.key_id,
-               tap_schema.keys.from_table,
-               tap_schema.keys.target_table,
-               tap_schema.keys.description,  
-               tap_schema.key_columns.from_column,
-               tap_schema.key_columns.target_column
-        FROM tap_schema.keys INNER JOIN tap_schema.key_columns ON tap_schema.keys.key_id = tap_schema.key_columns.key_id
+        SELECT TAP_SCHEMA.keys.key_id,
+               TAP_SCHEMA.keys.from_table,
+               TAP_SCHEMA.keys.target_table,
+               TAP_SCHEMA.keys.description,  
+               TAP_SCHEMA.key_columns.from_column,
+               TAP_SCHEMA.key_columns.target_column
+        FROM TAP_SCHEMA.keys INNER JOIN TAP_SCHEMA.key_columns ON TAP_SCHEMA.keys.key_id = TAP_SCHEMA.key_columns.key_id
         `;
 
     const url= makeSyncQueryURL(serviceUrl,QUERY.trim());
@@ -537,7 +537,12 @@ export function getColumnAttribute(columnsModel, colName, attrName) {
 
 const hasElements= (a) => Boolean(isArray(a) && a?.length);
 
-export const getAsEntryForTableName= (tableName) => tableName?.[0] ?? 'x';
+export function getTableNameAlias(tableName) {
+    if (!tableName) return 'x';
+    if (tableName.length > 1 && tableName[0]==='"') return tableName[1].toLowerCase();
+    if (tableName.length) return tableName[0].toLowerCase();
+    return 'x';
+}
 
 export function mergeServices(startingServices, additional) {
     if (!hasElements(additional)) return startingServices;
@@ -611,16 +616,19 @@ const validColumnNameRE=/^[A-Za-z][A-Za-z_0-9]*(\.[A-Za-z][A-Za-z_0-9]*){0,3}$/;
  */
 export function maybeQuote(name, isTable=false) {
     if (!name || (name.startsWith('"') && name.endsWith('"'))) return name;
+    if (!isTable && name.includes('.')) {
+        const [table,col, ...rest]= name.split('.');
+        const colPart= rest.length ? [col,...rest].join('.') : col;
+        if (table.length && colPart.length) return `${table}.${maybeQuote(colPart)}`;
+    }
     const re= isTable ? validTableNameRE : validColumnNameRE;
     return  (name.match(re)) ? name : `"${name}"`;
 }
 
-
-/**
- * group key for fieldgroup comp
- */
-
-
+export function makeFullyQualifiedColumn(tName, cName) {
+    if (!tName) return maybeQuote(cName);
+    return `${tName}.${maybeQuote(cName)}`;
+}
 
 
 

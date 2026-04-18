@@ -1,7 +1,19 @@
-replicaCount: 2
+autoscaling:
+  enabled: true
 
 resources:
   requests:
     memory: 4Gi
   limits:
     memory: 8Gi
+
+redis:
+  maxmemory: 500M
+  resources:
+    limits:
+      memory: 512Mi
+
+persistence:
+  sharedWorkDir:
+    pvc:
+      storageClass: "efs"

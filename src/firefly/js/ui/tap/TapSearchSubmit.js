@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-    ADQL_QUERY_KEY, getAsEntryForTableName, getServiceHiPS, getServiceId, getServiceLabel,
+    ADQL_QUERY_KEY, getTableNameAlias, getServiceHiPS, getServiceId, getServiceLabel,
     makeTapSearchTitle,
     maybeQuote, TAP_UPLOAD_SCHEMA,
     USER_ENTERED_TITLE
@@ -9,7 +9,7 @@ import {
     getHelperConstraints,
     getTapUploadSchemaEntry,
     getUploadServerFile,
-    getUploadTableName,
+    getUploadTableName, hasAdqlConstraint,
     isTapUpload
 } from 'firefly/ui/tap/Constraints';
 import {makeTblRequest, setNoCache} from 'firefly/tables/TableRequestUtil';
@@ -105,9 +105,9 @@ export function onTapSearchSubmit({request, serviceUrl, tapBrowserState, additio
 
 function getCutoutType(tapBrowserState) {
     const spatial= tapBrowserState?.constraintFragments?.get('spatial');
-    if (spatial?.adqlConstraint?.length) return spatial.cutoutType;
+    if (hasAdqlConstraint(spatial)) return spatial.cutoutType;
     const location= tapBrowserState?.constraintFragments?.get('location');
-    if (location?.adqlConstraint?.length) return location.cutoutType;
+    if (hasAdqlConstraint(location)) return location.cutoutType;
     return ROW_POSITION;
 }
 
@@ -129,7 +129,7 @@ export function getAdqlQuery(tapBrowserState, additionalClauses, allowColumnCons
     if (isUpload) { //check for more than one upload file (in Spatial and in ObjectID col) - should this be a utility function in constraints.js?
         const { constraintFragments } = tapBrowserState;
         const entries = [...constraintFragments.values()];
-        const matchingEntries = entries.filter((c) => Boolean(c.uploadFile && c.TAP_UPLOAD && c.adqlConstraint));
+        const matchingEntries = entries.filter((c) => Boolean(c.uploadFile && c.TAP_UPLOAD && hasAdqlConstraint(c)));
         if (matchingEntries.length > 1) {
             if (showErrors) showInfoPopup('We currently do not support searches with more than one uploaded table.', 'Error');
             return;
@@ -137,15 +137,15 @@ export function getAdqlQuery(tapBrowserState, additionalClauses, allowColumnCons
     }
 
     const helperFragment = getHelperConstraints(tapBrowserState);
-    const tableAsName = getAsEntryForTableName(tableName); // alias is used when upload table is present
+    const tNameAlias = getTableNameAlias(tableName); // alias is used when upload table is present
     const tableCol = tableColumnsConstraints(tapBrowserState.columnsModel,
-        isUpload ? tableAsName : undefined);
+        isUpload ? tNameAlias : undefined);
 
-    const { table:uploadTable, asTable:uploadAsTable, columns:uploadColumns} = isUpload ?
+    const { table:uploadTable, uploadTableAlias, columns:uploadColumns} = isUpload ?
         getTapUploadSchemaEntry(tapBrowserState) : {};
 
     const fromTables= isUpload ?
-        `${tableName} AS ${tableAsName}, ${TAP_UPLOAD_SCHEMA}.${uploadTable} ${uploadAsTable ? 'AS '+uploadAsTable : ''}` :
+        `${tableName} AS ${tNameAlias}, ${TAP_UPLOAD_SCHEMA}.${uploadTable} ${uploadTableAlias ? 'AS '+uploadTableAlias : ''}` :
         tableName;
 
     // check for errors
@@ -159,9 +159,9 @@ export function getAdqlQuery(tapBrowserState, additionalClauses, allowColumnCons
     }
 
     // build columns
-    let selcols = tableCol.selcols || (isUpload ? `${tableAsName}.*` : '*');
+    let selcols = tableCol.selcols || (isUpload ? `${tNameAlias}.*` : '*');
     if (isUpload) {
-        const ut= uploadAsTable ?? uploadTable ?? '';
+        const ut= uploadTableAlias ?? uploadTable ?? '';
         const tCol= uploadColumns.filter(({use}) => use).map( ({name}) => ut+'.'+name);
         selcols+= tCol.length ? ',\n' + makeColsLines(tCol,true) : '';
     }

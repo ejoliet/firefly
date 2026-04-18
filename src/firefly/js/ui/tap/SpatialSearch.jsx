@@ -22,31 +22,20 @@ import {calcCornerString, PolygonDataArea} from '../CatalogSearchMethodType.jsx'
 import {FieldGroupCtx, ForceFieldGroupValid} from '../FieldGroup.jsx';
 import {ListBoxInputField} from '../ListBoxInputField.jsx';
 import {RadioGroupInputField} from '../RadioGroupInputField.jsx';
-import {useFieldGroupRerender, useFieldGroupValue, useFieldGroupWatch} from '../SimpleComponent.jsx';
+import {useFieldGroupRerender, useFieldGroupValue, useFieldGroupWatch, useFieldValueOnly} from '../SimpleComponent.jsx';
 import {SizeInputFields} from '../SizeInputField.jsx';
 import {DEF_TARGET_PANEL_KEY} from '../TargetPanel.jsx';
 import {ConstraintContext} from './Constraints.js';
 import {ROW_POSITION, SEARCH_POSITION} from './Cutout';
 import {getDataServiceOption} from './DataServicesOptions';
-import {
-    DebugObsCore,
-    getPanelPrefix,
-    makeCollapsibleCheckHeader,
-    makeFieldErrorList,
-    makePanelStatusUpdater,
-} from './TableSearchHelpers.jsx';
+import {DebugObsCore, getPanelPrefix, makeCollapsibleCheckHeader, makeConstraintEntry, makeEmptyConstraints,
+    makeFieldErrorList} from './TableSearchHelpers.jsx';
 import {showUploadTableChooser} from '../UploadTableChooser.js';
 import {
-    getAsEntryForTableName, getColumnAttribute, getTapServiceByURL, makeUploadSchema, maybeQuote,
-    tapHelpId
-} from './TapUtil.js';
-import {
-    CenterColumns,
-    UploadCenterLatColumns,
-    UploadCenterLonColumns,
-    UploadTableSelector,
-    UploadTableSelectorPosCol
-} from 'firefly/ui/UploadTableSelector';
+    makeFullyQualifiedColumn, getTableNameAlias, getColumnAttribute,
+    getTapServiceByURL, makeUploadSchema, tapHelpId } from './TapUtil.js';
+import { CenterColumns, UploadCenterLatColumns, UploadCenterLonColumns, UploadTableSelector,
+    UploadTableSelectorPosCol } from 'firefly/ui/UploadTableSelector';
 import {CONE_CHOICE_KEY, POLY_CHOICE_KEY} from 'firefly/visualize/ui/CommonUIKeys';
 import {defaultsDeep} from 'lodash';
 
@@ -133,8 +122,7 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
     const showCenterColumns = !obsCoreEnabled && cols;
 
     const {setConstraintFragment}= useContext(ConstraintContext);
-    const {setVal,getVal,makeFldObj}= useContext(FieldGroupCtx);
-    const [constraintResult, setConstraintResult] = useState({});
+    const {setVal,getVal,makeFldObj}= useContext(FieldGroupCtx); // don't set these functions in dependencies
     const [getUploadInfo, setUploadInfo]= useFieldGroupValue('uploadInfo');
     const [posDefaultOpenMsg, setPosDefaultOpenMsg]= useState(true);
 
@@ -142,11 +130,9 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
 
     const uploadInfo= getUploadInfo() || undefined;
 
-    const updatePanelStatus= makePanelStatusUpdater(checkHeaderCtl.isPanelActive(), Spatial);
-
     useEffect(() => {
         if (!canUpload) setVal(SPATIAL_TYPE,SINGLE);
-    }, [serviceUrl,canUpload]);
+    }, [serviceUrl,canUpload]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         searchParams.radiusInArcSec && setVal(RadiusSize,searchParams.radiusInArcSec);
@@ -175,6 +161,7 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
             setUploadInfo(searchParams.uploadInfo);
             checkHeaderCtl.setPanelActive(true);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [searchParams.radiusInArcSec, searchParams.corners, urlApi.polygon, urlApi[SpatialRegOp], searchParams.uploadInfo]);
 
     const spatialMethod= getVal(SpatialMethod)??CONE_CHOICE_KEY;
@@ -184,7 +171,7 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
         if (searchParams.wp && spatialMethod===CONE_CHOICE_KEY) {
             setVal(DEF_TARGET_PANEL_KEY,searchParams.wp);
         }
-    }, [spatialMethod, searchParams.wp]);
+    }, [spatialMethod, searchParams.wp]);// eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (useSIAv2) {
@@ -213,8 +200,8 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
 
     const onChangeToPolygonMethod = () => {
         if (!handleHiPSConnection) return;
-        const pv = getActivePlotView(visRoot());
-        const plot = primePlot(pv);
+        const pv = getActivePlotView();
+        const plot = primePlot(visRoot(),pv);
         if (!plot) return;
         const cornerCalcV = getVal(cornerCalcType);
         if ((!cornerCalcV || cornerCalcV === 'image' || cornerCalcV === 'viewport' || cornerCalcV === 'area-selection')) {
@@ -236,15 +223,23 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
 
     useFieldGroupWatch([cornerCalcType], () => onChangeToPolygonMethod());
 
-    useEffect(() => {
-        const constraints= makeSpatialConstraints(columnsModel, obsCoreEnabled, makeFldObj(fldListAry), uploadInfo, tableName, canUpload,useSIAv2);
-        updatePanelStatus(constraints, constraintResult, setConstraintResult,useSIAv2);
-    });
-    
+    const isSpatialPanelActive = checkHeaderCtl?.isPanelActive();
+
+    const constraintResult = React.useMemo(() => {
+        if (!isSpatialPanelActive) return makeEmptyConstraints();
+
+        const constraints = makeSpatialConstraints(
+            columnsModel, obsCoreEnabled, makeFldObj(fldListAry),
+            uploadInfo, tableName, canUpload, useSIAv2
+        );
+
+        return makeConstraintEntry(constraints);
+    }, [...fldListAry.map((v) => getVal(v))]);  // eslint-disable-line
+
     useEffect(() => {
         setConstraintFragment(panelPrefix, constraintResult);
-        return () => setConstraintFragment(panelPrefix, '');
-    }, [constraintResult]);
+        return () => setConstraintFragment(panelPrefix, ''); // warning: don't add, setConstraintFragment to dependencies, it will cause infinite loop
+    }, [panelPrefix, constraintResult]);  // eslint-disable-line react-hooks/exhaustive-deps
 
     if (disablePanel) {
         return (
@@ -320,14 +315,11 @@ function getSpacialLayoutMode(spacialType, obsCoreEnabled, canUpload) {
 
 const SpatialSearchLayout = ({initArgs, obsCoreEnabled, uploadInfo, setUploadInfo, serviceLabel, serviceId,
                                  hipsUrl, centerWP, fovDeg, capabilities, embeddedInHiPS, slotProps}) => {
-
-    const {getVal}= useContext(FieldGroupCtx);
-
-    const spacialType= getVal(SPATIAL_TYPE) ?? SINGLE;
-    const spatialMethod= getVal(SpatialMethod)??CONE_CHOICE_KEY;
-    const closest= getVal(Closest)??'';
-    const cornerCalcTypeValue= getVal(cornerCalcType)??'image';
-    const spatialRegOpValue= getVal(SpatialRegOp) ?? SpatialRegOpType.CONTAINS_POINT;
+    const spacialType = useFieldValueOnly(SPATIAL_TYPE, SINGLE);
+    const spatialMethod = useFieldValueOnly(SpatialMethod, CONE_CHOICE_KEY);
+    const closest = useFieldValueOnly(Closest, '');
+    const cornerCalcTypeValue = useFieldValueOnly(cornerCalcType, 'image');
+    const spatialRegOpValue = useFieldValueOnly(SpatialRegOp, SpatialRegOpType.CONTAINS_POINT);
     const layoutMode= getSpacialLayoutMode(spacialType,obsCoreEnabled,capabilities?.canUpload);
     const isCone= spatialMethod === CONE_CHOICE_KEY;
     const containsPoint= spatialRegOpValue === SpatialRegOpType.CONTAINS_POINT;
@@ -488,7 +480,7 @@ const RegionOpField= ({initArgs, capabilities, ...props}) => {
     useEffect(() => {
         const {ops}= buildOptions(capabilities,initArgs);
         setFld({options:ops});
-    }, [capabilities]);
+    }, [capabilities]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return (
         <div style={{marginTop: '5px'}}>
@@ -653,6 +645,7 @@ function getUploadConeUserArea(tab, upLon, upLat, upColumns, radiusField, adqlCo
  * @param worldSys
  * @param adqlCoordSys
  * @param useSIAv2
+ * @param closest
  * @param {FieldErrorList} errList
  * @returns {Object}
  */
@@ -714,7 +707,6 @@ function makeSpatialConstraints(columnsModel, obsCoreEnabled, fldObj, uploadInfo
     const errList= makeFieldErrorList();
     const tabAs= 'ut';
     const validUpload= Boolean(serverFile && upLonCol && upLatCol && canUpload);
-    const preFix= validUpload ? `${getAsEntryForTableName(tableName)}.` : '';
     if (!validUpload && spatialType===MULTI) {
         if (!serverFile) errList.addError('Upload file has not been specified');
         if (!upLonCol && !upLatCol) errList.addError('Upload columns have not been specified');
@@ -738,10 +730,10 @@ function makeSpatialConstraints(columnsModel, obsCoreEnabled, fldObj, uploadInfo
         const ucdCoord = getUCDCoord(columnsModel, cenLon);
         const worldSys = posCol[ucdCoord.key].coord;
         const adqlCoordSys = posCol[ucdCoord.key].adqlCoord;
-        const point = cenLon===cenLat ?
-            `${maybeQuote(preFix+cenLon)}` :
-            `POINT('${adqlCoordSys}', ${maybeQuote(preFix+cenLon)}, ${maybeQuote(preFix+cenLat)})`;
-
+        const preFix= (spatialType===MULTI) && validUpload ? getTableNameAlias(tableName) : '';
+        const lonColStr= makeFullyQualifiedColumn(preFix,cenLon);
+        const latColStr= makeFullyQualifiedColumn(preFix,cenLat);
+        const point = cenLon===cenLat ? lonColStr : `POINT('${adqlCoordSys}', ${lonColStr}, ${latColStr})`;
 
         if (spatialType===SINGLE) {
             if (!radiusSizeField?.value && spatialMethod === CONE_CHOICE_KEY) errList.addError('Missing radius input');

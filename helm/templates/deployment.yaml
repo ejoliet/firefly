@@ -1,3 +1,4 @@
+{{- include "firefly.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +6,9 @@ metadata:
   labels:
     {{- include "firefly.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "firefly.selectorLabels" . | nindent 6 }}
@@ -27,10 +30,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: {{ .Values.service.targetPort }}
+              containerPort: 8080
               protocol: TCP
           env:
-            {{- toYaml .Values.env | nindent 12 }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            - name: CLEANUP_INTERVAL
+              value: {{ .Values.cleanupInterval | quote }}
             {{- if .Values.ingress.pathPrefix }}
             - name: PATH_PREFIX
               value: {{ .Values.ingress.pathPrefix | quote }}
@@ -45,11 +52,14 @@ spec:
             - name: ADMIN_PASSWORD
               value: {{ .Values.adminPassword.value | quote }}
             {{- end }}
-            {{- if gt (int .Values.replicaCount) 1 }}
+            {{- if include "firefly.multiReplica" . }}
             - name: PROPS_redis__host
               value: {{ include "firefly.redisName" . }}
             {{- end }}
           livenessProbe:
+            httpGet:
+              path: {{ if .Values.ingress.pathPrefix }}/{{ trimPrefix "/" .Values.ingress.pathPrefix }}{{ end }}/firefly/healthz
+              port: 8080
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
