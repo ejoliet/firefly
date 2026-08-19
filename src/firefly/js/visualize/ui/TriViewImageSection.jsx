@@ -6,10 +6,12 @@ import {Badge} from '@mui/joy';
 import React from 'react';
 import PropTypes from 'prop-types';
 import {isEmpty} from 'lodash';
+import {REINIT_APP} from '../../core/CoreConst';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {
     hasCoverageData, isCatalog, isDataProductsTable, isObsCoreLike, isOrbitalPathTable
 } from '../../voAnalyzer/TableAnalysis.js';
+import {getTableModel} from '../../voAnalyzer/VoCoreUtils';
 import {getServiceDescriptors, isDataLinkServiceDesc} from '../../voAnalyzer/VoDataLinkServDef';
 
 import {ImageExpandedMode} from '../iv/ImageExpandedMode.jsx';
@@ -17,21 +19,19 @@ import {Tab, TabPanel} from '../../ui/panel/TabPanel.jsx';
 import {MultiViewStandardToolbar} from './MultiViewStandardToolbar.jsx';
 import {MultiImageViewer} from './MultiImageViewer.jsx';
 import {dispatchAddActionWatcher} from '../../core/MasterSaga.js';
+import {getViewerItemIds, getMultiViewRoot} from '../MultiViewCntlr.js';
 import {
-    DEFAULT_FITS_VIEWER_ID, REPLACE_VIEWER_ITEMS, NewPlotMode, getViewerItemIds, getMultiViewRoot,
-    META_VIEWER_ID} from '../MultiViewCntlr.js';
-import {getTblById, findGroupByTblId, getTblIdsByGroup, smartMerge, getActiveTableId} from '../../tables/TableUtil.js';
+    getTblById, findGroupByTblId, getTblIdsByGroup, smartMerge, getActiveTableId, getColumnIdx
+} from '../../tables/TableUtil.js';
 import {
-    LO_MODE,
-    LO_VIEW,
-    dispatchSetLayoutMode,
-    dispatchUpdateLayoutInfo,
-    getLayouInfo,
-    TAB_IDS
+    LO_MODE, LO_VIEW, dispatchSetLayoutMode, dispatchUpdateLayoutInfo, getLayouInfo, TAB_IDS
 } from '../../core/LayoutCntlr.js';
-import ImagePlotCntlr, {visRoot} from '../../visualize/ImagePlotCntlr.js';
+import {
+    DEFAULT_FITS_VIEWER_ID, DELETE_PLOT_VIEW, META_VIEWER_ID, NewPlotMode,
+    PLOT_HIPS, PLOT_IMAGE, PLOT_IMAGE_START, REPLACE_VIEWER_ITEMS
+} from '../VisConst';
+import {visRoot} from '../VisStoreRoots';
 import {TABLE_HIGHLIGHT, TABLE_LOADED, TBL_RESULTS_ACTIVE, TBL_RESULTS_ADDED} from '../../tables/TablesCntlr.js';
-import {REINIT_APP} from '../../core/AppDataCntlr.js';
 import {MetaDataMultiProductViewer} from './multiProduct/MetaDataMultiProductViewer.jsx';
 import {CoverageViewer} from './CoveraeViewer';
 import {getPlotViewAry} from 'firefly/visualize/PlotViewUtil.js';
@@ -147,7 +147,12 @@ function getDefSelected(showCoverage, showFits, showMeta, tbl_id) {
         if (!showCoverage || isObsCoreLike(tbl_id)) return TAB_IDS.DP;
         const sdAry= getServiceDescriptors(tbl_id);
         if (sdAry) {
-            if (sdAry.some((sd) => isDataLinkServiceDesc(sd) )) return TAB_IDS.DP; // treat just like an obbscore table
+            if (sdAry.some((sd) => isDataLinkServiceDesc(sd) )) {
+                const tableModel= getTableModel(tbl_id);
+                const idx= getColumnIdx(tableModel,'designation', true);
+                if (idx>-1) return TAB_IDS.COVERAGE; // if there is a designation it is more like a catalog
+                return TAB_IDS.DP; // treat just like an obscore table
+            }
             return TAB_IDS.COVERAGE; // probably a catalog with some secondary data products, a pretty common case
         }
         return TAB_IDS.DP; // probably not obscore but some other data product table (like an upload of images)
@@ -157,8 +162,8 @@ function getDefSelected(showCoverage, showFits, showMeta, tbl_id) {
 
 export function startImagesLayoutWatcher() {
     const actions = [
-        ImagePlotCntlr.PLOT_IMAGE_START, ImagePlotCntlr.PLOT_IMAGE, ImagePlotCntlr.PLOT_HIPS,
-        ImagePlotCntlr.DELETE_PLOT_VIEW, REPLACE_VIEWER_ITEMS,TABLE_HIGHLIGHT,
+        PLOT_IMAGE_START, PLOT_IMAGE, PLOT_HIPS,
+        DELETE_PLOT_VIEW, REPLACE_VIEWER_ITEMS,TABLE_HIGHLIGHT,
         TBL_RESULTS_ACTIVE, TABLE_LOADED, TBL_RESULTS_ADDED,
         REINIT_APP
     ];
@@ -170,7 +175,6 @@ export function startImagesLayoutWatcher() {
  * Action watcher callback: manages layout info related to this component.
  * @callback actionWatcherCallback
  * @param action
- * @param cancelSelf
  */
 function layoutHandler(action) {
 
@@ -189,13 +193,13 @@ function layoutHandler(action) {
     let newLayoutInfo = layoutInfo;
 
     switch (action.type) {
-        case ImagePlotCntlr.PLOT_IMAGE_START:
-        case ImagePlotCntlr.PLOT_IMAGE :
-        case ImagePlotCntlr.PLOT_HIPS:
+        case PLOT_IMAGE_START:
+        case PLOT_IMAGE :
+        case PLOT_HIPS:
         case REPLACE_VIEWER_ITEMS:
             newLayoutInfo = onNewImage(newLayoutInfo, action);
             break;
-        case ImagePlotCntlr.DELETE_PLOT_VIEW:
+        case DELETE_PLOT_VIEW:
             newLayoutInfo = onPlotDelete(newLayoutInfo, action);
             break;
         case TABLE_LOADED:

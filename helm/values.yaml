@@ -3,6 +3,9 @@
 # Ignored when autoscaling.enabled is true — the HPA controls replica count in that case.
 replicaCount: 1
 
+# -- Additional labels added to all resources (e.g. owner: jenkins).
+extraLabels: {}
+
 # -- Interval for cleaning up temporary files.
 cleanupInterval: "1h"
 
@@ -30,7 +33,7 @@ ingress:
   # -- Ingress class name. Omit to use the cluster default. When set to nginx, traefik,
   # or haproxy, cookie-based session affinity annotations are automatically injected
   # when replicaCount > 1.
-  className: ""
+  className: "nginx"
   # -- Additional ingress annotations.
   annotations: {}
   # -- Hostname. This value is environment-specific. The default value is a placeholder and should be overridden.

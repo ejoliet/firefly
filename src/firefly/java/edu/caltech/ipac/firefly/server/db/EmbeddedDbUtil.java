@@ -9,7 +9,7 @@ import edu.caltech.ipac.firefly.data.ServerRequest;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.data.table.SelectionInfo;
 import edu.caltech.ipac.firefly.server.ServerContext;
-import edu.caltech.ipac.firefly.server.db.spring.JdbcFactory;
+import edu.caltech.ipac.firefly.server.db.jdbc.JdbcFactory;
 import edu.caltech.ipac.firefly.server.events.FluxAction;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
@@ -23,9 +23,8 @@ import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.CollectionUtil;
 import edu.caltech.ipac.util.StringUtils;
 import org.json.simple.JSONObject;
-import org.springframework.jdbc.core.BatchPreparedStatementSetter;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.support.TransactionTemplate;
+import edu.caltech.ipac.firefly.server.db.jdbc.JdbcTemplate;
+import edu.caltech.ipac.firefly.server.db.jdbc.TransactionTemplate;
 
 import javax.validation.constraints.NotNull;
 import java.sql.*;
@@ -298,7 +297,7 @@ public class EmbeddedDbUtil {
         SHORT_TASK_EXEC.submit(() -> {
             enumeratedValuesCheck(dbAdapter, results, treq);
             DataGroup updates = new DataGroup(null, results.getData().getDataDefinitions());
-            updates.getTableMeta().setTblId(results.getData().getTableMeta().getTblId());
+            updates.getTableMeta().setTblId(TableUtil.getTblId(treq));
             JSONObject changes = JsonTableUtil.toJsonDataGroup(updates);
             changes.remove("totalRows");        //changes contains only the columns with 0 rows.. we don't want to update totalRows
 
@@ -312,35 +311,53 @@ public class EmbeddedDbUtil {
         StopWatch.getInstance().stop("enumeratedValuesCheck: " + treq.getRequestId()).printLog("enumeratedValuesCheck: " + treq.getRequestId());
     }
 
+    /*
+      This function uses DuckDB specific functions
+     */
     public static void enumeratedValuesCheck(DbAdapter dbAdapter, DataType[] inclCols) {
         if (inclCols != null && inclCols.length > 0)
         try {
-            String cols = Arrays.stream(inclCols)
+            JdbcTemplate jdbc = JdbcFactory.getTemplate(dbAdapter.getDbInstance());
+            String dataTable = dbAdapter.getDataTable();
+
+            // pass 1: cheap cardinality estimate for every candidate column, in one query over the whole table.
+            String countCols = Arrays.stream(inclCols)
                     .filter(dt -> maybeEnums(dt))
-                    .map(dt -> "count(distinct \"%s\") as \"%s\"".formatted(dt.getKeyName(), dt.getKeyName()))
+                    .map(dt -> "approx_count_distinct(\"%s\") as \"%s\"".formatted(dt.getKeyName(), dt.getKeyName()))
                     .collect(Collectors.joining(", "));
 
-            List<Map<String, Object>> rs = JdbcFactory.getSimpleTemplate(dbAdapter.getDbInstance())
-                    .queryForList("SELECT %s FROM %s limit 500".formatted(cols, dbAdapter.getDataTable()));
+            Map<String, Object> counts = jdbc.queryForMap("SELECT %s FROM %s".formatted(countCols, dataTable));
 
+            List<String> qualified = counts.entrySet().stream()
+                    .filter(e -> {
+                        long count = ((Number) e.getValue()).longValue();
+                        return count > 0 && count <= MAX_COL_ENUM_COUNT;
+                    })
+                    .map(Map.Entry::getKey)
+                    .toList();
+
+            // pass 2: exact distinct values for the qualifying columns only, in one query over the whole table.
             List<Object[]> params = new ArrayList<>();
-            rs.get(0).forEach( (cname,v) -> {
-                Long count = (Long) v ;
-                if (count > 0 && count <= MAX_COL_ENUM_COUNT) {
-                    List<Map<String, Object>> vals = JdbcFactory.getSimpleTemplate(dbAdapter.getDbInstance())
-                            .queryForList("SELECT distinct \"%s\" FROM data order by 1".formatted(cname));
+            if (!qualified.isEmpty()) {
+                String valCols = qualified.stream()
+                        .map(cname -> "array_agg(DISTINCT \"%s\" ORDER BY \"%s\") as \"%s\"".formatted(cname, cname, cname))
+                        .collect(Collectors.joining(", "));
 
+                Map<String, Object> valsRow = jdbc.queryForMap("SELECT %s FROM %s".formatted(valCols, dataTable));
+
+                for (String cname : qualified) {
+                    Object[] vals = (Object[]) ((java.sql.Array) valsRow.get(cname)).getArray();
                     DataType col = findColByName(inclCols, cname);
-                    if (col != null && vals.size() <= MAX_COL_ENUM_COUNT) {
-                        String enumVals = vals.stream()
-                                .map(m -> m.get(cname) == null ? NULL_TOKEN : m.get(cname).toString())  // convert to list of value as string
-                                .map(cn -> cn.contains(",") ? "'" + cn + "'" : cn)                      // if there's comma in the column name, enclose it with single quotes
-                                .collect(Collectors.joining(","));                             // combine the values into a comma separated values string.
+                    if (col != null && vals.length <= MAX_COL_ENUM_COUNT) {
+                        String enumVals = Arrays.stream(vals)
+                                .map(v -> v == null ? NULL_TOKEN : v.toString())         // convert to list of value as string
+                                .map(v -> v.contains(",") ? "'" + v + "'" : v)            // if there's comma in the column name, enclose it with single quotes
+                                .collect(Collectors.joining(","));                      // combine the values into a comma separated values string.
                         col.setEnumVals(enumVals);
                         params.add(new Object[]{enumVals, cname});
                     }
                 }
-            });
+            }
             // update dd table
             if (params.size() > 0)  dbAdapter.batchUpdate("UPDATE DATA_DD SET enumVals = ? WHERE cname = ?", params);
         } catch (Exception ex) {
@@ -561,7 +578,7 @@ public class EmbeddedDbUtil {
             int batchSize = Math.min(rows-loaded, 10000);   // set batchSize limit to 10k to  ensure HUGE table do not require unnecessary amount of memory to load
             final int roffset = loaded;
             loaded += batchSize;
-            jdbc.batchUpdate(insertDataSql, new BatchPreparedStatementSetter() {
+            jdbc.batchUpdate(insertDataSql, new JdbcTemplate.BatchPreparedStatementSetter() {
                 final DataType[] cols = data.getDataDefinitions();
                 List<Boolean> cIsAry = isColumnTypeArray(cols);
                 public void setValues(PreparedStatement ps, int i) throws SQLException {

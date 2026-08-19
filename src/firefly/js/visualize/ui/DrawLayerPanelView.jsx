@@ -11,8 +11,10 @@ import React from 'react';
 import ImageRoot from '../../drawingLayers/ImageRoot.js';
 import {showColorPickerDialog} from '../../ui/ColorPicker.jsx';
 import {showPointShapeSizePickerDialog} from '../../ui/PointShapeSizePicker.jsx';
-import {dispatchDetachLayerFromPlot} from '../DrawLayerCntlr.js';
-import {dispatchDeleteOverlayPlot, dispatchOverlayPlotChangeAttributes, visRoot} from '../ImagePlotCntlr.js';
+
+import {dispatchDetachLayerFromPlot} from '../DrawLayerDispatch';
+import {dispatchDeleteOverlayPlot, dispatchOverlayPlotChangeAttributes} from '../ImagePlotDispatch';
+import {visRoot} from '../VisStoreRoots';
 import {getAllDrawLayersForPlot, getHDU, getLayerTitle, isDrawLayerVisible, primePlot} from '../PlotViewUtil.js';
 import {
     enableRelatedDataLayer, findUnactivatedRelatedData, operateOnOverlayPlotViewsThatMatch, setMaskVisible
@@ -97,7 +99,7 @@ function makeAddRelatedDataAry(pv) {
         .filter( (d) => d.primaryHduIdx===getHDU(primePlot(pv)))
         .map( (d,idx) => {
             return (
-                <Stack {...{spacing:1, direction:'row', pr: 2, alignItems:'center', key:idx+''}}>
+                <Stack key={idx+''} {...{spacing:1, direction:'row', pr: 2, alignItems:'center'}}>
                     <Typography {...{color:'warning', mr:.5}}>
                         {`${d.desc} Layer found :`}
                     </Typography>
@@ -124,8 +126,7 @@ function makeDrawLayerItemAry(layers,pv, maxTitleChars, factory) {
     const sortedGroupedLayer= Object.values(sortedGroupedObj).flat(1);
 
     return sortedGroupedLayer.map( (l,idx) => (
-        <DrawLayerItemView {...{
-            key:l.drawLayerId,
+        <DrawLayerItemView key={l.drawLayerId} {...{
             maxTitleChars,
             helpLine: l.helpLine,
             lastItem: idx===last,
@@ -154,20 +155,15 @@ function makeImageLayerItemAry(pv, maxTitleChars, hasLast, mouseOverMaskValue) {
     const retAry= pv.overlayPlotViews.map( (opv,idx) => (
         <DrawLayerItemView key={'MaskControl-'+idx}
                            maxTitleChars={maxTitleChars}
-                           helpLine={opv.description ?? ''}
+                           helpLine={opv.description}
                            lastItem={hasLast ? idx===last : false}
-                           canUserDelete={true}
-                           canUserChangeColor={true}
-                           isPointData={false}
                            packWithNext= {idx!==last}
                            color={opv.colorAttributes.color}
-                           autoFormatTitle={true}
                            title= {makeOverlayTitle(opv, Boolean(mouseOverMaskValue & opv.maskValue), dataWidth, dataHeight) }
                            visible={opv.visible}
                            modifyColor={() => modifyMaskColor(opv)}
                            deleteLayer={() => deleteMaskLayer(opv)}
                            changeVisible={() => setMaskVisibleInGroup(opv, !opv.visible)}
-                           UIComponent={null}
     />));
     return retAry;
 }

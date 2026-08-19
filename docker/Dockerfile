@@ -9,7 +9,7 @@ RUN echo "============> Build platform: $(uname -m)"
 
 RUN apt-get update && apt-get install -y \
       curl git unzip wget ca-certificates gnupg htmldoc \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_26.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g yarn \
 # gradle version 8.10  Not available via apt-get
@@ -72,6 +72,23 @@ RUN if [ -z "$checkoutFirefly" ] ; then echo skip checkout ; else gradle firefly
 RUN gradle -Penv=${env} -PBranchOverride=${BranchOverride} ${target}
 
 
+# =====================================
+# Stage: Standalone zip builder
+# =====================================
+FROM builder AS standalone-builder
+ARG env=local
+ARG BranchOverride=''
+RUN gradle -Penv=${env} -PBranchOverride=${BranchOverride} standalone:zip
+
+
+# ==============================
+# Stage: Standalone zip artifact: standalone.zip
+# ==============================
+FROM scratch AS standalone-zip
+ARG build_dir=firefly
+COPY --from=standalone-builder /opt/work/${build_dir}/build/dist/standalone.zip /
+
+
 # ==============================
 # Dev environment
 # ==============================
@@ -130,7 +147,7 @@ CMD ./devMode.sh
 # /external                 : default external data directory visible to Firefly
 
 
-FROM tomcat:11.0.11-jre21-temurin-jammy
+FROM tomcat:11.0-jre21-temurin
 
 ARG build_dir=firefly
 ARG user=tomcat
@@ -139,7 +156,7 @@ ARG uid=91
 ARG gid=91
 ARG TARGETARCH=amd64
 ARG TARGETOS=linux
-ARG DUCKDB_VERSION=v1.1.3
+ARG DUCKDB_VERSION=v1.5.2.1
 
 # These are the users replaceable environment variables, basically runtime arguments
 #          - Set the available memory on the command line with --memory="4g"
@@ -195,13 +212,15 @@ COPY --from=builder /opt/work/${build_dir}/build/dist/*.war ${CATALINA_HOME}/web
 # - useSendfile="false" →  avoids bypassing compression for static files
 # - compressibleMimeType → list of text-based formats to compress (HTML, CSS, JS, JSON, VOTable, XML, CSV, SVG, Fonts)
 RUN sed -i 's/<Connector port="8080" protocol="HTTP\/1.1"/<Connector port="8080" protocol="HTTP\/1.1" compression="on" useSendfile="false" compressibleMimeType="text\/html,text\/plain,text\/css,text\/javascript,application\/javascript,application\/json,application\/xml,text\/xml,application\/x-votable+xml,application\/x-yaml,application\/ld+json,image\/svg+xml,text\/csv,application\/xhtml+xml,application\/rss+xml,application\/atom+xml,application\/x-font-ttf,font\/otf,font\/woff,font\/woff2,application\/octet-stream"/' \
-    $CATALINA_HOME/conf/server.xml
-
-# preinstall DuckDB extensions; remember to update version when DuckDB is updated
-ENV DUCKDB_TARGET=${DUCKDB_VERSION}/${TARGETOS}_${TARGETARCH}_gcc4
-RUN mkdir -p temp/$DUCKDB_TARGET \
-    && wget -P temp/$DUCKDB_TARGET https://community-extensions.duckdb.org/$DUCKDB_TARGET/magic.duckdb_extension.gz \
-    && gunzip -f temp/$DUCKDB_TARGET/magic.duckdb_extension.gz
+        $CATALINA_HOME/conf/server.xml \
+    # Strip version from Server header and disable TRACE
+    && sed -i 's/<Connector /<Connector server="" allowTrace="false" /' \
+        $CATALINA_HOME/conf/server.xml \
+    # Disable runtime auto-deploy
+    && sed -i 's/autoDeploy="true"/autoDeploy="false"/' \
+        $CATALINA_HOME/conf/server.xml  \
+    && sed -i '/<\/Host>/i\    <Valve className="org.apache.catalina.valves.ErrorReportValve" showReport="false" showServerInfo="false" />' \
+          $CATALINA_HOME/conf/server.xml
 
 # Add permission to files and directories needed for runtime
 # increase max header size to avoid failing on large auth token

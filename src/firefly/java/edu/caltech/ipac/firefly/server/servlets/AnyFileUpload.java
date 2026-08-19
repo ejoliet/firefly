@@ -29,8 +29,8 @@ import edu.caltech.ipac.util.download.FailedRequestException;
 import org.apache.commons.fileupload2.core.DiskFileItemFactory;
 import org.apache.commons.fileupload2.core.FileItemInput;
 import org.apache.commons.fileupload2.core.FileItemInputIterator;
-import org.apache.commons.fileupload2.jakarta.JakartaServletDiskFileUpload;
-import org.apache.commons.fileupload2.jakarta.JakartaServletFileUpload;
+import org.apache.commons.fileupload2.jakarta.servlet6.JakartaServletDiskFileUpload;
+import org.apache.commons.fileupload2.jakarta.servlet6.JakartaServletFileUpload;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -256,7 +256,9 @@ public class AnyFileUpload extends BaseHttpServlet {
                 File dir= getSessUploadDir(sp.convertToServerRequest());
                 statusFileInfo = LockingRetrieve.downloadWithCacheMsg(fromUrl, dir);
             }
-            if (isUrlFail(statusFileInfo)) throw new Exception(codeFailMsg(statusFileInfo));
+            if (isUrlFail(statusFileInfo))  {
+                return new Result(statusFileInfo,null);
+            }
             uploadFileInfo= makeUploadFileInfo(statusFileInfo,fname);
 
         } else if (fromWPR!= null) {

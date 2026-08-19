@@ -20,7 +20,8 @@ const jobRunner= makeJobRunningContext(3);
 
 export async function doRawDataWork({type,payload,sendStatus}) {
     let scheduleClose= false;
-    if (shouldUseGpuInWorker() && !BrowserInfo.supportsWebGpu() && !getGpuJsImmediate()  && payload.rootUrl) {
+    const webGpu= await BrowserInfo.supportsWebGpu();
+    if (shouldUseGpuInWorker() && !webGpu && !getGpuJsImmediate()  && payload.rootUrl) {
         await getGpuJs(payload.rootUrl); // make sure the GPU code is loaded up front
     }
     try {
@@ -98,11 +99,17 @@ async function doMaskColorChange(payload) {
 }
 
 function convertToBits(ary) {
-    const retAry= new Uint8ClampedArray(Math.trunc(ary.length/8)+1);
     const len= ary.length;
+    const evenRetLen= Math.trunc(len/8);
+    const retAry= new Uint8ClampedArray((len % 8 === 0) ? evenRetLen : evenRetLen+1);
+    let j;
     for(let i=0;(i<len);i++) {
-        if (ary[i]) {
-            retAry[Math.trunc(i / 8)] = retAry[Math.trunc(i / 8)] | (1 << (i % 8));
+        if (i % 8 === 0) {
+            j= Math.trunc(i / 8);
+            retAry[j] = 0xff;
+        }
+        if (!ary[i]) {
+            retAry[j]&= ~(1 << (i % 8));
         }
     }
     return retAry;
@@ -185,7 +192,7 @@ export async function callStretchedByteData(payload,sendStatus ) {
     const {plotImageId,plotStateSerialized,plotState, dataWidth,dataHeight,
         nanPixelColor,colorTableId, mask=false,maskBits,cmdSrvUrl:url, dataCompress= 'FULL'}= payload;
 
-    const colorModel= !mask && !plotState.isThreeColor() && getColorModelByGPUType(colorTableId,nanPixelColor);
+    const colorModel= !mask && !plotState.isThreeColor() && await getColorModelByGPUType(colorTableId,nanPixelColor);
     const ct= getCompressParam(dataCompress, payload.veryLargeData);
     const {options}=  makeFetchOptions(plotImageId,
         {

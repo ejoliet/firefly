@@ -4,30 +4,30 @@
 
 import {Box, Sheet, Stack, Typography} from '@mui/joy';
 import React, {useContext, useEffect} from 'react';
-import {object, string} from 'prop-types';
+import {object, shape, string} from 'prop-types';
 import {validateUrl} from '../util/Validate.js';
 
 import {
-    URL_COL, makeHiPSRequest, defHiPSSources, getHiPSSources, IVOAID_COL, TITLE_COL
+    URL_COL, makeHiPSRequest, defHiPSSources, getHiPSSources, IVOAID_COL, TITLE_COL, resolveHiPSIvoURL
 } from '../visualize/HiPSListUtil.js';
 import {ValidationField} from './ValidationField.jsx';
-import {getCellValue, getTblById} from '../tables/TableUtil.js';
-import {DEFAULT_FITS_VIEWER_ID} from '../visualize/MultiViewCntlr.js';
+import {getCellValue, getColumnValues, getTblById, onTableLoaded} from '../tables/TableUtil.js';
+import {DEFAULT_FITS_VIEWER_ID} from '../visualize/VisConst';
 import WebPlotRequest from '../visualize/WebPlotRequest.js';
 import {parseWorldPt} from '../visualize/Point.js';
-import {dispatchTableFetch} from '../tables/TablesCntlr.js';
+import {dispatchTableFetch, dispatchTableHighlight} from '../tables/TablesCntlr.js';
 import {TablePanel} from '../tables/ui/TablePanel.jsx';
 import {showInfoPopup} from './PopupUtil.jsx';
 import {CheckboxGroupInputField} from './CheckboxGroupInputField.jsx';
 import {useStoreConnector} from './SimpleComponent.jsx';
 import {getFieldVal} from '../fieldGroup/FieldGroupUtils.js';
-import {dispatchChangeHiPS, visRoot} from '../visualize/ImagePlotCntlr.js';
+import {dispatchChangeHiPS} from '../visualize/ImagePlotDispatch';
 import {PopupPanel} from './PopupPanel.jsx';
 import DialogRootContainer from './DialogRootContainer.jsx';
 import {dispatchHideDialog, dispatchShowDialog} from '../core/ComponentCntlr.js';
 import {FormPanel} from './FormPanel.jsx';
 import {FieldGroup, FieldGroupCtx} from './FieldGroup.jsx';
-import {primePlot} from '../visualize/PlotViewUtil.js';
+import {primePlot, currentP} from '../visualize/PlotViewUtil.js';
 import {BLANK_HIPS_URL} from '../visualize/WebPlot.js';
 import {createHiPSMocLayer} from 'firefly/visualize/task/PlotHipsTask.js';
 import {getAppOptions} from 'firefly/core/AppDataCntlr.js';
@@ -42,7 +42,7 @@ const useSourceMOC = 'useSourceMOC';
 let activeHipsTblId;
 let activeGroupKey;
 
-export const HiPSImageSelect= ({ variant, groupKey, urlTitleText='4. Enter URL', datasetTitleText= '4. Select Data Set'}) => {
+export const HiPSImageSelect= ({ variant, initArgs, groupKey, urlTitleText='4. Enter URL', datasetTitleText= '4. Select Data Set'}) => {
     const {groupKey:ctxKey} = useContext(FieldGroupCtx);
     const {extraHiPSListName}= getAppOptions();
     activeGroupKey = groupKey ?? ctxKey;
@@ -71,7 +71,7 @@ export const HiPSImageSelect= ({ variant, groupKey, urlTitleText='4. Enter URL',
                         <Typography {...{px:1, color:'primary', level:'title-md'}}>{datasetTitleText}</Typography>
                         <SourceSelect {...{extraHiPSListName}} />
                     </Stack>
-                    <HiPSSurveyTable {...{variant, groupKey:activeGroupKey, extraHiPSListName }} />
+                    <HiPSSurveyTable {...{variant, initArgs, groupKey:activeGroupKey, extraHiPSListName }} />
                 </Stack>
             </Sheet>
         );
@@ -84,7 +84,11 @@ HiPSImageSelect.propTypes = {
     urlTitleText: string,
     datasetTitleText: string,
     extraHiPSListName : string,
-    variant : string
+    variant : string,
+    initArgs: shape({
+        searchParams: object,
+        urlApi: object,
+    }),
 };
 
 const DIALOG_ID = 'HiPSImageSelectPopup';
@@ -106,22 +110,15 @@ export function showHiPSSurveysPopup(pv, moc= false) {
             if (resultSuccess(request)) dispatchHideDialog(DIALOG_ID);
         }
         else {
-            const rootUrl = getHipsUrl();
-            if (rootUrl) {
-                const plot = pv ? primePlot(pv) : primePlot(visRoot());
-                // update the table highlight of the other one which is not shown in table panel
-                moc ? createHiPSMocLayer({
-                        ivoid: getIvoaId(),
-                        title: getTitle(),
-                        hipsUrl: rootUrl,
-                        mocFile: rootUrl.toLowerCase().endsWith('fits') ? '' : undefined,
-                        plot: primePlot(pv),
-                        visible: true
-                    } ) :
-                    dispatchChangeHiPS({plotId: plot.plotId, hipsUrlRoot: rootUrl}
-                    );
-                dispatchHideDialog(DIALOG_ID);
-            }
+            const hipsUrl = getHipsUrl();
+            if (hipsUrl) return;
+            const plot = pv ? primePlot(pv) : currentP().plot;
+            moc
+                ? createHiPSMocLayer({
+                    ivoid: getIvoaId(), title: getTitle(), hipsUrl, plot, visible: true,
+                    mocFile: hipsUrl.toLowerCase().endsWith('fits') ? '' : undefined})
+                : dispatchChangeHiPS({plotId: plot.plotId, hipsUrlRoot: hipsUrl} );
+            dispatchHideDialog(DIALOG_ID);
         }
     };
 
@@ -178,8 +175,8 @@ const getTitle= () => getHighlightCell(TITLE_COL) || 'Blank HiPS';// blank hips 
 export const getHipsUrl= () => getHighlightCell(URL_COL) || BLANK_HIPS_URL;// blank hips is empty-space in the table
 
 function SourceSelect({moc=false, extraHiPSListName }) {
-    const mocSource= getAppOptions().hips?.adhocMocSource || 'Featured Sources';
-    const sourceOptions = moc && mocSource ?
+    const mocSource= getAppOptions().hips?.adhocMocSource || {label: 'Featured Sources', sources: []};
+    const sourceOptions = moc ?
             [{label : mocSource.label, value: 'adhoc' }] :
             defHiPSSources()?.map((oneSource) => ({label: oneSource.label, value: oneSource.source}));
     if (extraHiPSListName) {
@@ -214,7 +211,19 @@ export function makeHiPSWebPlotRequest(request, plotId, groupId= DEFAULT_FITS_VI
     return wpRequest;
 }
 
-function HiPSSurveyTable({groupKey, variant, extraHiPSListName , moc=false}) {
+async function initUriAfterLoading(tbl_id, uri)  {
+    if (!uri || !tbl_id) return;
+    await onTableLoaded(tbl_id);
+    const table= getTblById(tbl_id);
+    if (!table) return;
+    const url= await resolveHiPSIvoURL(uri);
+    console.log(table);
+    const row= getColumnValues(table, 'Url').findIndex( (v) => v===url);
+    if (row===-1) return;
+    dispatchTableHighlight(tbl_id,row);
+}
+
+function HiPSSurveyTable({groupKey, initArgs={}, variant, extraHiPSListName , moc=false}) {
 
     const sources = useStoreConnector(() => getFieldVal(groupKey, moc ? useSourceMOC : useSourceHiPS));
     let finalSources = sources ||  getHiPSSources();
@@ -229,6 +238,7 @@ function HiPSSurveyTable({groupKey, variant, extraHiPSListName , moc=false}) {
 
     useEffect ( () => {
         if (!getTblById(activeHipsTblId)) {
+            const uri= initArgs?.urlApi?.uri;
             const mocSources= getAppOptions().hips?.adhocMocSource?.sources ?? getDefaultMOCList();
             const adhocMocIncludeAdditionSources= getAppOptions().hips?.adhocMocIncludeAdditionSources ?? '';
             const req = makeHiPSRequest(
@@ -239,6 +249,7 @@ function HiPSSurveyTable({groupKey, variant, extraHiPSListName , moc=false}) {
                 activeHipsTblId);
 
             req && dispatchTableFetch(req);
+            if (uri) void initUriAfterLoading(activeHipsTblId, uri);
         }
     }, [sources]);
 

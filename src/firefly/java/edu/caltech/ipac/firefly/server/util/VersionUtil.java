@@ -64,30 +64,33 @@ public class VersionUtil {
     }
 
     public static void ingestVersion(ServletContext context) {
-
-        _version.setAppName(context.getServletContextName());
-        _version.setConfigLastModTime(ServerContext.getConfigLastModTime());
-
-        File confDir = ServerContext.getWebappConfigDir();
-        Properties props = new Properties();
         try {
+            _version.setAppName(context.getServletContextName());
+            _version.setConfigLastModTime(ServerContext.getConfigLastModTime());
+
+            File confDir = ServerContext.getWebappConfigDir();
+            Properties props = new Properties();
             props.load(new FileInputStream(new File(confDir, VERSION_FILE)));
-            _version.setMajor(getNum(props.getProperty(MAJOR)));
-            _version.setMinor(getNum(props.getProperty(MINOR)));
-            _version.setRev(props.getProperty(REV));
-            _version.setVersionType(Version.convertVersionType(props.getProperty(TYPE)));
-            _version.setBuild(getNum(props.getProperty(BUILD_NUMBER)));
-            _version.setBuildDate(props.getProperty(BUILD_DATE));
-            _version.setBuildTime(props.getProperty(BUILD_TIME));
-            _version.setBuildTag(props.getProperty(BUILD_TAG));
-            _version.setBuildCommit(props.getProperty(BUILD_COMMIT));
-            _version.setBuildCommitFirefly(props.getProperty(BUILD_COMMIT_FIREFLY));
-            _version.setBuildFireflyTag(props.getProperty(BUILD_FIREFLY_TAG));
-            _version.setBuildFireflyBranch(props.getProperty(BUILD_FIREFLY_BRANCH));
-            _version.setDevCycleTag(props.getProperty(DEV_CYCLE_TAG));
+            ingestVersion(props);
         } catch (IOException e) {
             // just ignore
         }
+    }
+
+    public static void ingestVersion(Properties props) {
+        _version.setMajor(getNum(props.getProperty(MAJOR)));
+        _version.setMinor(getNum(props.getProperty(MINOR)));
+        _version.setRev(props.getProperty(REV));
+        _version.setVersionType(Version.convertVersionType(props.getProperty(TYPE)));
+        _version.setBuild(getNum(props.getProperty(BUILD_NUMBER)));
+        _version.setBuildDate(props.getProperty(BUILD_DATE));
+        _version.setBuildTime(props.getProperty(BUILD_TIME));
+        _version.setBuildTag(props.getProperty(BUILD_TAG));
+        _version.setBuildCommit(props.getProperty(BUILD_COMMIT));
+        _version.setBuildCommitFirefly(props.getProperty(BUILD_COMMIT_FIREFLY));
+        _version.setBuildFireflyTag(props.getProperty(BUILD_FIREFLY_TAG));
+        _version.setBuildFireflyBranch(props.getProperty(BUILD_FIREFLY_BRANCH));
+        _version.setDevCycleTag(props.getProperty(DEV_CYCLE_TAG));
     }
 
     public static Version getAppVersion() { return _version;  }
@@ -132,12 +135,11 @@ public class VersionUtil {
         Version v = getAppVersion();
 
         List<KeyVal<String, String>> versionInfo = new ArrayList<>(6);
-        versionInfo.add(new KeyVal<>("Version", getVersionStr(v)));
+        versionInfo.add(new KeyVal<>("Application Version", getVersionStr(v)));
         versionInfo.add(new KeyVal<>("Built On", v.getBuildTime()));
         versionInfo.add(new KeyVal<>("Git commit", v.getBuildCommit()));
 
-        if (v.getMajor()>0)
-            versionInfo.add(new KeyVal<>("Firefly Library Version", getFireflyVersionStr(v)));
+        versionInfo.add(new KeyVal<>("Firefly Version", getFireflyVersionStr(v)));
         if (!StringUtils.isEmpty(v.getBuildCommitFirefly()))
             versionInfo.add(new KeyVal<>("Firefly Git Commit", v.getBuildCommitFirefly()));
         if (!StringUtils.isEmpty(v.getBuildFireflyTag()))

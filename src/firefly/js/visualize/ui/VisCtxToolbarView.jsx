@@ -24,14 +24,13 @@ import Validate from '../../util/Validate.js';
 import {CoordinateSys} from '../CoordSys.js';
 import {getExtName, getExtType, getHeader} from '../FitsHeaderUtil.js';
 import {
-    dispatchChangeCenterOfProjection, dispatchChangeHiPS, dispatchChangeHipsImageConversion, dispatchChangePrimePlot,
-    visRoot
-} from '../ImagePlotCntlr.js';
+    dispatchChangeCenterOfProjection, dispatchChangeHiPS, dispatchChangeHipsImageConversion, dispatchChangePrimePlot
+} from '../ImagePlotDispatch';
 import {PlotAttribute} from '../PlotAttribute';
 import {
-    canConvertBetweenHipsAndFits, convertHDUIdxToImageIdx, convertImageIdxToHDU, getActivePlotView, getCubePlaneCnt,
-    getFormattedWaveLengthUnits, getHDU, getHDUCount, getHDUIndex, getPlotViewById, getPtWavelength, hasPlaneOnlyWLInfo,
-    isImageCube, isMultiHDUFits, primePlot, pvEqualExScroll,
+    canConvertBetweenHipsAndFits, convertHDUIdxToImageIdx, convertImageIdxToHDU, currentP, getCubePlaneCnt,
+    getFormattedWaveLengthUnits, getHDU, getHDUCount, getHDUIndex, getPtWavelength,
+    hasPlaneOnlyWLInfo, isImageCube, isMultiHDUFits, primePlot, pvEqualExScroll, refreshP,
 } from '../PlotViewUtil.js';
 import {makeWorldPt} from '../Point.js';
 import {convertToHiPS, convertToImage, doHiPSImageConversionIfNecessary} from '../task/PlotHipsTask.js';
@@ -56,7 +55,7 @@ function makeExtensionButtons(extensionAry,pv) {
                                tip={ext.toolTip} key={ext.id} shortcutKey={ext.shortcutKey}
                                lastTextItem={idx===(extensionAry.length-1)}
                                onClick={() => {
-                                   if (getActivePlotView(visRoot())?.plotId===pv.plotId) {
+                                   if (currentP().plotId===pv.plotId) {
                                        dispatchExtensionActivate(ext,makePlotSelectionExtActivateData(ext,pv));
                                    }
                                }}/>
@@ -84,7 +83,7 @@ function doHiPSFitsConvert(pv,target) {
 
 function changeAutoConvert(pv, auto) {
     dispatchChangeHipsImageConversion({plotId:pv.plotId, hipsImageConversionChanges:{autoConvertOnZoom:auto}});
-    const nextPv= getPlotViewById(visRoot(), pv.plotId);
+    const nextPv= refreshP(pv);
     if (auto) doHiPSImageConversionIfNecessary(nextPv);
 }
 
@@ -121,7 +120,7 @@ function HipsOptionsDropdown({pv}) {
                                    hasCheckBox={true}
                                    checkBoxOn={plot.imageCoordSys===CoordinateSys.EQ_J2000}
                                    onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.EQ_J2000})}/>
-                    <ToolbarButton text='Ecliptic J2000' tip='Use Ecliptic J2000 coordinate system' key={'eqj'}
+                    <ToolbarButton text='Ecliptic J2000' tip='Use Ecliptic J2000 coordinate system' key={'ecliptic'}
                                    hasCheckBox={true}
                                    checkBoxOn={plot.imageCoordSys===CoordinateSys.ECL_J2000}
                                    onClick={()=>dispatchChangeHiPS( {plotId,  coordSys: CoordinateSys.ECL_J2000})}/>
@@ -139,18 +138,16 @@ function HipsOptionsDropdown({pv}) {
                     <Tooltip title='Choose the projection for the all-sky HiPS image'>
                         <Typography>Projection</Typography>
                     </Tooltip>
-                    <ToolbarButton {...{
+                    <ToolbarButton key='change Hips' {...{
                         hasCheckBox: true,
                         checkBoxOn: !isHiPSAitoff(plot),
-                        key: 'change Hips',
                         text: SPHER_TEXT,
                         tip: 'All-sky multi-resolution image with spherical projection, up to 180 degrees',
                         onClick: () => dispatchChangeCenterOfProjection({plotId: pv.plotId, fullSky: false})
                     }}/>
-                    <ToolbarButton {...{
+                    <ToolbarButton key='change aitoff' {...{
                         hasCheckBox: true,
                         checkBoxOn: isHiPSAitoff(plot),
-                        key: 'change aitoff',
                         text: AITOFF_TEXT,
                         tip: 'All-sky multi-resolution image with Aitoff projection, up to 360 degrees',
                         onClick: () => dispatchChangeCenterOfProjection({plotId: pv.plotId, fullSky: true})
@@ -203,16 +200,16 @@ function HiPSDataSelect({pv}) {
             {canConvertHF  && isHiPS(plot) && <DropDownVerticalSeparator useLine={true}/>}
             {canConvertHF && <>
                 <Typography sx={{whiteSpace:'nowrap'}}>HiPS to FITS Conversion</Typography>
-                <ToolbarButton {...{
-                    hasCheckBox: true, checkBoxOn: auto, key: 'autoFITS',
+                <ToolbarButton key='autoFITS' {...{
+                    hasCheckBox: true, checkBoxOn: auto,
                     text: isHiPS(plot) ? `Auto Zoom-in to ${imageTitle} FITS` : 'Auto Zoom-out to HiPS',
                     tip: isHiPS(plot) ?
                         `${autoTipStart} Switch to ${imageTitle} FITS image at current view center; coverage extent will be limited` :
                         `${autoTipStart} Switch to All-Sky (HiPS) image`,
                     onClick: () => changeAutoConvert(pv, !auto)
                 }}/>
-                <ToolbarButton {...{
-                    hasCheckBox: true, key: 'toFITS',
+                <ToolbarButton key='toFITS' {...{
+                    hasCheckBox: true,
                     text: isHiPS(plot) ? `Switch to ${imageTitle} FITS image` : 'Switch to HiPS',
                     tip: isHiPS(plot) ?
                         `Switch to ${imageTitle} FITS image at current view center; coverage extent will be limited` :

@@ -10,7 +10,6 @@ import {getDataServiceOption, getDataServiceOptionByTable, getDataServiceOptions
 import {findTableCenterColumns, hasDataLinkSvcDesc, hasObsCoreLikeDataProducts, isDatalinkTable, isDataProductsTable
 } from '../../voAnalyzer/TableAnalysis.js';
 import {getCatalogWatcherDef} from '../../visualize/saga/CatalogWatcher.js';
-import {getUrlLinkWatcherDef} from '../../visualize/saga/UrlLinkWatcher.js';
 import {getActiveRowToImageDef} from '../../visualize/saga/ActiveRowToImageWatcher.js';
 import {getMocWatcherDef} from '../../visualize/saga/MOCWatcher.js';
 import {useFieldGroupValue, useStoreConnector} from 'firefly/ui/SimpleComponent';
@@ -28,16 +27,14 @@ import {makeFoVString} from 'firefly/visualize/ZoomUtil';
 export const getAllStartIds= ()=> [
     getMocWatcherDef().id,
     getCatalogWatcherDef().id,
-    getUrlLinkWatcherDef().id,
     getActiveRowToImageDef().id,
     getObsCoreWatcherDef().id,
 ];
 
 export function startTTFeatureWatchers(startIds=[
-    getMocWatcherDef().id, getCatalogWatcherDef().id, getUrlLinkWatcherDef().id, getActiveRowToImageDef().id]) {
+    getMocWatcherDef().id, getCatalogWatcherDef().id, getActiveRowToImageDef().id]) {
     startIds.includes(getMocWatcherDef().id) && dispatchAddTableTypeWatcherDef(getMocWatcherDef());
     startIds.includes(getCatalogWatcherDef().id) && dispatchAddTableTypeWatcherDef(getCatalogWatcherDef());
-    startIds.includes(getUrlLinkWatcherDef().id) && dispatchAddTableTypeWatcherDef(getUrlLinkWatcherDef());
     startIds.includes(getActiveRowToImageDef().id) && dispatchAddTableTypeWatcherDef(getActiveRowToImageDef());
     startIds.includes(getObsCoreWatcherDef().id) && dispatchAddTableTypeWatcherDef(getObsCoreWatcherDef());
 }
@@ -57,8 +54,6 @@ function isObsCoreish(tableOrId) {
 
 function watchForObsCoreTable(tbl_id, action, cancelSelf) {
     if (action) return;
-    const {leftButtons=[]} = getTableUiByTblId(tbl_id);
-    if (leftButtons.some((lb) => lb.prepareDownloadBtn)) return;
     setupObsCorePackaging(tbl_id);
     cancelSelf();
 }
@@ -81,17 +76,24 @@ function setupObsCorePackaging(tbl_id) {
 
     const dlProps = getDataServiceOptionByTable('obsCoreDownloadProps', table, {}) || {};
 
-    const {tbl_ui_id, leftButtons=[]}= getTableUiByTblId(tbl_id) ?? {} ;
+    const {tbl_ui_id, leftButtons=[]}= getTableUiByTblId(tbl_id) ?? {};
     const prepareDownloadFunc = () => <PrepareDownload {...dlProps} />;
     prepareDownloadFunc.prepareDownloadBtn = true;
     leftButtons.unshift(prepareDownloadFunc);
     dispatchTableUiUpdate({ tbl_ui_id, leftButtons});
 }
 
+function getHostname(url) {
+    if (!url) return undefined;
+    try {
+        return new URL(url).hostname;
+    } catch {
+        return undefined;
+    }
+}
+
 function updateSearchRequest( tbl_id='', dlParams='', sRequest=null) {
-    const hostname = sRequest?.source || sRequest?.serviceUrl
-        ? new URL(sRequest.source || sRequest.serviceUrl).hostname
-        : null;
+    const hostname = getHostname(sRequest?.source) ?? getHostname(sRequest?.serviceUrl);
     const serviceId= getMetaEntry(tbl_id,MetaConst.DATA_SERVICE_ID);
     const ops= getDataServiceOptionsFallback(serviceId, hostname) ?? {};
     const template= ops.productTitleTemplate;
@@ -277,5 +279,5 @@ export const PrepareDownload = React.memo(({table_id, tbl_title, viewerId, showF
 });
 
 PrepareDownload.Props = {
-    tbl_id: String,
+    table_id: String,
 };

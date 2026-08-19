@@ -4,6 +4,7 @@
 package edu.caltech.ipac.firefly.server.servlets;
 
 import edu.caltech.ipac.firefly.core.RedisService;
+import static edu.caltech.ipac.util.FormatUtil.Format.*;
 import edu.caltech.ipac.firefly.core.background.JobManager;
 import edu.caltech.ipac.firefly.messaging.Messenger;
 import edu.caltech.ipac.firefly.messaging.Subscriber;
@@ -15,26 +16,27 @@ import edu.caltech.ipac.firefly.server.db.DbMonitor;
 import edu.caltech.ipac.firefly.server.db.DuckDbAdapter;
 import edu.caltech.ipac.firefly.server.db.HsqlDbAdapter;
 import edu.caltech.ipac.firefly.server.events.ServerEventManager;
+import edu.caltech.ipac.firefly.server.events.ServerEventQueue;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.util.FileUtil;
 import edu.caltech.ipac.util.KeyVal;
 import edu.caltech.ipac.util.StringUtils;
-import edu.caltech.ipac.util.cache.CachePeerProviderFactory;
-import net.sf.ehcache.CacheManager;
-import net.sf.ehcache.Ehcache;
-import net.sf.ehcache.distribution.CacheManagerPeerProvider;
-import net.sf.ehcache.distribution.CachePeer;
-import net.sf.ehcache.statistics.StatisticsGateway;
+import org.ehcache.CacheManager;
+import org.ehcache.config.ResourceType;
+import org.ehcache.config.SizedResourcePool;
+import org.ehcache.config.units.MemoryUnit;
+import org.ehcache.core.statistics.CacheStatistics;
+import org.ehcache.core.statistics.TierStatistics;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.PrintWriter;
-import java.rmi.RemoteException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.LinkedList;
@@ -70,7 +72,7 @@ public class ServerStatus extends BaseHttpServlet {
         boolean execRedisCleanup = Boolean.parseBoolean(req.getParameter("execRedisCleanup"));
 
 
-        res.addHeader("content-type", "text/html");
+        res.addHeader("content-type", HTML.mime());
         PrintWriter writer = res.getWriter();
         writer.println("<pre style='font-size: -1'>");
 
@@ -173,7 +175,7 @@ public class ServerStatus extends BaseHttpServlet {
 
         EhcacheProvider prov = (EhcacheProvider) edu.caltech.ipac.util.cache.CacheManager.getCacheProvider();
 
-        Try.it(() -> displayCacheInfo(writer, prov.getEhcacheManager(), sInfo)).getOrElse(e -> writer.println("Failed to load Cache Info: " + e.getMessage()));
+        Try.it(() -> displayCacheInfo(writer, prov, sInfo)).getOrElse(e -> writer.println("Failed to load Cache Info: " + e.getMessage()));
 
     }
     private static void redisView(PrintWriter writer) {
@@ -195,44 +197,56 @@ public class ServerStatus extends BaseHttpServlet {
         skip(writer);
     }
 
-    private static void displayCacheInfo(PrintWriter writer, CacheManager cm, ServerContext.Info sInfo) {
-        writer.println(cm.getName() + " EHCACHE INFORMATION:");
+    private static void displayCacheInfo(PrintWriter writer, EhcacheProvider prov, ServerContext.Info sInfo) {
+        writer.println("EHCACHE INFORMATION:");
         writer.println("-------------------:");
-        writer.println("Manager Status: " + cm.getStatus());
-        writer.println("DiskStore Path: " + cm.getConfiguration().getDiskStoreConfiguration().getPath());
-        writer.println();
         writer.println("Host IP Address: " + sInfo.ip());
+        writer.println();
 
-        writer.println("Caches: ");
-        Map<String, CacheManagerPeerProvider> peerProvs = cm.getCacheManagerPeerProviders();
-        String[] cacheNames = cm.getCacheNames();
-        CachePeer cachePeer = CachePeerProviderFactory.getFirstLocalRmiCachePeer(cm);
-        for(String n : cacheNames) {
-            Ehcache c = cm.getCache(n);
-            try {
-                writer.println("\t" + c.getName() + " @" + (cachePeer == null? c.hashCode() : cachePeer.getUrlBase()));
-            } catch (RemoteException e) {
-                // should not happen
-            }
-            writer.println("\tCache Status    : " + c.getStatus());
-            writer.println("\tMax Heap       : " + c.getCacheConfiguration().getMaxBytesLocalHeap()/(1024 * 1024) + "MB");
-            writer.println("\tMax Entries    : " + c.getCacheConfiguration().getMaxEntriesLocalHeap());
-            writer.println("\tStatistics     : " + getStats(c));
-            if (peerProvs.size()>0) {
-                for (CacheManagerPeerProvider peerProv : peerProvs.values()) {
-                    List<?> peers = peerProv.listRemoteCachePeers(c);
-                    for(Object o : peers) {
-                        CachePeer cp = (CachePeer) o;
-                        try {
-                            writer.println("\tReplicating with: " + cp.getUrl());
-                        } catch (RemoteException e) {
-                            writer.println("\tFail to connect: " + cp);
-                        }
-                    }
+        for (String alias : new String[]{EhcacheProvider.VIS_SHARED_MEM, EhcacheProvider.PERM_SMALL}) {
+            CacheManager cm = alias.equals(EhcacheProvider.VIS_SHARED_MEM) ? prov.getVisManager() : prov.getPermManager();
+            var config = cm.getRuntimeConfiguration().getCacheConfigurations().get(alias);
+            if (config == null) continue;
+
+            SizedResourcePool heapPool = config.getResourcePools().getPoolForResource(ResourceType.Core.HEAP);
+            SizedResourcePool diskPool = config.getResourcePools().getPoolForResource(ResourceType.Core.DISK);
+
+            CacheStatistics stats = prov.getCacheStats(alias);
+            TierStatistics heapTier = stats != null ? stats.getTierStatistics().get("OnHeap") : null;
+            TierStatistics diskTier = stats != null ? stats.getTierStatistics().get("Disk")   : null;
+
+            writer.println(alias + "  [" + cm.getStatus() + "]");
+
+            // Heap
+            if (heapPool != null) {
+                if (heapPool.getUnit() instanceof MemoryUnit) {
+                    long usedMB = heapTier != null && heapTier.getOccupiedByteSize() >= 0 ? heapTier.getOccupiedByteSize() / 1024 / 1024 : -1;
+                    String usedStr = usedMB >= 0 ? String.format("%,d MB", usedMB) : "n/a";
+                    writer.println(String.format("  Memory  max=%,d %s,  used=%s", heapPool.getSize(), heapPool.getUnit(), usedStr));
+                    long usedEntries = heapTier != null ? heapTier.getMappings() : -1;
+                    String entriesStr = usedEntries >= 0 ? String.format("%,d", usedEntries) : "n/a";
+                    writer.println(String.format("  Entries  used=%s", entriesStr));
+                } else {
+                    long usedEntries = heapTier != null ? heapTier.getMappings() : -1;
+                    String usedStr = usedEntries >= 0 ? String.format("%,d", usedEntries) : "n/a";
+                    writer.println(String.format("  Entries  max=%,d,  used=%s", heapPool.getSize(), usedStr));
                 }
             }
-            else {
-                writer.println("\tNot replicating");
+
+            // Disk
+            if (diskPool != null) {
+                String persistStr = diskPool.isPersistent() ? " (persistent)" : "";
+                long usedEntries = diskTier != null ? diskTier.getMappings() : -1;
+                String usedStr = usedEntries >= 0 ? String.format("%,d", usedEntries) : "n/a";
+                writer.println(String.format("  Disk  max=%,d %s%s,  used=%s", diskPool.getSize(), diskPool.getUnit(), persistStr, usedStr));
+            }
+
+            // Hits / misses / evictions / expirations
+            if (stats != null) {
+                writer.println(String.format("  Hits=%-,10d  Misses=%-,10d  Hit%%=%.1f%%",
+                        stats.getCacheHits(), stats.getCacheMisses(), stats.getCacheHitPercentage()));
+                writer.println(String.format("  Puts=%-,10d  Evictions=%-,10d  Expirations=%,d",
+                        stats.getCachePuts(), stats.getCacheEvictions(), stats.getCacheExpirations()));
             }
             writer.println();
         }
@@ -308,19 +322,6 @@ public class ServerStatus extends BaseHttpServlet {
         }
     }
 
-    private static String getStats(Ehcache c) {
-        StatisticsGateway sg = c.getStatistics();
-        String s = "[" +
-                "  Size:" + sg.getSize() +
-                "  Expired:" + sg.cacheExpiredCount() +
-                "  Evicted:" + sg.cacheEvictedCount() +
-                "  Hits:" + sg.cacheHitCount() +
-                "  Hit-Ratio:" + sg.cacheHitRatio() +
-                "  Heap-Size:" + sg.getLocalHeapSizeInBytes()/(1024 * 1024) + "MB" +
-                "  ]";
-        return s;
-    }
-
     private static void skip(PrintWriter w) { w.println("\n\n"); }
 
     private static void showCountStatus(PrintWriter w) {
@@ -376,22 +377,40 @@ public class ServerStatus extends BaseHttpServlet {
         return (hostname!=null && hostname.contains("-") && !hostname.contains("."));
     }
 
+    private record ChannelSummary(String channel, int count, long lastPutTime) {}
+
+    private static List<ChannelSummary> getChannelSummaries(List<ServerEventQueue.QueueDescription> conns) {
+        return conns.stream()
+                .collect(Collectors.groupingBy(ServerEventQueue.QueueDescription::channel))
+                .entrySet().stream()
+                .map(e -> new ChannelSummary(e.getKey(), e.getValue().size(),
+                        e.getValue().stream().mapToLong(ServerEventQueue.QueueDescription::lastPutTime).max().orElse(0)))
+                .toList();
+    }
+
     private static void showEventsStatus(PrintWriter w) {
         w.println("Server Events Information");
         w.println("  - Total events fired:" + ServerEventManager.getTotalEventCnt());
         w.println("  - Total events delivered:" + ServerEventManager.getDeliveredEventCnt());
         int qCnt= ServerEventManager.getActiveQueueCnt();
         w.println("  - Total active queues:" + qCnt);
-        if(qCnt>0) {
-            w.println("  - "+ (qCnt>10? "10 Most recently used channels:" :  "Channel list, ordered by last use:"));
-            w.println(makeQueueList());
+        if (qCnt > 0) {
+            List<ServerEventQueue.QueueDescription> conns = ServerEventManager.getQueueList();
+            w.println("  - Top 10 channels by connection count:");
+            w.println(formatSummaries(getChannelSummaries(conns).stream()
+                    .sorted(Comparator.comparingInt(ChannelSummary::count).reversed())
+                    .limit(10).toList()));
+            w.println("  - Top 10 most recently active connections:");
+            conns.stream().limit(10).forEach(d ->
+                    w.printf("     - id: %-8s  channel: %s, last use: %s\n", d.connID(), d.channel(), new Date(d.lastPutTime())));
         }
     }
 
-    private static String makeQueueList() {
-        return ServerEventManager.getQueueDescriptionList(10).stream()
-                .map( d -> String.format("     - %s, %s\n",d.channel(), new Date(d.lastPutTime())))
-                .reduce("", (all, entry) -> all+entry);
+    private static String formatSummaries(List<ChannelSummary> summaries) {
+        return summaries.stream()
+                .map(s -> String.format("     - %s (%d conn), last use: %s\n",
+                        s.channel(), s.count(), new Date(s.lastPutTime())))
+                .reduce("", (all, entry) -> all + entry);
     }
 
     private static void showMessagingStatus(PrintWriter w) {

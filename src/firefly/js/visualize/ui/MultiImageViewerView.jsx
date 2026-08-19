@@ -7,8 +7,9 @@ import React, {useRef} from 'react';
 import {object, arrayOf, bool, func, number, oneOf, string, elementType, any} from 'prop-types';
 import {omit} from 'lodash';
 import {checkProps} from '../../ui/SimpleComponent';
-import {SINGLE, GRID, getMultiViewRoot, getViewer} from '../MultiViewCntlr.js';
+import {getMultiViewRoot, getViewer} from '../MultiViewCntlr.js';
 import {getPlotViewById, getPlotViewProxyById, primePlot} from '../PlotViewUtil.js';
+import {GRID, SINGLE} from '../VisConst';
 import {MultiItemViewerView} from './MultiItemViewerView.jsx';
 import {ImageViewer, ImageViewerPlaceHolder} from '../iv/ImageViewer';
 import {useMouseStoreConnector} from 'firefly/visualize/ui/MouseStoreConnector.jsx';
@@ -31,7 +32,7 @@ function makeState() {
 
 function makeViewer(visRoot, plotId, makeToolbar, makeLegend, showWhenExpanded, PlotViewProxy) {
     if (getPlotViewById(visRoot, plotId)) {
-        return ( <ImageViewer {...{plotId, key:plotId, makeToolbar, makeLegend, showWhenExpanded}} /> );
+        return ( <ImageViewer key={plotId} {...{plotId, makeToolbar, makeLegend, showWhenExpanded}} /> );
     }
     const proxy= getPlotViewProxyById(visRoot, plotId);
     return proxy ? <PlotViewProxy {...{...proxy}}/> : <div/>;

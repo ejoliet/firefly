@@ -1,43 +1,42 @@
 import React, {useContext, useEffect, useState} from 'react';
 import PropTypes from 'prop-types';
 import {showInfoPopup} from 'firefly/ui/PopupUtil';
-import {Button, IconButton, Input, Stack, Typography} from '@mui/joy';
+import {Button, FormHelperText, IconButton, Input, Link, Stack, Typography} from '@mui/joy';
 import {LoadingMessage} from 'firefly/visualize/ui/FileUploadViewPanel';
+import {addToRecentAlertIDs, showAlertIdDialog} from 'firefly/apps/alertviewer/AlertIDDialog';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import {InitArgsCtx} from 'firefly/templates/common/InitArgsCtx';
+import {getRootURL} from 'firefly/util/WebUtil';
+import {getJsonData} from 'firefly/rpc/SearchServicesJson';
+import {ServerRequest} from 'firefly/data/ServerRequest';
 import {makeFileRequest} from 'firefly/tables/TableRequestUtil';
 import {ALERT} from './AlertIDs.js';
 import {dispatchTableSearch} from 'firefly/tables/TablesCntlr';
-import WebPlotRequest from 'firefly/visualize/WebPlotRequest';
+import WebPlotRequest, {TitleOptions} from 'firefly/visualize/WebPlotRequest';
 import RangeValues from 'firefly/visualize/RangeValues';
-import {dispatchDeletePlotView, dispatchPlotImage} from 'firefly/visualize/ImagePlotCntlr';
+import {dispatchDeletePlotView, dispatchPlotImage, dispatchWcsMatch} from '../../visualize/ImagePlotDispatch';
+import {WcsMatchType} from '../../visualize/VisConst';
 import {dispatchComponentStateChange} from 'firefly/core/ComponentCntlr';
-import {addToRecentAlertIDs, showAlertIdDialog} from 'firefly/apps/alertviewer/AlertIDDialog';
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import {removeTablesFromGroup} from 'firefly/tables/TableUtil';
-import {getJsonData} from 'firefly/rpc/SearchServicesJson';
-import {ServerRequest} from 'firefly/data/ServerRequest';
 import {dispatchChartRemove} from 'firefly/charts/ChartsCntlr';
 import {dispatchHideDropDown} from 'firefly/core/LayoutCntlr';
-import {TitleOptions} from 'firefly/visualize/WebPlotRequest';
-import {InitArgsCtx} from 'firefly/templates/common/InitArgsCtx';
 import {dispatchFormSubmit} from 'firefly/core/AppDataCntlr';
+import {onPlotComplete} from 'firefly/visualize/PlotCompleteMonitor';
 
 const ALERT_LOAD_REQUEST = 'AlertViewerSearchProcessor';
 const IMAGE_TITLES = ['Science', 'Template', 'Difference'];
+const ALERT_ID_EXAMPLES = ['170059278837088375', '170112073844916273', '170270399209668654', '170301167642345602', '170059294376985743'];
 
-export const UploadPanel = ({}) => {
+export const AlertIdPanel = ({loadInPlace=false}) => {
     const instruction = 'Enter an Alert ID to load in the Alert Viewer:';
     const [isLoading, setIsLoading] = useState(false);
     const [alertId, setAlertId] = useState('');
     const {initArgs} = useContext(InitArgsCtx);
 
-    const doLoad = async (loadId = alertId) => {
+    const doLoadInPlace = async (loadId) => {
         const trimmedId = loadId.trim();
-        if (!trimmedId) {
-            showInfoPopup('Please enter an alert ID.', 'Load Error');
-            return;
-        }
+        if (!trimmedId) return;
 
-        addToRecentAlertIDs(trimmedId);
         setIsLoading(true);
         try {
             const request = new ServerRequest(ALERT_LOAD_REQUEST);
@@ -48,7 +47,7 @@ export const UploadPanel = ({}) => {
                 showInfoPopup(result?.message || 'Unable to load alert data.', 'Load Error');
                 return;
             }
-            clearAlertProducts(); //todo: keep this?
+            clearAlertProducts();
             loadFromEntries(result, trimmedId);
         } catch (error) {
             showInfoPopup(`Error loading file: ${error.message}`, 'Load Error');
@@ -57,11 +56,37 @@ export const UploadPanel = ({}) => {
         }
     };
 
+    const doLoad = async (loadId = alertId) => {
+        const trimmedId = loadId.trim();
+        if (!trimmedId) {
+            showInfoPopup('Please enter an alert ID.', 'Load Error');
+            return;
+        }
+
+        addToRecentAlertIDs(trimmedId);
+        try {
+            if (loadInPlace) {
+                await doLoadInPlace(trimmedId);
+            } else {
+                setIsLoading(true);
+                const url = new URL('alertviewer', getRootURL());
+                url.searchParams.set('api', 'alert');
+                url.searchParams.set('id', trimmedId);
+                window.open(url.href, '_blank');
+            }
+        } catch (error) {
+            const errMsg = loadInPlace ? `Error loading file: ${error.message}` : `Error opening alert viewer: ${error.message}`;
+            showInfoPopup(errMsg, 'Load Error');
+        } finally {
+            if (!loadInPlace) setIsLoading(false);
+        }
+    };
+
     useEffect(() => {
         const urlApiId = initArgs?.urlApi?.id?.trim?.();
         if (!urlApiId) return;
         setAlertId(urlApiId);
-        void doLoad(urlApiId);
+        void doLoadInPlace(urlApiId);
     }, [initArgs]);
 
     return (
@@ -90,14 +115,33 @@ export const UploadPanel = ({}) => {
                             <EditOutlinedIcon/>
                         </IconButton>
                     </Stack>
+                    <FormHelperText sx={{justifyContent: 'left', mt: 0}}>
+                        <Typography level='body-sm' sx={{pr: 1}}>Examples:</Typography>
+                        <Stack direction='column' spacing={0.5} alignItems='center' sx={{lineHeight: '1.2em'}}>
+                            <Stack direction='row' spacing={1.5}>
+                                {ALERT_ID_EXAMPLES.slice(0, 2).map((exampleId) => (
+                                    <Link fontSize='smaller' key={exampleId} onClick={() => setAlertId(exampleId)}>
+                                        {exampleId}
+                                    </Link>
+                                ))}
+                            </Stack>
+                            <Stack direction='row' spacing={1.5}>
+                                {ALERT_ID_EXAMPLES.slice(2).map((exampleId) => (
+                                    <Link fontSize='smaller' key={exampleId} onClick={() => setAlertId(exampleId)}>
+                                        {exampleId}
+                                    </Link>
+                                ))}
+                            </Stack>
+                        </Stack>
+                    </FormHelperText>
                     {isLoading && <LoadingMessage/>}
             </Stack>
         </Stack>
     );
 };
 
-UploadPanel.propTypes = {
-    initArgs: PropTypes.object,
+AlertIdPanel.propTypes = {
+    loadInPlace: PropTypes.bool,
 };
 
 function clearAlertProducts() {
@@ -106,7 +150,7 @@ function clearAlertProducts() {
     dispatchChartRemove(ALERT.CHART_1_ID);
 
     [ALERT.IMG_PLOT_1, ALERT.IMG_PLOT_2, ALERT.IMG_PLOT_3].forEach((plotId) =>
-        dispatchDeletePlotView({plotId, holdWcsMatch: true})
+        dispatchDeletePlotView({plotId})
     );
 }
 
@@ -156,7 +200,7 @@ function loadFromEntries(result, alertId) {
                 {
                     tbl_id: isDetailsTable ? ALERT.TABLE_2_ID : ALERT.TABLE_1_ID,
                     pageSize: ALERT.TABLE_PAGESIZE,
-                    META_INFO: {}
+                    META_INFO: part?.chartMeta ?? {}
                 }
             );
             tblReq.tbl_index = extNum;
@@ -181,6 +225,7 @@ function loadFromEntries(result, alertId) {
             }
 
             const wpRequest = WebPlotRequest.makeFilePlotRequest(fileLocation);
+            wpRequest.setInitialColorTable('0');
             wpRequest.setInitialRangeValues(RangeValues.make2To10SigmaLinear());
             wpRequest.setPlotGroupId(ALERT.IMG_VIEWER);
             wpRequest.setMultiImageExts(`${extNum}`);
@@ -189,6 +234,7 @@ function loadFromEntries(result, alertId) {
 
             dispatchPlotImage({plotId, wpRequest, viewerId: ALERT.IMG_VIEWER, setNewPlotAsActive: i === 0});
         }
+        lockAlertImagesByPixelOrigin();
         dispatchComponentStateChange(ALERT.STATE_ID, {
             id: alertId,
             source: result?.source,
@@ -200,4 +246,16 @@ function loadFromEntries(result, alertId) {
         console.error('Error loading file:', error);
         showInfoPopup(`Error loading file: ${error.message}`, 'Load Error');
     }
+}
+
+function lockAlertImagesByPixelOrigin() {
+    void onPlotComplete(ALERT.IMG_PLOT_1).then((pv) => {
+        if (pv) {
+            dispatchWcsMatch({
+                matchType: WcsMatchType.PixelCenter,
+                plotId: ALERT.IMG_PLOT_1,
+                lockMatch: true
+            });
+        }
+    });
 }

@@ -11,9 +11,8 @@ import {findCenterColumnsByColumnsModel} from '../../voAnalyzer/ColumnsModelInfo
 import {findTableCenterColumns} from '../../voAnalyzer/TableAnalysis.js';
 import {posCol, UCDCoord} from '../../voAnalyzer/VoConst.js';
 import CoordinateSys from '../../visualize/CoordSys.js';
-import {visRoot} from '../../visualize/ImagePlotCntlr.js';
 import {PlotAttribute} from '../../visualize/PlotAttribute.js';
-import {getActivePlotView, primePlot} from '../../visualize/PlotViewUtil.js';
+import {currentP} from '../../visualize/PlotViewUtil.js';
 import {makeWorldPt, parseWorldPt} from '../../visualize/Point.js';
 import {VisualTargetPanel} from '../../visualize/ui/TargetHiPSPanel.jsx';
 import {convertCelestial} from '../../visualize/VisUtil.js';
@@ -200,8 +199,7 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
 
     const onChangeToPolygonMethod = () => {
         if (!handleHiPSConnection) return;
-        const pv = getActivePlotView();
-        const plot = primePlot(visRoot(),pv);
+        const {pv,plot}= currentP();
         if (!plot) return;
         const cornerCalcV = getVal(cornerCalcType);
         if ((!cornerCalcV || cornerCalcV === 'image' || cornerCalcV === 'viewport' || cornerCalcV === 'area-selection')) {
@@ -234,7 +232,9 @@ export function SpatialSearch({sx, cols, serviceUrl, serviceLabel, serviceId, co
         );
 
         return makeConstraintEntry(constraints);
-    }, [...fldListAry.map((v) => getVal(v))]);  // eslint-disable-line
+    }, [isSpatialPanelActive, columnsModel, obsCoreEnabled, uploadInfo, tableName, canUpload,
+        useSIAv2, ...fldListAry.map((v) => getVal(v)),
+    ]);
 
     useEffect(() => {
         setConstraintFragment(panelPrefix, constraintResult);

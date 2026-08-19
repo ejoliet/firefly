@@ -17,7 +17,8 @@ import {
     SPECTRUM_TABLES, TABLES, UWS
 } from 'firefly/ui/FileUploadUtil';
 import React, {useContext, useEffect, useState} from 'react';
-import SplitPane from 'react-split-pane';
+//import SplitPane from 'react-split-pane';
+import {SplitPanel, Pane} from '../../ui/panel/DockLayoutPanel.jsx';
 import shallowequal from 'shallowequal';
 import {FileAnalysisType, Format, TableDataType} from '../../data/FileAnalysis';
 import {getField} from '../../fieldGroup/FieldGroupUtils';
@@ -41,7 +42,7 @@ import {getSizeAsString} from '../../util/WebUtil.js';
 
 import {isAnalysisTableDatalink} from '../../voAnalyzer/VoDataLinkServDef.js';
 import {isMOCFitsFromUploadAnalsysis} from '../HiPSMocUtil.js';
-import ImagePlotCntlr from '../ImagePlotCntlr.js';
+import {PLOT_PROGRESS_UPDATE} from '../VisConst';
 import {isLsstFootprintTable} from '../task/LSSTFootprintTask.js';
 import {getWorkspaceConfig, isAccessWorkspace} from '../WorkspaceCntlr.js';
 
@@ -148,7 +149,7 @@ export function FileUploadViewPanel({setSubmitText, acceptList, acceptOneItem, e
                 const watchForUploadUpdate= ({payload}) => {
                     payload.requestKey===statusKey && setLoadingMsg(payload.message);
                 };
-                dispatchAddActionWatcher({ id: statusKey, actions:[ImagePlotCntlr.PLOT_PROGRESS_UPDATE],
+                dispatchAddActionWatcher({ id: statusKey, actions:[PLOT_PROGRESS_UPDATE],
                     callback:watchForUploadUpdate, params:{statusKey}});
             }
         }
@@ -641,7 +642,7 @@ function AnalysisInfo({report,supported=true,UNKNOWN_FORMAT}) {
     );
 }
 
-const tblOptions = {showToolbar:false, border:false, showOptionButton:false, showFilters:true};
+const tblOptions = {showToolbar:false, border:false, showOptionButton:false, showFilters:true, showSelectRowFilter:false};
 
 function AnalysisTable({summaryModel, detailsModel, report, isMoc, UNKNOWN_FORMAT, acceptList, acceptOneItem}) {
     if (!summaryModel) return null;
@@ -696,13 +697,17 @@ function MultiDataSet({summaryModel, detailsModel, isMoc, acceptOneItem}) {
                 </Typography>
             }
             <Box sx={{height:1, position:'relative'}}>
-                <SplitPane split='vertical' maxSize={-20} minSize={20} defaultSize={525}>
-                    {acceptOneItem && <TablePanel {...{showTypes:false, title:'File Summary', tableModel:summaryModel,
-                        ...tblOptions, selectable:false, }} />}
-                    {!acceptOneItem && <TablePanel {...{sx:{mr:1}, showTypes:false, title:'File Summary', tableModel:summaryModel,
-                        ...tblOptions}} />}
-                    <Details detailsModel={detailsModel}/>
-                </SplitPane>
+                <SplitPanel direction='horizontal' maxSize={-20} minSize={20} defaultSize={525} pKey='file-upload-multi-dataset'>
+                    <Pane>
+                        {acceptOneItem && <TablePanel {...{showTypes:false, title:'File Summary', tableModel:summaryModel,
+                            ...tblOptions, selectable:false, }} />}
+                        {!acceptOneItem && <TablePanel {...{sx:{mr:1}, showTypes:false, title:'File Summary', tableModel:summaryModel,
+                            ...tblOptions}} />}
+                    </Pane>
+                    <Pane>
+                        <Details detailsModel={detailsModel}/>
+                    </Pane>
+                </SplitPanel>
             </Box>
         </Stack>
     );
@@ -916,4 +921,3 @@ const FileAnalysis = ({report, summaryModel, detailsModel, isMoc, UNKNOWN_FORMAT
         );
     }
 };
-

@@ -1,6 +1,8 @@
 import {Box, Button, Chip, Stack, Switch, Typography} from '@mui/joy';
 import {isFunction, truncate} from 'lodash';
 import React from 'react';
+import Catalog from '../../drawingLayers/Catalog';
+import HpxCatalog from '../../drawingLayers/hpx/HpxCatalog';
 import {dispatchTableUiUpdate} from '../../tables/TablesCntlr';
 import {getTableUiByTblId, getTblById} from '../../tables/TableUtil';
 import {hideColorPickerDialog, showColorPickerDialog} from '../../ui/ColorPicker';
@@ -9,17 +11,17 @@ import {ColorChangeType} from '../draw/DrawLayer';
 import {DrawSymbol} from '../draw/DrawSymbol.js';
 import DrawUtil from '../draw/DrawUtil';
 import {SimpleCanvas} from '../draw/SimpleCanvas';
-import {dispatchChangeDrawingDef, dispatchChangeVisibility, getDlAry, GroupingScope} from '../DrawLayerCntlr';
-import {visRoot} from '../ImagePlotCntlr';
+import {dispatchChangeDrawingDef, dispatchChangeVisibility} from '../DrawLayerDispatch';
+import {getDlAry, visRoot} from '../VisStoreRoots';
+import {DEFAULT_COVERAGE_PLOT_ID, GroupingScope} from '../VisConst';
 import {
-    DEFAULT_COVERAGE_PLOT_ID,
     getDrawLayerById, getDrawLayersByDisplayGroup, getLayerTitle, getPlotViewById, isDrawLayerVisible, primePlot
 } from '../PlotViewUtil';
 
 const symbolSize= 10;
 
 
-export function makeColorChange(color, modifyColor, sx= {}, text='Color') {
+export function makeColorChange(color, modifyColor, text='Color') {
     const feedBackStyle= { width:symbolSize, height:symbolSize, backgroundColor: color};
     if (!text) {
         return <Chip onClick={() => modifyColor()}> <div style={feedBackStyle} /> </Chip> ;
@@ -118,12 +120,13 @@ export function modifyDrawColor(inDl, plotId, tbl_id, postTitle, topComponent) {
             const rgbStr = `rgba(${r},${g},${b},${a})`;
 
             if (tbl_id && inDl.tableCanControlColor) {
-                const dlAryForTable= getDlAry().filter( (dl) => tbl_id===dl.tbl_id && dl.tableCanControlColor);
+                // const dlAryForTable= getDlAry().filter( (dl) => tbl_id===dl.tbl_id && dl.tableCanControlColor);
+                const {dlAryForTable,updateTable}= getMatchLayers(tbl_id,inDl);
                 dlAryForTable.forEach( (dl) => {
                     dispatchChangeDrawingDef(dl.displayGroupId, Object.assign({}, dl.drawingDef, {color: rgbStr}), plotId, dl.titleMatching);
                     plotId= dl.plotIdAry?.[0];
                     const {tbl_ui_id} = getTableUiByTblId(tbl_id) ?? {};
-                    if (!tbl_ui_id && !plotId) return;
+                    if ((!tbl_ui_id && !plotId) || !updateTable) return;
                     dispatchTableUiUpdate({tbl_ui_id,
                         title:makeTableColorTitle(rgbStr,dl.drawLayerId,plotId,tbl_id),
                         color: rgbStr
@@ -138,7 +141,19 @@ export function modifyDrawColor(inDl, plotId, tbl_id, postTitle, topComponent) {
     });
 }
 
-export function getTitleTag(title, maxTitleChars, autoFormatTitle, level, sx, maxMax=30) {
+function getMatchLayers(tbl_id, inDl) {
+    const dlAryForTable= getDlAry().filter( (dl) => tbl_id===dl.tbl_id && dl.tableCanControlColor);
+    if (dlAryForTable.length===2) { // special case, when I have region and point, I only want to change the regions
+        if (dlAryForTable.some( (dl) => dl.drawLayerTypeId===HpxCatalog.TYPE_ID) &&
+            dlAryForTable.some( (dl) => dl.drawLayerTypeId===Catalog.TYPE_ID)) { //special case
+            const outDl= dlAryForTable.find( (dl) => dl.drawLayerId===inDl.drawLayerId);
+            if (outDl) return {dlAryForTable:[outDl], updateTable: outDl.drawLayerTypeId===Catalog.TYPE_ID};
+        }
+    }
+    return {dlAryForTable, updateTable:true};
+}
+
+export function getTitleTag(title, maxTitleChars, autoFormatTitle, level=undefined, sx=undefined, maxMax=30) {
     if (!autoFormatTitle) {
         return isFunction(title) ? title() : title;
     }

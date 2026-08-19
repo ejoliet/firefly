@@ -10,18 +10,18 @@ import {DATA_PRODUCT_ID_PREFIX, dataProductRoot} from '../metaConvert/DataProduc
 import {getBackgroundInfo, isMonitored, isSearchJob} from './background/BackgroundUtil.js';
 import {flux} from './ReduxFlux';
 import {clone} from '../util/WebUtil.js';
+import { smartMerge, getActiveTableId, getTblById, findGroupByTblId, getTblIdsByGroup, } from '../tables/TableUtil.js';
 import {
-    smartMerge, getActiveTableId, getTblById, findGroupByTblId, getTblIdsByGroup,
-} from '../tables/TableUtil.js';
-import ImagePlotCntlr, {visRoot} from '../visualize/ImagePlotCntlr.js';
+    DEFAULT_FITS_VIEWER_ID,
+    DEFAULT_PLOT2D_VIEWER_ID, PINNED_CHART_VIEWER_ID, PLOT_IMAGE, PLOT_IMAGE_START, REPLACE_VIEWER_ITEMS
+} from '../visualize/VisConst';
+import {visRoot} from '../visualize/VisStoreRoots';
 import { TBL_RESULTS_ADDED, TBL_RESULTS_REMOVE, TABLE_REMOVE, TABLE_SPACE_PATH, TBL_RESULTS_ACTIVE, TABLE_LOADED
 } from '../tables/TablesCntlr.js';
 import {CHART_ADD, CHART_REMOVE, CHART_SPACE_PATH} from '../charts/ChartsCntlr.js';
-import {
-    DEFAULT_FITS_VIEWER_ID,
-    DEFAULT_PLOT2D_VIEWER_ID, getMultiViewRoot, getViewer, PINNED_CHART_VIEWER_ID, REPLACE_VIEWER_ITEMS
-} from '../visualize/MultiViewCntlr.js';
-import {COMMAND, getMenu, REINIT_APP} from './AppDataCntlr.js';
+import { getMultiViewRoot, getViewer } from '../visualize/MultiViewCntlr.js';
+import {REINIT_APP} from './CoreConst';
+import {COMMAND, getMenu} from './AppDataCntlr.js';
 import {getDefaultChartProps} from '../charts/ChartUtil.js';
 import {getPlotViewAry, getPlotViewById} from 'firefly/visualize/PlotViewUtil.js';
 import {MetaConst} from 'firefly/data/MetaConst';
@@ -350,7 +350,7 @@ export function getLayoutRoot() {
 export function getLayouInfo() {
     const state= flux.getState() ?? {};
     const layout = state[LAYOUT_PATH] ?? {initLoadCompleted:false};
-    const hasImages = getPlotViewAry(visRoot()).some( (pv) => pv.plotViewCtx.useForSearchResults);
+    const hasImages = getPlotViewAry(visRoot())?.some( (pv) => pv.plotViewCtx.useForSearchResults);
     const hasTables = !isEmpty(state[TABLE_SPACE_PATH]?.results?.main?.tables);
     /*
       to make plot area disappear if it's not possible to create a plot use
@@ -457,9 +457,9 @@ export function dropDownHandler(layoutInfo, action) {
             }
             return smartMerge(layoutInfo, {dropDown: resultsViewDropdown});
         case REPLACE_VIEWER_ITEMS :
-        case ImagePlotCntlr.PLOT_IMAGE :
+        case PLOT_IMAGE :
             return smartMerge(layoutInfo, {dropDown: resultsViewDropdown});
-        case ImagePlotCntlr.PLOT_IMAGE_START :
+        case PLOT_IMAGE_START :
             const VISUALIZED_TABLE_IDS = action.payload?.attributes?.VISUALIZED_TABLE_IDS;
             if (VISUALIZED_TABLE_IDS?.length) {
                 const lastId = VISUALIZED_TABLE_IDS[VISUALIZED_TABLE_IDS.length - 1];
@@ -484,7 +484,7 @@ export function dropDownHandler(layoutInfo, action) {
 export function* dropDownManager() {
     while (true) {
         const action = yield take([
-            ImagePlotCntlr.PLOT_IMAGE_START, ImagePlotCntlr.PLOT_IMAGE,
+            PLOT_IMAGE_START, PLOT_IMAGE,
             REPLACE_VIEWER_ITEMS,
             TABLE_REMOVE, TBL_RESULTS_ADDED, TBL_RESULTS_REMOVE,
             CHART_ADD, CHART_REMOVE,
@@ -579,10 +579,14 @@ function getColFitIdx(gridView, row, testIdx, gridColumns, testWidth) {
 
 }
 
-// getter/setters for the DOM nodes of Menu Tabs, stored in the layout info
-export const MENU_TAB_NODES = 'menuTabNodes';
-export const getMenuTabNodes = () => getLayouInfo()?.[MENU_TAB_NODES] ?? {};
-export const dispatchUpdateMenuTabNodes = (menuTabNodes) => dispatchUpdateLayoutInfo({[MENU_TAB_NODES]: menuTabNodes});
+/**
+ * A shared namespace in the layout store for DOM nodes exposed by components as
+ * hint anchors (used by GuidedHint / AppHint). Any component that needs
+ * to anchor a hint should dispatch its node here.
+ */
+export const HINT_ANCHOR_NODES = 'hintAnchorNodes';
+export const getHintAnchorNodes = () => getLayouInfo()?.[HINT_ANCHOR_NODES] ?? {};
+export const dispatchUpdateHintAnchorNodes = (nodes) => dispatchUpdateLayoutInfo({[HINT_ANCHOR_NODES]: nodes});
 
 // get LayoutInfo based on the viewerId of the chart add action
 const getChartViewerLayout = (viewerId) => {

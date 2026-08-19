@@ -15,6 +15,7 @@ import {
     getSearchInfo,
 } from '../../core/AppDataCntlr.js';
 import {getLayouInfo, LO_VIEW} from '../../core/LayoutCntlr.js';
+import {DEFAULT_PLOT2D_VIEWER_ID} from '../../visualize/VisConst';
 import {hydraManager} from './HydraManager';
 import {dispatchAddSaga} from '../../core/MasterSaga.js';
 
@@ -24,7 +25,6 @@ import {ChartsContainer} from '../../charts/ui/ChartsContainer.jsx';
 import {startTTFeatureWatchers} from '../common/ttFeatureWatchers.js';
 import {dispatchSetLayoutMode, LO_MODE} from '../../core/LayoutCntlr';
 import {getExpandedChartProps} from '../../charts/ChartsCntlr.js';
-import {DEFAULT_PLOT2D_VIEWER_ID} from '../../visualize/MultiViewCntlr.js';
 import App from 'firefly/ui/App.jsx';
 import {Slot, useStoreConnector} from 'firefly/ui/SimpleComponent.jsx';
 import {makeMenuItems, SearchPanel} from 'firefly/ui/SearchPanel.jsx';
@@ -205,6 +205,29 @@ const defaultPropsWithBgImage = ({bgImage}) => ({
 });
 
 
+/**
+ * Landing page for HydraViewer-based applications.
+ * Layout and visual style differ significantly depending on whether `bgImage` is provided.
+ *
+ * Without `bgImage` — standard layout: `HydraAppBranding` replaces `topSection`, the given
+ * `icon` is passed to `bottomSection`, and content is constrained to 80 rem.
+ *
+ * With `bgImage` — the image fills `bgContainer`; `contentSection` becomes a dark overlay
+ *  panel centred over the image; `bottomSection` drops its icon and background to
+ * blend in; all typography is locked to dark-theme colors to look good on dark overlay.
+ *
+ * Wraps {@link LandingPage} via the slot system to override visual elements (bgContainer,
+ * contentSection, topSection, bottomSection) while keeping the store connector logic,
+ * FileDropZone, and AppHints.
+ *
+ * @param {object}  props
+ * @param {string}  [props.title]         - App title forwarded to topSection.
+ * @param {string}  [props.desc]          - App description forwarded to topSection.
+ * @param {node}    [props.icon]          - Icon shown in bottomSection (no-bgImage mode only).
+ * @param {object}  [props.bgImage]       - URL/import of the background image. Triggers the alternate layout when set.
+ * @param {object}  [props.slotProps={}]  - Per-slot overrides forwarded to LandingPage.
+ *                                          User-provided values take precedence; defaults fill in missing keys.
+ */
 export function HydraLanding({icon, title, desc, bgImage, slotProps={}, ...props} ) {
     const mSlotProps = cloneDeep(slotProps);
     defaultsDeep(mSlotProps, defaultCommonProps({title, desc}));

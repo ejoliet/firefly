@@ -62,14 +62,12 @@ public class TableUtil {
             return DsvTableIO.parse(inf, format, request);
         } else if (format == FormatUtil.Format.FITS ) {
             try {
-                // Switch to the new function:
-                return FITSTableReader.convertFitsToDataGroup(inf.getAbsolutePath(), request, tableIndex);
+                return FITSTableReader.readFitsTable(inf.getAbsolutePath(), request, tableIndex);
             } catch (Exception e) {
                 throw new IOException("Unable to read FITS file:" + inf, e);
             }
         } else if (format == FormatUtil.Format.ASDF ) {
             try {
-                // Switch to the new function:
                 return AsdfAccess.convertAsdfTableToDataGroup(inf, request, tableIndex);
             } catch (Exception e) {
                 throw new IOException("Unable to read FITS file:" + inf, e);
@@ -113,6 +111,18 @@ public class TableUtil {
         long totalRow = tableDef.getLineWidth() == 0 ? 0 :
                         (inf.length()+1 - tableDef.getRowStartOffset())/tableDef.getLineWidth();
         return new DataGroupPart(dg, start, (int) totalRow);
+    }
+
+    public static String getTblId(TableServerRequest treq) {
+        if (treq == null) return null;
+        String tblId = null;
+        if (treq.getMeta() != null) {
+            tblId = treq.getMeta().get(TableServerRequest.TBL_ID);
+        }
+        if (tblId == null) {
+            tblId = treq.getParam(TableServerRequest.TBL_ID);
+        }
+        return tblId;
     }
 
     /**

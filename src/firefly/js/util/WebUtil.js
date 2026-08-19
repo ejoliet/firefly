@@ -35,7 +35,11 @@ const getScriptURL = once(() => {
             .some((name) => s.src.indexOf(name) > -1))[0]?.src;
 });
 
+let _rootURLOverride = null;
+export const setRootURL = (url) => { _rootURLOverride = url.endsWith('/') ? url : url + '/'; };
+
 export const getRootURL = once(() => {
+    if (_rootURLOverride) return _rootURLOverride;
     if (getProp('SCRIPT_NAME') === undefined) return 'http://localhost:8080/';
     const workingURL = getScriptURL() || globalThis?.location.href;
     return workingURL.substring(0, workingURL.lastIndexOf('/')) + '/';
@@ -144,8 +148,8 @@ export function loadScript(scriptName) {
 
 /**
  * Create a function that caches last N (up to 20) function call results
- * This is better for functions that take immutable objects. it compare every argument using ===
- * This cache size has to be smaller (<29=0) since if must iterate though all the last results.
+ * This is better for functions that take immutable objects. it compares every argument using ===
+ * This cache size has to be smaller since it must iterate though all the last results.
  * @param fn - the function to wrap
  * @param {number} [cacheSize=1] the number of saved calls with a maximum of 20
  * @return {function}
@@ -349,29 +353,36 @@ export function encodeParams(params) {
  */
 export const encodeServerUrl= (url, params) => encodeUrl(url, params);
 
+
+
 /**
  * Copy the content of the string to the clipboard
  * @param str
  */
 export function copyToClipboard(str) {
-    const el = document.createElement('textarea');  // Create a <textarea> element
-    el.value = str;                                 // Set its value to the string that you want copied
-    el.setAttribute('readonly', '');                // Make it readonly to be tamper-proof
-    el.style.position = 'absolute';
-    el.style.left = '-9999px';                      // Move outside the screen to make it invisible
-    document.body.appendChild(el);                  // Append the <textarea> element to the HTML document
-    const selected =
-        document.getSelection().rangeCount > 0      // Check if there is any content selected previously
-            ? document.getSelection().getRangeAt(0) // Store selection if found
-            : false;                                // Mark as false to know no selection existed before
-    el.select();                                    // Select the <textarea> content
-    document.execCommand('copy');                   // Copy - only works as a result of a user action (e.g. click events)
-    document.body.removeChild(el);                  // Remove the <textarea> element
-    if (selected) {                                 // If a selection existed before copying
-        document.getSelection().removeAllRanges();  // Unselect everything on the HTML document
-        document.getSelection().addRange(selected); // Restore the original selection
-    }
+    void navigator.clipboard?.writeText(str);
 }
+
+
+// export function copyToClipboard(str) {
+//     const el = document.createElement('textarea');  // Create a <textarea> element
+//     el.value = str;                                 // Set its value to the string that you want copied
+//     el.setAttribute('readonly', '');                // Make it readonly to be tamper-proof
+//     el.style.position = 'absolute';
+//     el.style.left = '-9999px';                      // Move outside the screen to make it invisible
+//     document.body.appendChild(el);                  // Append the <textarea> element to the HTML document
+//     const selected =
+//         document.getSelection().rangeCount > 0      // Check if there is any content selected previously
+//             ? document.getSelection().getRangeAt(0) // Store selection if found
+//             : false;                                // Mark as false to know no selection existed before
+//     el.select();                                    // Select the <textarea> content
+//     document.execCommand('copy');                   // Copy - only works as a result of a user action (e.g. click events)
+//     document.body.removeChild(el);                  // Remove the <textarea> element
+//     if (selected) {                                 // If a selection existed before copying
+//         document.getSelection().removeAllRanges();  // Unselect everything on the HTML document
+//         document.getSelection().addRange(selected); // Restore the original selection
+//     }
+// }
 
 
 // export function downloadSimple(url) {
@@ -897,42 +908,6 @@ export function tokenSub(valObs, str='') {
     });
     return replaceStr;
 }
-
-
-// todo- the following two functions are not used but keep the around for awhile
-//       remove in a few months (8/25?) if still not being used
-// export function subCompare(str1, str2, minSubstringLength=2) {
-//     // Search possible substrings from largest to smallest:
-//     for (let i=str1.length; i>=minSubstringLength; i--) {
-//         for (let j=0; j <= (str1.length - i); j++) {
-//             const substring = str1.substr(j,i);
-//             const k = str2.indexOf(substring);
-//             if (k !== -1) {
-//                 return { str1, str2, found : true, substring, str1Index : j, str2Index : k};
-//             }
-//         }
-//     }
-//     return { found : false };
-// }
-//
-// /**
-//  *
-//  * @param {string} str1
-//  * @param {string} str2
-//  * @param minSubstringLength
-//  * @return {{str1: string, str2: string, found: boolean, substring: string, str1Index: number, str2Index: number}
-//  */
-// export function endCompare(str1, str2, minSubstringLength=2) {
-//     if (!str1 || !str2) return { found : false };
-//     for (let i=0; i <= (str1.length-1); i++) {
-//         const substring = str1.substring(i);
-//         const found = substring.length>=minSubstringLength ?  str2.endsWith(substring) : false;
-//         if (found) {
-//             return { str1, str2, found, substring, str1Index : i, str2Index: str2.indexOf(substring)};
-//         }
-//     }
-//     return { found : false };
-// }
 
 
 /**

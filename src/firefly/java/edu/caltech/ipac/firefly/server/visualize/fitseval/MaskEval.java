@@ -25,7 +25,7 @@ import static edu.caltech.ipac.firefly.core.Util.Try;
  */
 class MaskEval implements FitsEvaluation.Eval {
 
-    private final List<String> imageNames= Arrays.asList("IMAGE", "FLUX");
+    private final List<String> imageNames= Arrays.asList("IMAGE", "FLUX", "SCI");
     private final List<String> maskNames= Arrays.asList("MASK", "FLAGS");
     /**
      * This method attempts to find how data might be related in a multi-extension fits file. I expect it will grow
@@ -84,9 +84,13 @@ class MaskEval implements FitsEvaluation.Eval {
         Cursor<String, HeaderCard> extraIter = header.iterator();
         while (extraIter.hasNext()) {
             var hc = extraIter.next();
-            if (hc.getKey().startsWith("MP") || hc.getKey().startsWith("HIERARCH.MP")) {
+            var inKey= hc.getKey();
+            if (inKey.startsWith("MP") || inKey.startsWith("HIERARCH.MP")) {
                 var v= Try.it(() -> Integer.parseInt(hc.getValue())).getOrElse(-1);
-                if (v>-1) maskEntries.add(new RelatedData.MaskEntry(hc.getKey(), v, ""));
+                if (v>-1) {
+                    String key= inKey.startsWith("HIERARCH.MP") ? inKey.substring(12) : inKey.substring(3);
+                    maskEntries.add(new RelatedData.MaskEntry(key, v, ""));
+                }
             }
         }
         return maskEntries;
@@ -131,7 +135,7 @@ class MaskEval implements FitsEvaluation.Eval {
         extType= extType==null ? "" : extType.toUpperCase();
         if (!maskNames.contains(extType)) return false;
         if (!maskFr.isCube()) return true;
-        return (maskFr.getNaxis3()==baseFr.getNaxis3() && cubePlaneNumber==maskFr.getPlaneNumber());
+        return (maskFr.getNaxisLength(3)==baseFr.getNaxisLength(3) && cubePlaneNumber==maskFr.getPlaneNumber());
     }
 
     public boolean isVariance(FitsRead fr) {

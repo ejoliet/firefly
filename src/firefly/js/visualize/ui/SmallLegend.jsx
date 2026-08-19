@@ -10,10 +10,10 @@ import HiPSMOC from '../../drawingLayers/HiPSMOC.js';
 import {CollapsibleItem} from '../../ui/panel/CollapsiblePanel';
 import {useStoreConnector} from '../../ui/SimpleComponent';
 import BrowserInfo from '../../util/BrowserInfo';
-import {getDlAry} from '../DrawLayerCntlr';
 import {
     getAllDrawLayersForPlot, getLayerTitle, getPlotViewById, isDrawLayerVisible, primePlot
 } from '../PlotViewUtil';
+import {getDlAry} from '../VisStoreRoots';
 import {isHiPS} from '../WebPlot';
 import {DrawLayerLegendView} from './DrawLayerItemView';
 import {showDrawingLayerPopup} from './DrawLayerPanel';
@@ -85,12 +85,11 @@ export function SmallLegend(props) {
                     <Box sx={ {maxHeight:'12em', overflowY:'auto', pb: 1/2}}>
                         <Stack>
                             {layersLoading && <Typography level={'body-sm'}>Layers Loading....</Typography>}
-                            {layers.map( (dl) => (
-                                <DrawLayerLegendView {...{
+                            {layers.map( (dl, idx) => (
+                                <DrawLayerLegendView key={idx} {...{
                                     maxTitleChars,
                                     color: dl.drawingDef.color,
                                     canUserChangeColor: dl.canUserChangeColor,
-                                    key: getShortTitle(plotId,dl),
                                     title: getShortTitle(plotId,dl),
                                     tip: getLayerTitle(plotId,dl),
                                     autoFormatTitle: dl.autoFormatTitle,

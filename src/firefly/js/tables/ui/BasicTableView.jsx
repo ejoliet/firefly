@@ -17,7 +17,7 @@ import {
 import {SelectInfo} from '../SelectInfo.js';
 import {FilterInfo} from '../FilterInfo.js';
 import {SortInfo} from '../SortInfo.js';
-import {CellWrapper, FixedCellWrapper, getPxWidth, HeaderCell, headerStyle, makeDefaultRenderer, SelectableCell, SelectableHeader} from './TableRenderer.js';
+import {calcHeaderHeight, CellWrapper, FixedCellWrapper, getPxWidth, HeaderCell, headerStyle, makeDefaultRenderer, SelectableCell, SelectableHeader} from './TableRenderer.js';
 import {useStoreConnector} from '../../ui/SimpleComponent.jsx';
 import {dispatchTableUiUpdate, TBL_UI_UPDATE} from '../TablesCntlr.js';
 import {Logger} from '../../util/Logger.js';
@@ -109,13 +109,16 @@ const BasicTableViewInternal = React.memo(({ selectable:selectableIn= false, sho
             error, tbl_ui_id=uniqueTblUiId(), currentPage, startIdx=0, highlightedRowHandler, cellRenderers, onRowDoubleClick} = props;
 
     const uiStates = getTableUiById(tbl_ui_id) || {};
-    const {tbl_id, columnWidths, scrollLeft=0, scrollTop=0, triggeredBy, showTypes, showFilters, showUnits, filterInfo,
-            selectable, sortInfo, textView} = uiStates;
+    const {tbl_id, columnWidths, scrollLeft=0, scrollTop=0, triggeredBy, showTypes=false, showFilters=false, showSelectRowFilter,
+            showUnits=false, filterInfo, selectable, sortInfo, textView} = uiStates;
     const tableRef = useRef();
 
     useEffect( () => {
         if (!isEmpty(columns)) {
-            const changes = omitBy(pick(props, 'showTypes', 'showFilters', 'showUnits', 'filterInfo','selectable', 'sortInfo', 'textView'), isUndefined);
+            const changes = omitBy(
+                pick(props, 'showTypes', 'showFilters', 'showSelectRowFilter', 'showUnits', 'filterInfo', 'selectable', 'sortInfo', 'textView'),
+                isUndefined
+            );
 
             const showUnits = !!columns.find?.((col) => col?.units);
             if (isUndefined(changes.showUnits)) changes.showUnits = showUnits;
@@ -140,7 +143,7 @@ const BasicTableViewInternal = React.memo(({ selectable:selectableIn= false, sho
     const onFilter       = useCallback( doFilter.bind({callbacks, filterInfo}), [callbacks, filterInfo]);
     const onFilterSelected = useCallback( doFilterSelected.bind({callbacks, selectInfoCls}), [callbacks, selectInfoCls]);
 
-    const headerHeight = showHeader ? 19 + (showUnits && 15) + (showTypes && 14) + (showFilters && 25) : 0;
+    const headerHeight = calcHeaderHeight({showHeader, showUnits, showTypes, showFilters});
     const maxScrollWidth = tableRef.current?.getApi().getCellGroupWidth() || -1;
 
     const adjScrollTop = correctScrollTopIfNeeded(maxScrollWidth, scrollTop, width, height-headerHeight, rowHeight, hlRowIdx, triggeredBy);
@@ -169,7 +172,7 @@ const BasicTableViewInternal = React.memo(({ selectable:selectableIn= false, sho
     }, [columns, columnWidths, width, adjScrollLeft, adjScrollTop]);
 
     const makeColumnsProps = {columns, data, selectable, selectInfoCls, renderers,
-        columnWidths, filterInfo, sortInfo, showHeader, showUnits, showTypes, showFilters,
+        columnWidths, filterInfo, sortInfo, showHeader, showUnits, showTypes, showFilters, showSelectRowFilter,
         onSort, onFilter, onRowSelect, onSelectAll, onFilterSelected, startIdx, cellRenderers, tbl_id};
 
     const rowClassNameGetter = highlightedRowHandler || defHighlightedRowHandler(tbl_id, hlRowIdx, startIdx);
@@ -373,7 +376,8 @@ const TextView = ({columns, data, width, height}) => {
 
 function correctScrollTopIfNeeded(maxScrollWidth, scrollTop, width, height, rowHeight, hlRowIdx, triggeredBy) {
     const rowHpos = hlRowIdx * rowHeight;
-    if (triggeredBy === BY_TABLE) {     // FIREFLY-1729: don't correct scroll on column resize.
+    // don't correct scrollTop until table is rendered (height > 0).
+    if (triggeredBy === BY_TABLE && height > 0) {     // FIREFLY-1729: don't correct scroll on column resize.
         // delta is a workaround for the horizontal scrollbar hiding part of the last row when visible
         const delta = maxScrollWidth > width ? (.5*rowHeight) : 0;
 
@@ -474,7 +478,8 @@ function makeColumnTag(props, col, idx) {
     );
 }
 
-function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected, selectInfoCls, onRowSelect}) {
+function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilters, showSelectRowFilter,
+                           onFilterSelected, selectInfoCls, onRowSelect}) {
 
     if (!selectable) return false;
 
@@ -483,7 +488,7 @@ function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilte
         <Column
             key='selectable-checkbox'
             columnKey='selectable-checkbox'
-            header={<SelectableHeader {...{checked, onSelectAll, showUnits, showTypes, showFilters, onFilterSelected}} />}
+            header={<SelectableHeader {...{checked, onSelectAll, showUnits, showTypes, showFilters, showSelectRowFilter, onFilterSelected}} />}
             cell={<SelectableCell selectInfoCls={selectInfoCls} onRowSelect={onRowSelect} />}
             fixed={true}
             width={25}
@@ -491,4 +496,3 @@ function makeSelColTag({selectable, onSelectAll, showUnits, showTypes, showFilte
         />
     );
 }
-

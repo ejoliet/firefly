@@ -33,7 +33,7 @@ import static edu.caltech.ipac.firefly.core.Util.Opt.ifNotNull;
 public class JobInfo implements Serializable {
 
     public enum Phase {PENDING, QUEUED, EXECUTING, COMPLETED, ERROR, ABORTED, HELD, SUSPENDED, ARCHIVED, UNKNOWN}
-    private static final int LIFE_SPAN = AppProperties.getIntProperty("job.lifespan", 60*60*24);        // default lifespan in seconds; kill job if exceed
+    public static final int LIFE_SPAN = AppProperties.getIntProperty("job.lifespan", 60*60*24);        // default lifespan in seconds; kill job if exceed
 
     // these are uws:job defined properties
     public static final String JOB_ID = "jobId";
@@ -72,6 +72,7 @@ public class JobInfo implements Serializable {
     public static final String USER_NAME = "userName";
     public static final String USER_EMAIL = "userEmail";
     public static final String SEND_NOTIF = "sendNotif";
+    public static final String MIME_TYPE = "mimeType";
 
     private String jobId;
     private String runId;
@@ -81,7 +82,7 @@ public class JobInfo implements Serializable {
     private Instant creationTime;
     private Instant startTime;
     private Instant endTime;
-    private int executionDuration = LIFE_SPAN;
+    private int executionDuration;
     private Instant destruction;
     private Map<String, String> parameters = new HashMap<>();
     private List<Result> results = new ArrayList<>();
@@ -252,6 +253,7 @@ public class JobInfo implements Serializable {
         String runHost;     // the host where the job is running on
         String appUrl;      // the URL of the app that created this job
         boolean sendNotif;
+        String mimeType;    // overrides Result.mimeType.  the client maps this to a loader.
 
         // these are not sent to client
         String eventConnId;
@@ -288,6 +290,9 @@ public class JobInfo implements Serializable {
 
         public boolean getSendNotif() { return sendNotif; }
         public void setSendNotif(boolean flg) { this.sendNotif = flg; }
+
+        public String getMimeType() { return mimeType; }
+        public void setMimeType(String mimeType) { this.mimeType = mimeType; }
     }
 
     /**

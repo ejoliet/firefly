@@ -3,8 +3,8 @@ import {object, shape} from 'prop-types';
 import React, {useRef} from 'react';
 import {FormPanel} from '../../ui/FormPanel.jsx';
 import {validateUrl} from '../../util/Validate.js';
-import {dispatchPlotHiPS} from '../ImagePlotCntlr.js';
-import {DEFAULT_FITS_VIEWER_ID} from '../MultiViewCntlr.js';
+import {dispatchPlotHiPS} from '../ImagePlotDispatch';
+import {DEFAULT_FITS_VIEWER_ID} from '../VisConst';
 import {showInfoPopup} from '../../ui/PopupUtil.jsx';
 import {FieldGroup} from '../../ui/FieldGroup.jsx';
 import {getNextHiPSPlotId} from '../PlotViewUtil.js';
@@ -20,7 +20,7 @@ export function HiPSSearchPanel({initArgs= {}, name:groupKey = 'HiPSSearchPanel'
     return (
         <FieldGroup groupKey={groupKey} keepState={true} sx={{width: 1, height: 1}}>
             <Box width={1} height={1}>
-                <FormPanel onSuccess={(request) => doSearch(request)} cancelText='' help_id = 'basics.searching.hips'
+                <FormPanel onSuccess={(request) => doSearch(request)} cancelText='' completeText='Load' help_id = 'basics.searching.hips'
                             slotProps={{
                                 completeBtn: {
                                     getDoOnClickFunc: (clickFunc) => (clickFuncRef.clickFunc= clickFunc),
@@ -49,7 +49,7 @@ export function HiPSSearchPanel({initArgs= {}, name:groupKey = 'HiPSSearchPanel'
                                     <SpacialContent {...{isHips:true,initArgs}}/>
                                 </Stack>
                             </Sheet>
-                            <HiPSImageSelect {...{ variant:'plain', datasetTitleText: 'Select Data Set', urlTitleText: 'Enter URL'}} />
+                            <HiPSImageSelect {...{ variant:'plain', initArgs, datasetTitleText: 'Select Data Set', urlTitleText: 'Enter URL'}} />
                         </Sheet>
                     </Stack>
                 </FormPanel>

@@ -168,6 +168,13 @@ public class FitsReadUtil {
                         delayedExceptionMsg = "FITS image has NAXIS" + i + "=0";
                         goodImage = false;
                     }
+                    if (i==4 && naxisValue>1) {
+                        delayedExceptionMsg = String.format("naxis4==%d is not supported, current support for only naxis4==1",naxisValue);
+                        goodImage= false;
+                    }
+                    else if (i>=5 && naxisValue>2) {
+                        delayedExceptionMsg = String.format("naxis of %d not supported",naxis);
+                    }
                 }
             }
 
@@ -317,12 +324,18 @@ public class FitsReadUtil {
 
     }
 
-    public static float[] dataArrayFromHDUAndPlane(File file, int hduNumber, int planeNumber) {
+    public static float[] dataArrayFromHDUAndPlaneAsFloat(File file, int hduNumber, int planeNumber) {
+        return (float [])dataArrayFromHDUAndPlane(file, hduNumber, planeNumber, Float.TYPE);
+    }
+
+
+
+    public static Object dataArrayFromHDUAndPlane(File file, int hduNumber, int planeNumber, Class<?> arrayType) {
         try (Fits fits = new Fits(file)) {
             BasicHDU<?> hdu= fits.read()[hduNumber];
             if (!(hdu instanceof ImageHDU)) return null;
             var h= hdu.getHeader();
-            return (float [])dataArrayFromFitsFile((ImageHDU)hdu, 0,0,getNaxis1(h),getNaxis2(h), planeNumber,Float.TYPE);
+            return dataArrayFromFitsFile((ImageHDU)hdu, 0,0,getNaxis1(h),getNaxis2(h), planeNumber,arrayType);
         }
         catch (Exception e) {
             Logger.getLogger("FitsRead").error(e,"Could not read FITS data");
@@ -392,11 +405,11 @@ public class FitsReadUtil {
         return new ImageHDU(newHeader,  null);
     }
 
-    public static void writeFitsFile(File outfile, FitsRead[] fitsReadAry, Fits refFits) throws IOException {
+    public static void writeFitsFileForCropOnly(File outfile, FitsRead[] fitsReadAry, Fits refFits) throws IOException {
         Fits outputFits = new Fits();
         for (FitsRead fr : fitsReadAry) {
             BasicHDU<?> refHdu = refFits.getHDU(0);
-            ImageHDU imageHDU = makeImageHDU(refHdu.getHeader(), FitsReadUtil.getImageData(refHdu, fr.getDataFloat()));
+            ImageHDU imageHDU = makeImageHDU(refHdu.getHeader(), FitsReadUtil.getImageData(refHdu, fr.getDataFloatForOlderUtils()));
             outputFits.addHDU(imageHDU);
         }
         outputFits.write(outfile);
@@ -404,13 +417,27 @@ public class FitsReadUtil {
 
     public static int getBitPix(Header h) {return h.getIntValue("BITPIX"); }
     public static int getNaxis(Header h) { return h.getIntValue("NAXIS", 0); }
+    public static int getZNaxis(Header h) { return h.getIntValue("ZNAXIS", 0); }
     public static int getNaxis1(Header h) { return h.getIntValue("NAXIS1", 0); }
     public static int getNaxis2(Header h) { return h.getIntValue("NAXIS2", 0); }
-    public static int getNaxis3(Header h) { return (getNaxis2(h) > 2) ? h.getIntValue("NAXIS3") : 1; }
-    public static int getNaxis4(Header h) { return (getNaxis3(h) > 2) ? h.getIntValue("NAXIS4") : 1; }
-    public static int getZNaxis1(Header h) { return h.getIntValue("ZNAXIS1", -1); }
-    public static int getZNaxis2(Header h) { return h.getIntValue("ZNAXIS2", -1); }
-    public static int getZNaxis3(Header h) { return h.getIntValue("ZNAXIS3",-1); }
+    public static int getNaxis3(Header h) { return (getNaxis2(h) > 1) ? h.getIntValue("NAXIS3") : 1; }
+
+    public static int getNaxisLength(Header h, int num) {
+        if (num<1) return 0;
+        return h.getIntValue("NAXIS"+num,0);
+    }
+
+    public static int getAxisCnt(Header h, boolean compressed) {
+        if (!compressed) getNaxis(h);
+        return getZNaxis(h)==0 ? getNaxis(h) : getZNaxis(h);
+    }
+
+    public static int getNaxisLength(Header h, int num, boolean compressed) {
+        if (!compressed) return getNaxisLength(h, num);
+        return getZNaxisLength(h,num) > -1 ? getZNaxisLength(h,num) : getNaxisLength(h,num);
+    }
+
+    public static int getZNaxisLength(Header h, int axis) { return h.getIntValue("ZNAXIS"+axis,-1); }
     public static double getBscale(Header h) { return h.getDoubleValue("BSCALE", 1.0); }
     public static double getBzero(Header h) { return h.getDoubleValue("BZERO", 0.0); }
     public static double getBlankValue(Header h) {
@@ -469,7 +496,7 @@ public class FitsReadUtil {
     public static Object dataArrayFromFitsFile(ImageHDU hdu, int x, int y, int width, int height, int plane, Class<?> arrayType) throws IOException {
         Header header= hdu.getHeader();
         int naxis= getNaxis(header);
-        if (naxis==4 && getNaxis4(header)!=1) throw new IllegalArgumentException("naxis 4 must has naxis 4 as dimension 1");
+        if (naxis==4 && getNaxisLength(header,4)!=1) throw new IllegalArgumentException("naxis 4 must be only 1 dimension");
         else if (naxis!=2 && naxis!=3 && naxis!=4) throw new IllegalArgumentException("only naxis 2 or 3 or 4 is supported");
         int[] loc= null;
         int[] tileSize= null;

@@ -1,11 +1,12 @@
 import {get, set, isEmpty, flatten, isArray} from 'lodash';
+import {dispatchCreateDrawLayer} from './DrawLayerDispatch';
 import {getDrawLayersByType} from './PlotViewUtil.js';
-import {getDlAry, dispatchCreateDrawLayer} from './DrawLayerCntlr.js';
 import HiPSMOC from '../drawingLayers/HiPSMOC.js';
 import {getHealpixCornerTool} from './HiPSUtil.js';
 import {getAppOptions} from '../core/AppDataCntlr.js';
 import {getBooleanMetaEntry, getTblById} from '../tables/TableUtil';
 import {MetaConst} from 'firefly/data/MetaConst.js';
+import {getDlAry} from './VisStoreRoots';
 const HEADER_KEY_COL = 1;
 const HEADER_VAL_COL = 2;
 
@@ -51,8 +52,32 @@ function isAnalysisTableMocFits(report) {
     return doHeadersMatchMOC(convertToEntries(data));
 }
 
-
 function doHeadersMatchMOC(sourceHeaderEntries, doTableValidation= true) {
+    const entries= Object.fromEntries(sourceHeaderEntries);
+    return entries?.MOCVERS?.startsWith('2.')
+        ? doHeadersMatchMOCv2(entries, doTableValidation)
+        : doHeadersMatchMOCv1(sourceHeaderEntries, doTableValidation);
+}
+
+function doHeadersMatchMOCv2(entries, doTableValidation= true) {
+    if (!entries) return {valid:false, [MOCInfo]: false};
+    let valid= Boolean(
+        entries.MOCVERS==='2.0'
+        && entries.MOCDIM==='SPACE'
+        && entries.ORDERING==='NUNIQ'
+        && entries.COORDSYS==='C'
+        && entries.MOCORD_S
+        && entries.TFIELDS
+        && entries.TTYPE1);
+
+    if (doTableValidation) {
+        valid &&= entries.TFIELDS='1' && ['J','1J','K','1K'].includes(entries.TFORM1);
+    }
+    const mocRetVal= valid && { uniqColName: entries.TTYPE1, mocOrder: entries.MOCORD_S+'' };
+    return {valid, [MOCInfo]: mocRetVal};
+}
+
+function doHeadersMatchMOCv1(sourceHeaderEntries, doTableValidation= true) {
 
     const k= 0;
     const v= 1;

@@ -2,10 +2,10 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {Box, Skeleton, Stack, Typography} from '@mui/joy';
+import {Skeleton, Stack, Typography} from '@mui/joy';
 import React, {memo, useState, useEffect, useRef} from 'react';
 import PropTypes from 'prop-types';
-import {debounce, get, isUndefined} from 'lodash';
+import {debounce, isNil, isUndefined} from 'lodash';
 import {sprintf} from '../../externalSource/sprintf';
 import {ValidationField} from '../../ui/ValidationField.jsx';
 import {ListBoxInputField} from '../../ui/ListBoxInputField.jsx';
@@ -16,8 +16,9 @@ import {
     PERCENTAGE,  ABSOLUTE,SIGMA, STRETCH_LINEAR, STRETCH_LOG, STRETCH_LOGLOG, STRETCH_EQUAL,
     STRETCH_SQUARED, STRETCH_SQRT, STRETCH_ASINH, STRETCH_POWERLAW_GAMMA} from '../RangeValues.js';
 import {getFieldGroupResults, validateFieldGroup} from '../../fieldGroup/FieldGroupUtils.js';
-import ImagePlotCntlr, {dispatchStretchChange, visRoot} from '../ImagePlotCntlr.js';
-import {getActivePlotView, isThreeColor} from '../PlotViewUtil.js';
+import {dispatchStretchChange} from '../ImagePlotDispatch';
+import {currentP, isThreeColor} from '../PlotViewUtil.js';
+import {ANY_REPLOT, CHANGE_ACTIVE_PLOT_VIEW} from '../VisConst';
 import {makeSerializedRv} from './ColorDialog.jsx';
 import {getFluxUnits} from '../WebPlot';
 import { getColorModel, makeColorHistImage, makeColorTableImage
@@ -26,11 +27,8 @@ import {useWatcher} from 'firefly/ui/SimpleComponent.jsx';
 import {dispatchForceFieldGroupReducer} from 'firefly/fieldGroup/FieldGroupCntlr.js';
 
 
-const LABEL_WIDTH= 105;
 const HIST_WIDTH= 360;
 const HIST_HEIGHT= 55;
-const maskWrapper= {position:'absolute', left:0, top:0, width:'100%', height:'100%' };
-const textPadding= {paddingBottom:3};
 const cbarImStyle= {width:'100%', height:10, padding: '0 2px 0 2px', boxSizing:'border-box' };
 
 const histImStyle= {
@@ -55,7 +53,7 @@ export const ColorBandPanel= memo(({fields,plot,band, groupKey}) => {
         dispatchForceFieldGroupReducer(groupKey);
     },[]);
 
-    useWatcher([ImagePlotCntlr.ANY_REPLOT, ImagePlotCntlr.CHANGE_ACTIVE_PLOT_VIEW],
+    useWatcher([ANY_REPLOT, CHANGE_ACTIVE_PLOT_VIEW],
         (action) => {
             dispatchForceFieldGroupReducer(groupKey, action);
         }
@@ -72,8 +70,8 @@ export const ColorBandPanel= memo(({fields,plot,band, groupKey}) => {
             const dataHistogram= result.DataHistogram;
             const dataBinMeanArray= result.DataBinMeanArray;
             const dataBinColorIdx= result.DataBinColorIdx;
-            const dataMin= result.DataMin;
-            const dataMax= result.DataMax;
+            const dataMin= result.DataMin===null ? undefined : result.DataMin;
+            const dataMax= result.DataMax===null ? undefined : result.DataMax;
             const largeBinPercent= result.LargeBinPercent;
             lastProps.rvStr= plot.plotState.getRangeValues(band).toString();
             lastProps.plotId= plotId;
@@ -329,7 +327,7 @@ function getReplotFunc(groupKey, band) {
                 const request = getFieldGroupResults(groupKey);
                 const serRv = makeSerializedRv(request);
                 const stretchData = [{band: band.key, rv: serRv, bandVisible: true}];
-                const pv = getActivePlotView(visRoot());
+                const {pv} = currentP();
                 if (pv) dispatchStretchChange({plotId: pv.plotId, stretchData});
             }
         });
@@ -339,6 +337,7 @@ function getReplotFunc(groupKey, band) {
 const formatFlux= (value, plot, band) => isNaN(value) ? '' : `${formatFluxValue(value)} ${getFluxUnits(plot,band)}`;
 
 function formatFluxValue(value) {
+    if (isNil(value)) return '';
     const absV= Math.abs(value);
     return (absV>1000||absV<.01) ? value.toExponential(6).replace('e+', 'E') : value.toFixed(6);
 }

@@ -12,10 +12,10 @@ import {CloseButton} from '../../ui/CloseButton.jsx';
 import {ChartPanel} from './ChartPanel.jsx';
 import {MultiItemViewerView} from '../../visualize/ui/MultiItemViewerView.jsx';
 import {
-    dispatchAddViewer, dispatchViewerUnmounted, dispatchUpdateCustom,
-    getMultiViewRoot, getViewer, getLayoutType, PLOT2D, getViewerItemIds, dispatchRemoveViewerItems,
-    dispatchAddViewerItems, NewPlotMode, PINNED_CHART_VIEWER_ID
+    dispatchAddViewer, dispatchViewerUnmounted, dispatchUpdateCustom, getMultiViewRoot, getViewer, getLayoutType,
+    getViewerItemIds, dispatchRemoveViewerItems, dispatchAddViewerItems
 } from '../../visualize/MultiViewCntlr.js';
+import {NewPlotMode, PINNED_CHART_VIEWER_ID, PLOT2D} from '../../visualize/VisConst';
 import {
     getExpandedChartProps, getChartData, CHART_ADD, CHART_REMOVE, getChartIdsInGroup, dispatchChartAdd, dispatchChartRemove, CHART_UPDATE
 } from '../ChartsCntlr.js';
@@ -32,7 +32,7 @@ import {ActiveChartsPanel} from './ChartsContainer';
 import {StatefulTabs, switchTab, Tab} from '../../ui/panel/TabPanel';
 import {HelpIcon} from '../../ui/HelpIcon';
 import {getComponentState, dispatchComponentStateChange} from '../../core/ComponentCntlr';
-import {SplitPanel} from '../../ui/panel/DockLayoutPanel';
+import {SplitPanel, Pane} from '../../ui/panel/DockLayoutPanel';
 import {hideInfoPopup, showInfoPopup, showPinMessage} from '../../ui/PopupUtil.jsx';
 import {dispatchAddActionWatcher} from 'firefly/core/MasterSaga';
 import {PinButton, ShowTableButton} from 'firefly/visualize/ui/Buttons.jsx';
@@ -61,19 +61,23 @@ export const PinnedChartContainer = (props) => {
         return (
             <Stack id='chart-pinned-sideBySide' overflow='hidden' flexGrow={1}>
                 <Stack flexGrow={1} position='relative'>
-                    <SplitPanel split='vertical' defaultSize={400} style={{display: 'inline-flex'}} pKey='chart-sideBySide'>
-                        <Stack>
-                            <Typography level='title-md'>
-                                {activeLabel}
-                            </Typography>
-                            <ActiveChartsPanel {...props}/>
-                        </Stack>
-                        <Stack>
-                            <Typography level='title-md'>
-                                {pinnedLabel}
-                            </Typography>
-                            <PinnedChartPanel {...props}/>
-                        </Stack>
+                    <SplitPanel direction='horizontal' defaultSize={400} style={{display: 'inline-flex'}} pKey='chart-sideBySide'>
+                        <Pane>
+                            <Stack>
+                                <Typography level='title-md'>
+                                    {activeLabel}
+                                </Typography>
+                                <ActiveChartsPanel {...props}/>
+                            </Stack>
+                        </Pane>
+                        <Pane>
+                            <Stack>
+                                <Typography level='title-md'>
+                                    {pinnedLabel}
+                                </Typography>
+                                <PinnedChartPanel {...props}/>
+                            </Stack>
+                        </Pane>
                     </SplitPanel>
                 </Stack>
             </Stack>

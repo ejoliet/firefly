@@ -40,9 +40,8 @@ public class EmbeddedDbUtilTest extends ConfigTest {
 
 	@BeforeClass
 	public static void setUp() {
+		ConfigTest.setupServerContext(null);
 		try {
-			// needed by test testGetSelectedData because it's dealing with code running in a server's context, ie  SearchProcessor, RequestOwner, etc.
-			setupServerContext(null);
 			File tmp = new File(System.getProperty("java.io.tmpdir"));
 			var dbAdapter = DbAdapter.getAdapter("", (ext) -> new File(tmp, "%d.%s".formatted(System.currentTimeMillis(), ext)));
 			dbFile = dbAdapter.initDbFile();
@@ -232,7 +231,7 @@ public class EmbeddedDbUtilTest extends ConfigTest {
 
 		DbAdapter dbAdapter = DbAdapter.getAdapter(dbFile);
 
-		Logger.setLogLevel(Level.TRACE, "edu.caltech");
+		Logger.setLogLevel(Level.TRACE, "edu.caltech.ipac.firefly.server.util.StopWatch");
 		DataGroup data = IpacTableReader.read(testFile);
 		StopWatch.getInstance().start("ingest DB file");
 		dbAdapter.initDbFile();

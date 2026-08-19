@@ -8,7 +8,7 @@ import edu.caltech.ipac.firefly.data.FileInfo;
 import edu.caltech.ipac.firefly.data.SortInfo;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
 import edu.caltech.ipac.firefly.data.table.SelectionInfo;
-import edu.caltech.ipac.firefly.server.db.spring.JdbcFactory;
+import edu.caltech.ipac.firefly.server.db.jdbc.JdbcFactory;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.server.util.StopWatch;
@@ -23,12 +23,10 @@ import edu.caltech.ipac.table.ResourceInfo;
 import edu.caltech.ipac.table.TableMeta;
 import edu.caltech.ipac.util.CollectionUtil;
 import edu.caltech.ipac.util.StringUtils;
-import org.springframework.jdbc.UncategorizedSQLException;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.simple.SimpleJdbcTemplate;
-import org.springframework.transaction.TransactionStatus;
-import org.springframework.transaction.support.TransactionCallbackWithoutResult;
-import org.springframework.transaction.support.TransactionTemplate;
+import edu.caltech.ipac.firefly.server.db.jdbc.JdbcTemplate;
+
+import edu.caltech.ipac.firefly.server.db.jdbc.TransactionTemplate;
+import edu.caltech.ipac.firefly.server.db.jdbc.exceptions.UncategorizedSQLException;
 
 import java.io.File;
 import java.io.IOException;
@@ -85,12 +83,7 @@ abstract public class BaseDbAdapter implements DbAdapter {
             getRuntimeStats().peakMemDbs = Math.max(getDbInstances().size(), getRuntimeStats().peakMemDbs);
         }
         if (ins != null && create) {        // only update access time when create is requested.
-            try {
-                ins.getLock().lock();
-                ins.touch();
-            } finally {
-                ins.getLock().unlock();
-            }
+            ins.touch();
         }
         return ins;
 
@@ -171,44 +164,15 @@ abstract public class BaseDbAdapter implements DbAdapter {
     }
     
 
-    public void createTempResults(TableServerRequest treq, String resultSetID) {
+    /**
+     * Builds resultSetID table including _DD/_META/_AUX related tables.
+     */
+    public final void createTempResults(TableServerRequest treq, String resultSetID) {
         StopWatch.getInstance().start("%s:createTempResults for %s".formatted(getName(), resultSetID));
         try {
-            List<String> cols = isEmpty(treq.getInclColumns()) ? getColumnNames(getDataTable(), "\"")
-                    : StringUtils.asList(treq.getInclColumns(), ",");
-            cols = cols.stream().filter((s) -> !ignoreCols.contains(s)).collect(Collectors.toList());   // remove rowIdx and rowNum because it will be automatically added
-
-            String selectPart = (cols.size() == 0 ? "*" : StringUtils.toString(cols) + ", " )+ DataGroup.ROW_IDX;
-            String wherePart = wherePart(treq);
-            String orderBy = orderByPart(treq);
-
-            // copy data
-            String datasetSql = "select %s FROM %s %s %s".formatted(selectPart, getDataTable(), wherePart, orderBy);
-            String datasetSqlWithIdx = "select b.*, (%s -1) as %s from (%s) as b".formatted(rowNumSql(), DataGroup.ROW_NUM, datasetSql);
-            String sql = createTableFromSelect(resultSetID, datasetSqlWithIdx);
-            execUpdate(sql);
-
-            // copy dd
-            List<String> cnames = getColumnNamesFromSys(resultSetID, "'");
-            String ddSql = "select * from DATA_DD" + (cnames.size() > 0 ? " where cname in (%s)".formatted(StringUtils.toString(cnames)) : "");
-            ddSql = createTableFromSelect(resultSetID + "_DD", ddSql);
-            execUpdate(ddSql);
-
-            // copy meta
-            String metaSql = "select * from DATA_META";
-            metaSql = createTableFromSelect(resultSetID + "_META", metaSql);
-            try {
-                getJdbc().update(metaSql);
-            } catch (Exception mx) {/*ignore table may not exist*/}
-
-            // copy aux
-            String auxSql = "select * from DATA_AUX";
-            auxSql = createTableFromSelect(resultSetID + "_AUX", auxSql);
-            try {
-                getJdbc().update(auxSql);
-            } catch (Exception ax) {/*ignore table may not exist*/}
-
-        }catch (RuntimeException e) {
+            buildResultSet(treq, resultSetID);
+            copyAuxTables(resultSetID);
+        } catch (RuntimeException e) {
             LOGGER.error("createTempResults failed with error: " + e.getMessage(),
                     "resultSetID: " + resultSetID,
                     "dbFile: " + getDbFile().getAbsolutePath());
@@ -216,6 +180,54 @@ abstract public class BaseDbAdapter implements DbAdapter {
         } finally {
             StopWatch.getInstance().printLog("%s:createTempResults for ".formatted(getName(), resultSetID));
         }
+    }
+
+    /**
+     * Builds the queryable table named resultSetID
+     */
+    protected void buildResultSet(TableServerRequest treq, String resultSetID) {
+        List<String> cols = getResultSetCols(treq);
+
+        String selectPart = (cols.size() == 0 ? "*" : StringUtils.toString(cols) + ", " )+ DataGroup.ROW_IDX;
+        String wherePart = wherePart(treq);
+        String orderBy = orderByPart(treq);
+
+        String datasetSql = "select %s FROM %s %s %s".formatted(selectPart, getDataTable(), wherePart, orderBy);
+        String datasetSqlWithIdx = "select b.*, (%s -1) as %s from (%s) as b".formatted(rowNumSql(), DataGroup.ROW_NUM, datasetSql);
+        execUpdate(createTableFromSelect(resultSetID, datasetSqlWithIdx));
+    }
+
+    /**
+     * The columns to include in a resultset: the request's inclColumns if given, otherwise all of DATA's
+     * columns.  Either way, with ROW_IDX/ROW_NUM excluded since those are always added automatically.
+     */
+    protected List<String> getResultSetCols(TableServerRequest treq) {
+        List<String> cols = isEmpty(treq.getInclColumns()) ? getColumnNames(getDataTable(), "\"")
+                : StringUtils.asList(treq.getInclColumns(), ",");
+        return cols.stream().filter((s) -> !ignoreCols.contains(s)).collect(Collectors.toList());
+    }
+
+    /**
+     * Copies DATA's _DD, _META, and _AUX tables into resultSetID's own, so the resultset carries the same
+     * column metadata, table metadata, and aux info as the main data table.
+     */
+    protected void copyAuxTables(String resultSetID) {
+        // copy dd
+        copyDDFromSource(resultSetID, getDataTable());
+
+        // copy meta
+        String metaSql = "select * from DATA_META";
+        metaSql = createTableFromSelect(resultSetID + "_META", metaSql);
+        try {
+            getJdbc().update(metaSql);
+        } catch (Exception mx) {/*ignore table may not exist*/}
+
+        // copy aux
+        String auxSql = "select * from DATA_AUX";
+        auxSql = createTableFromSelect(resultSetID + "_AUX", auxSql);
+        try {
+            getJdbc().update(auxSql);
+        } catch (Exception ax) {/*ignore table may not exist*/}
     }
     
     protected String buildSqlFrom(TableServerRequest treq, String forTable) {
@@ -531,7 +543,7 @@ abstract public class BaseDbAdapter implements DbAdapter {
                         sql =  si.isSelectAll() ? "TRUE" : "(ROW_IDX in (%s))".formatted(StringUtils.toString(si.getSelected()));
                     } else {
                         String rowNums = StringUtils.toString(si.getSelected());
-                        List<Integer> rowIdxs = new SimpleJdbcTemplate(jdbc).query(String.format("Select ROW_IDX from %s where ROW_NUM in (%s)", resultSetID, rowNums), (resultSet, i) -> resultSet.getInt(1));
+                        List<Integer> rowIdxs = jdbc.query(String.format("Select ROW_IDX from %s where ROW_NUM in (%s)", resultSetID, rowNums), (resultSet, i) -> resultSet.getInt(1));
                         sql = "(ROW_IDX in (%s))".formatted(StringUtils.toString(rowIdxs));
                     }
                 }
@@ -580,11 +592,17 @@ abstract public class BaseDbAdapter implements DbAdapter {
         LOGGER.debug("DbAdapter -> compacting DB: %s".formatted(getDbFile().getPath()));
         List<String> tables = getTempTables();
         if (tables.size() > 0) {
-            // remove all temporary tables
-            String[] stmts = tables.stream().map(s -> "drop table IF EXISTS " + s).toArray(String[]::new);
+            // remove all temp DB objects created for this database
+            String[] stmts = dropStatementsFor(tables);
             getJdbcTmpl().batchUpdate(stmts);
-
         }
+    }
+
+    /**
+     * @return the DROP statements needed to remove the given temporary database objects.
+     */
+    protected String[] dropStatementsFor(List<String> names) {
+        return names.stream().map(s -> "drop table IF EXISTS " + s).toArray(String[]::new);
     }
 
     public void compact() {
@@ -596,16 +614,13 @@ abstract public class BaseDbAdapter implements DbAdapter {
         LOGGER.debug("%s -> closing DB, delete(%s): %s".formatted(getName(), deleteFile, getDbFile().getPath()));
         EmbeddedDbInstance db = getDbInstances().get(getDbFile().getPath());
         if (db != null) {
-            try {
-                db.getLock().lock();
+            synchronized (db) {
                 if (!deleteFile) {
                     compact();
                 }
                 shutdown(db);
-            } finally {
-                db.getLock().unlock();
-                getDbInstances().remove(db.getDbFile().getPath());
             }
+            getDbInstances().remove(db.getDbFile().getPath());
         }
         if (deleteFile) removeDbFile();
     }
@@ -625,13 +640,13 @@ abstract public class BaseDbAdapter implements DbAdapter {
             var db = getDbInstance(false);
             if (db == null)  return dbStats;
 
-            SimpleJdbcTemplate jdbc = JdbcFactory.getSimpleTemplate(db);
-            jdbc.queryForObject("SELECT count(*), sum(cardinality) from INFORMATION_SCHEMA.SYSTEM_TABLESTATS where table_schema = 'PUBLIC' and not REGEXP_MATCHES(table_name,'.*_DD$|.*_META$|.*_AUX$')", (rs, i) -> {
+            JdbcTemplate jdbc = JdbcFactory.getTemplate(db);
+            jdbc.query("SELECT count(*), sum(cardinality) from INFORMATION_SCHEMA.SYSTEM_TABLESTATS where table_schema = 'PUBLIC' and not REGEXP_MATCHES(table_name,'.*_DD$|.*_META$|.*_AUX$')", (rs, i) -> {
                 dbStats.tblCnt = rs.getInt(1);
                 dbStats.totalRows = rs.getInt(2);
                 return null;
             });
-            jdbc.queryForObject("SELECT count(column_name), cardinality from INFORMATION_SCHEMA.SYSTEM_COLUMNS c, INFORMATION_SCHEMA.SYSTEM_TABLESTATS t" +
+            jdbc.query("SELECT count(column_name), cardinality from INFORMATION_SCHEMA.SYSTEM_COLUMNS c, INFORMATION_SCHEMA.SYSTEM_TABLESTATS t" +
                     " where c.table_name = t.table_name" +
                     " and t.table_name = 'DATA'" +
                     " group by cardinality", (rs, i) -> {
@@ -674,10 +689,9 @@ abstract public class BaseDbAdapter implements DbAdapter {
             String insertDataSql = insertDataSql(colsAry, tblName);
             if (useTxnDuringLoad()) {
                 TransactionTemplate txnJdbc = JdbcFactory.getTransactionTemplate(jdbc.getDataSource());
-                txnJdbc.execute(new TransactionCallbackWithoutResult() {
-                    public void doInTransactionWithoutResult(TransactionStatus status) {
-                        EmbeddedDbUtil.loadDataToDb(jdbc, insertDataSql, dg);
-                    }
+                txnJdbc.execute(conn -> {
+                    EmbeddedDbUtil.loadDataToDb(jdbc, insertDataSql, dg);
+                    return null;
                 });
             } else {
                 EmbeddedDbUtil.loadDataToDb(jdbc, insertDataSql, dg);
@@ -854,8 +868,8 @@ abstract public class BaseDbAdapter implements DbAdapter {
         return page;
     }
 
-    SimpleJdbcTemplate getJdbc() {
-        return JdbcFactory.getSimpleTemplate(getDbInstance());
+    JdbcTemplate getJdbc() {
+        return JdbcFactory.getTemplate(getDbInstance());
     }
 
     JdbcTemplate getJdbcTmpl() {
@@ -961,6 +975,15 @@ abstract public class BaseDbAdapter implements DbAdapter {
 
     void handleSpecialDTypes(DataType dtype, DataGroup dg, ResultSet rs) {
         applyIfNotEmpty(deserialize(rs, "links"), v -> dtype.setLinkInfos((List<LinkInfo>) v));
+    }
+
+    public void copyDDFromSource(String tblName, String sourceTbl) {
+        List<String> cnames = getColumnNamesFromSys(tblName, "'");
+        String ddSql = "select * from %s_DD".formatted(sourceTbl) +
+                (cnames.isEmpty() ? " WHERE 1=0" : " where cname in (%s)".formatted(StringUtils.toString(cnames)));
+        try {
+            execUpdate(createTableFromSelect(tblName + "_DD", ddSql));
+        } catch (Exception ignored) {}
     }
 
     void ddToDb(DataGroup dg, String tblName) {

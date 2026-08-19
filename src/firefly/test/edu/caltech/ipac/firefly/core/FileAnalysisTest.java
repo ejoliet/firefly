@@ -19,7 +19,6 @@ import java.io.File;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 
 /**
  * @author loi
@@ -35,8 +34,6 @@ public class FileAnalysisTest extends ConfigTest {
 
     @BeforeClass
     public static void setUp() {
-        // needed when dealing with code running in a server's context, ie  SearchProcessor, RequestOwner, etc.
-        setupServerContext(null);
     }
 
     @Test
@@ -141,17 +138,17 @@ public class FileAnalysisTest extends ConfigTest {
         assertEquals(fitsTables.length(), report.getFileSize());
         assertEquals(11, report.getParts().size());
         assertEquals(FileAnalysisReport.Type.HeaderOnly, report.getParts().get(0).getType());
-        assertNull(report.getParts().get(0).getDesc());
+        assertEquals("",report.getParts().get(0).getDesc());
         assertNotNull(report.getParts().get(1).getDesc());
 
         assertEquals(FileAnalysisReport.Type.Table, report.getParts().get(4).getType());
-        assertEquals(" 7 cols x 12 rows ", report.getParts().get(4).getDesc());
+        assertEquals("ARCHIVE_INDEX (7 cols x 12 rows)", report.getParts().get(4).getDesc());
 
         assertEquals(FileAnalysisReport.Type.Table, report.getParts().get(8).getType());
-        assertEquals(" 3 cols x 4 rows ", report.getParts().get(8).getDesc());
+        assertEquals("ARCHIVE_DATA (3 cols x 4 rows)", report.getParts().get(8).getDesc());
 
         assertEquals(FileAnalysisReport.Type.Table, report.getParts().get(10).getType());
-        assertEquals(" 4 cols x 1 rows ", report.getParts().get(10).getDesc());
+        assertEquals("ARCHIVE_DATA (4 cols x 1 rows)", report.getParts().get(10).getDesc());
 
         // multiple images in a fits file
         report= FileAnalysis.analyze(multiImage, reportType);
@@ -160,7 +157,7 @@ public class FileAnalysisTest extends ConfigTest {
         assertEquals(multiImage.length(), report.getFileSize());
         assertEquals(62, report.getParts().size());
         assertEquals(FileAnalysisReport.Type.HeaderOnly, report.getParts().get(0).getType());
-        assertNull(report.getParts().get(0).getDesc());
+        assertEquals("",report.getParts().get(0).getDesc());
         assertNotNull(report.getParts().get(1).getDesc());
         assertNotNull(report.getParts().get(61).getDesc());
     }

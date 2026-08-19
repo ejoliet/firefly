@@ -10,9 +10,8 @@ import {useStoreConnector} from './SimpleComponent.jsx';
 import {DropDownVerticalSeparator, ToolbarButton} from './ToolbarButton.jsx';
 import {getSearchTypeDesc, getValidSize, SearchTypes} from '../core/ClickToAction.js';
 import CysConverter from '../visualize/CsysConverter.js';
-import {visRoot} from '../visualize/ImagePlotCntlr.js';
 import {PlotAttribute} from '../visualize/PlotAttribute.js';
-import {getActivePlotView, primePlot} from '../visualize/PlotViewUtil.js';
+import {currentP, primePlot} from '../visualize/PlotViewUtil.js';
 import {showSearchRefinementTool} from '../visualize/SearchRefinementTool.jsx';
 import {convertWpAryToStr, getDetailsFromSelection, markOutline} from '../visualize/ui/VisualSearchUtils.js';
 import {formatWorldPt} from '../visualize/ui/WorldPtFormat.jsx';
@@ -24,7 +23,7 @@ export function ActionsDropDownButton({searchActions, pv, tbl_id, style, tip='Se
     const {cenWpt} = spacial ? getDetailsFromSelection(primePlot(pv)) :
                                 {cenWpt:getWorldPtFromTableRow(getTblById(tbl_id))};
     if (!cenWpt || !mi?.clickToSearch) return <div/>;
-    const dropDown = <SearchDropDown {...{searchActions, buttonRef, spacial, tbl_id, key:'searchDropDown'}}/>;
+    const dropDown = <SearchDropDown key='searchDropDown' {...{searchActions, buttonRef, spacial, tbl_id}}/>;
 
     return (
         <div ref={buttonRef} style={style}>
@@ -43,7 +42,7 @@ function doExecute(sa,cenWpt,radius,cornerStr,table) {
         case SearchTypes.pointRadius:
             const valRadius= getValidSize(sa, radius);
             sa.execute(sa, cenWpt, valRadius, cornerStr);
-            markOutline(sa, primePlot(visRoot())?.plotId,{ wp:cenWpt, radius:valRadius, polyStr:cornerStr});
+            markOutline(sa, currentP().plotId,{ wp:cenWpt, radius:valRadius, polyStr:cornerStr});
             break;
         case SearchTypes.point:
         case SearchTypes.point_table_only:
@@ -70,7 +69,7 @@ function isSupported(sa,cenWpt,radius,cornerStr,table) {
 
 function SearchDropDown({searchActions, buttonRef, spacial, tbl_id}) {
 
-    const pv = useStoreConnector(() => spacial? getActivePlotView(visRoot()) : undefined);
+    const pv = useStoreConnector(() => spacial? currentP().pv : undefined);
     const plot= primePlot(pv);
     const table= tbl_id && getTblById(tbl_id);
     const {cenWpt, radius, corners, cone} = spacial ?
@@ -99,10 +98,8 @@ function SearchDropDown({searchActions, buttonRef, spacial, tbl_id}) {
 
         const buttons= sActions.map((sa,idx) => {
             const text = getSearchTypeDesc({sa, wp:cenWpt, size:radius, areaPtsLength:corners?.length, tbl_id});
-            let useSep = false;
             if (lastGroupId && sa.groupId !== lastGroupId && idx!==sActions.length-1) {
                 lastGroupId = sa.groupId;
-                useSep = true;
             }
             if (!lastGroupId) lastGroupId = sa.groupId;
             return (
@@ -149,7 +146,7 @@ function SearchDropDown({searchActions, buttonRef, spacial, tbl_id}) {
                 const text = getSearchTypeDesc({sa, wp:cenWpt, size:radius, areaPtsLength:corners?.length, tbl_id});
                 const tip= sa.tip ? `${sa.tip} for\n${text}` : text;
                 return (
-                    <ToolbarButton {...{text, tip, horizontal:false, key:sa.cmd+sa.tip,
+                    <ToolbarButton key={sa.cmd+sa.tip} {...{text, tip, horizontal:false,
                                    visible:isSupported(sa, cenWpt, radius, cornerStr, table),
                                    onClick:() => doExecute(sa, cenWpt, radius, cornerStr, table) }}/>
                 );

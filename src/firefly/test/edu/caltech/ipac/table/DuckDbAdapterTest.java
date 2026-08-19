@@ -8,8 +8,10 @@ import edu.caltech.ipac.firefly.data.DecimateInfo;
 import edu.caltech.ipac.firefly.data.ServerParams;
 import edu.caltech.ipac.firefly.data.SortInfo;
 import edu.caltech.ipac.firefly.data.TableServerRequest;
+import edu.caltech.ipac.firefly.server.ServerContext;
 import edu.caltech.ipac.firefly.server.db.DbAdapter;
 import edu.caltech.ipac.firefly.server.db.DbMonitor;
+import edu.caltech.ipac.firefly.server.db.DuckDbAdapter;
 import edu.caltech.ipac.firefly.server.db.DuckDbReadable;
 import edu.caltech.ipac.firefly.server.db.HsqlDbAdapter;
 import edu.caltech.ipac.firefly.server.query.DataAccessException;
@@ -20,6 +22,7 @@ import edu.caltech.ipac.firefly.server.query.tables.IpacTableFromSource;
 import edu.caltech.ipac.firefly.server.util.Logger;
 import edu.caltech.ipac.firefly.util.FileLoader;
 import edu.caltech.ipac.table.io.DsvTableIO;
+import edu.caltech.ipac.util.AppProperties;
 import edu.caltech.ipac.util.decimate.DecimateKey;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.logging.log4j.Level;
@@ -28,6 +31,8 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -42,7 +47,6 @@ public class DuckDbAdapterTest extends ConfigTest {
 
 	@Before
 	public void setUp() {
-		setupServerContext(null);
 		if (false) Logger.setLogLevel(Level.TRACE);			// for debugging.
 	}
 
@@ -235,10 +239,11 @@ public class DuckDbAdapterTest extends ConfigTest {
 		proc.getData(treq);
 		assertEquals("Data table and its associated tables are created", 4, dbAdapter.getTableNames().size());
 
-		// sort by model.  this should create a temp table
+		// sort by model.  this should create a resultset: a thin (ROW_IDX, ROW_NUM) index table, a view
+		// joining it back to DATA, plus that view's own _DD, _META, and _AUX -- 5 new objects total.
 		treq.setSortInfo(new SortInfo("sepal.width"));
 		proc.getData(treq);
-		assertEquals("New set of temp tables created for the request", 8, dbAdapter.getTableNames().size());
+		assertEquals("New set of temp tables created for the request", 9, dbAdapter.getTableNames().size());
 
 		dbAdapter.clearCachedData();
 		assertEquals("Temp tables are removed", 4, dbAdapter.getTableNames().size());
@@ -276,6 +281,27 @@ public class DuckDbAdapterTest extends ConfigTest {
 		// mixing single and double quotes
 		assertEquals("'test ILIKE inside\" badly quoted ILIKE ",
 				replaceLike("'test like inside\" badly quoted like "));
+	}
+
+	@Test
+	public void testDuckDbExternalAccessIsRestrictedToAllowedDirs() throws Exception {
+		DuckDbAdapter db = new DuckDbAdapter((File) null);
+
+		File allowedCsv = new File(ServerContext.getWorkingDir(), "duckdb-allowed.csv");
+		Files.writeString(allowedCsv.toPath(), "id,name\n1,allowed\n");
+		assertEquals(1, db.execQuery("select * from read_csv('%s')".formatted(allowedCsv.getAbsolutePath()), null).size());
+
+		File deniedCsv = new File("./duckdb-denied.csv");
+		Files.writeString(deniedCsv.toPath(), "id,name\n1,denied\n");
+		try {
+			db.execQuery("select * from read_csv('%s')".formatted(deniedCsv.getAbsolutePath()), null);
+			fail("DuckDB should block reads outside allowed_directories");
+		} catch (DataAccessException expected) {
+			assertNotNull(expected.getMessage());
+		} finally {
+			allowedCsv.delete();
+			deniedCsv.delete();
+		}
 	}
 
 //====================================================================

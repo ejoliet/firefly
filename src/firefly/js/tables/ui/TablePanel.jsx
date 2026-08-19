@@ -30,8 +30,9 @@ import {Logger} from '../../util/Logger.js';
 import {AddColumnBtn} from './AddOrUpdateColumn.jsx';
 import WarningIcon from '@mui/icons-material/WarningAmberRounded';
 import {PropertySheetAsTable} from 'firefly/tables/ui/PropertySheet';
-import {META} from '../TableRequestUtil.js';
+import {getJobIdFromTblId, META} from '../TableRequestUtil.js';
 import {TableMask} from 'firefly/ui/panel/MaskPanel.jsx';
+import {showJobInfo} from 'firefly/core/background/JobInfo';
 
 const logger = Logger('Tables').tag('TablePanel');
 
@@ -41,6 +42,7 @@ const TT_SAVE = 'Save the table';
 const TT_CLEAR_FILTER = 'Remove all filters';
 const TT_EXPAND = 'Expand this panel to take up a larger area';
 const TT_PROPERTY_SHEET = 'Show details for the selected row';
+const TT_JOB_INFO = 'Show job info for this table';
 
 const defaultOptions = {
     showMetaInfo: false,
@@ -51,6 +53,7 @@ const defaultOptions = {
     showSave: true,
     showOptionButton: true,
     showFilterButton: true,
+    showSelectRowFilter: true,
     showInfoButton: true,
     showAddColumn: true,
     showTypes: true,
@@ -88,7 +91,7 @@ export function TablePanel({tbl_id, tbl_ui_id, tableModel, variant='outlined', s
 
     const {selectable, renderers, title, removable, rowHeight, rowHeightGetter,
         showToolbar, showTitle, showMetaInfo,
-        columns, showHeader, showUnits, allowUnits, showTypes, showFilters, textView,
+        columns, showHeader, showUnits, allowUnits, showTypes, showFilters, showSelectRowFilter, textView,
         error, startIdx, hlRowIdx, currentPage, selectInfo, showMask,
         filterInfo, sortInfo, data, backgroundable, highlightedRowHandler, cellRenderers, onRowDoubleClick} = tblState;
 
@@ -132,7 +135,7 @@ export function TablePanel({tbl_id, tbl_ui_id, tableModel, variant='outlined', s
                         <BasicTableView
                             callbacks={connector}
                             { ...{columns, data, hlRowIdx, rowHeight, rowHeightGetter, selectable, showUnits,
-                                allowUnits, showTypes, showFilters, selectInfoCls, filterInfo, sortInfo, textView,
+                                allowUnits, showTypes, showFilters, showSelectRowFilter, selectInfoCls, filterInfo, sortInfo, textView,
                                 showMask, currentPage, showHeader, renderers, tbl_ui_id, highlightedRowHandler,
                                 startIdx, cellRenderers, onRowDoubleClick} }
                         />
@@ -169,6 +172,7 @@ TablePanel.propTypes = {
     showToggleTextView: PropTypes.bool,
     showOptionButton: PropTypes.bool,
     showFilterButton: PropTypes.bool,
+    showSelectRowFilter: PropTypes.bool,
     showAddColumn: PropTypes.bool,
     showInfoButton: PropTypes.bool,
     showSearchButton: PropTypes.bool,
@@ -318,11 +322,11 @@ function ToolBar({tbl_id, tbl_ui_id, connector, tblState, slotProps}) {
 
     return (
         <Sheet component={Stack} variant='soft' className='FF-Table-Toolbar' direction='row'
-               sx={{justifyContent:'space-between', flexWrap:'wrap', width:1}}
-               {...slotProps?.toolbar}>
+               {...slotProps?.toolbar}
+               sx={{justifyContent:'space-between', flexWrap:'wrap', width:1, ...slotProps?.toolbar?.sx}}>
             <Stack direction='row' sx={{alignItems:'center', flexWrap:'wrap', flex:'1 1 0'}}>
                 <LeftToolBar {...{tbl_id, title, removable, showTitle, leftButtons}}/>
-                <Stack direction='row' spacing={1} sx={{flexGrow: 1, justifyContent:'center'}} >
+                <Stack direction='row' spacing={1} sx={{flexGrow: showPaging ? 1 : 0, justifyContent:'center'}} >
                     {showPaging && <PagingBar {...{currentPage, pageSize, showLoading, totalRows, callbacks:connector}} /> }
                     <OverflowMarker tbl_id={tbl_id}/>
                 </Stack>
@@ -341,8 +345,8 @@ function ToolBar({tbl_id, tbl_ui_id, connector, tblState, slotProps}) {
                                onClick={toggleFilter}/>
                 }
                 {showToggleTextView &&
-                    textView ? <TableViewButton onClick={toggleTextView}/>
-                             : <TextViewButton onClick={toggleTextView}/>
+                    (textView ? <TableViewButton onClick={toggleTextView}/>
+                              : <TextViewButton onClick={toggleTextView}/>)
                 }
                 {showSave &&
                 <SaveButton tip={TT_SAVE} onClick={showTableDownloadDialog({tbl_id, tbl_ui_id})}/>
@@ -370,7 +374,10 @@ function ToolBar({tbl_id, tbl_ui_id, connector, tblState, slotProps}) {
 
 
 function LeftToolBar({tbl_id, title, removable, showTitle, leftButtons=[]}) {
-    const style = {display: 'inline-flex', alignItems: 'center'};
+    // when there's no string title, leftButtons is the only content of this toolbar section -
+    // let it grow to fill the available space instead of shrink-wrapping to its own content.
+    const growLeftButtons = !showTitle && leftButtons?.length > 0;
+    const style = {display: 'inline-flex', alignItems: 'center', ...(growLeftButtons && {flexGrow: 1, width: '100%'})};
     const lbStyle = showTitle ? {...style, paddingLeft:10, alignSelf:'center'} : style;
 
     const doclinkUrl = getMetaEntry(tbl_id, META.doclink.url);
@@ -391,7 +398,7 @@ function LeftToolBar({tbl_id, title, removable, showTitle, leftButtons=[]}) {
     }
 
     return (
-        <Stack direction='row' sx={{flexWrap:'wrap'}} >
+        <Stack direction='row' sx={{flexWrap:'wrap', ...(growLeftButtons && {flexGrow: 1})}}>
             { showTitle && <Title {...{title, removable, tbl_id}}/>}
             {leftButtons && <Stack direction='row' spacing={1} style={lbStyle}>{leftButtons}</Stack>}
         </Stack>
@@ -424,24 +431,25 @@ function NotReady({showTitle, tbl_id, title, removable, backgroundable, error}) 
                 </div>
             </div>
         );
-    } else {
+    } else if(error) {
         const prevReq = getResultSetRequest(tbl_id);
-        const reloadTable = () => {
+        const reloadTable = prevReq && ( () => {
             dispatchTableFetch(JSON.parse(prevReq));
-        };
-        if (error) {
-            return <TableErrorMsg {...{error, prevReq, reloadTable}}/>;
-        } else {
-            return <TableMask/>;
-        }
+        } );
+        const showDismiss = removable && showTitle && !reloadTable;
+        return <TableErrorMsg {...{error, reloadTable, tbl_id, showDismiss}}/>;
     }
+    return <TableMask/>;
 }
 
-export function TableErrorMsg({error, prevReq, reloadTable, ...props}) {
+export function TableErrorMsg({error, reloadTable, tbl_id, showDismiss, ...props}) {
     const {message, type, cause} = parseError(error);
     return (
         <Stack spacing={1} m='auto' width={.8} height={1} justifyContent='center' {...props}>
-            <Typography level='title-lg' color='danger'>{message}</Typography>
+            <Stack direction='row' spacing={1} alignItems='center'>
+                <Typography level='title-lg' color='danger'>{message}</Typography>
+                {!reloadTable && <JobInfoPopup tbl_id={tbl_id}/>}
+            </Stack>
             { cause && (
                 <Stack>
                     <Stack direction='row'>
@@ -451,7 +459,16 @@ export function TableErrorMsg({error, prevReq, reloadTable, ...props}) {
                     <Typography level='body-md' ml={1}>{cause}</Typography>
                 </Stack>
             )}
-            {prevReq && <Button color='neutral' variant='solid' onClick={reloadTable} sx={{alignSelf: 'baseline'}}>Back</Button>}
+            {reloadTable && <Button color='neutral' variant='solid' onClick={reloadTable} sx={{alignSelf: 'baseline'}}>Back</Button>}
+            {showDismiss && <Button color='neutral' variant='solid' onClick={() => dispatchTableRemove(tbl_id, true)} sx={{alignSelf: 'baseline'}}>Dismiss</Button>}
         </Stack>
     );
+}
+
+function JobInfoPopup({tbl_id}) {
+    const jobId = getJobIdFromTblId(tbl_id);
+    if (!jobId) return null;
+
+    const showInfo = () => showJobInfo(jobId);
+    return <InfoButton tip={TT_JOB_INFO}  onClick={showInfo}/>;
 }

@@ -2,7 +2,7 @@
  * License information at https://github.com/Caltech-IPAC/firefly/blob/master/License.txt
  */
 
-import {get, set, unset, cloneDeep, omit, omitBy, isNil, pickBy, uniqueId, merge} from 'lodash';
+import {set, unset, cloneDeep, omit, omitBy, isNil, pickBy, uniqueId, merge} from 'lodash';
 
 import {getTblById, uniqueTblId} from './TableUtil.js';
 import {SelectInfo} from './SelectInfo.js';
@@ -15,14 +15,7 @@ import {Logger} from '../util/Logger.js';
 
 const logger = Logger('Tables').tag('TableRequestUtil');
 
-export const MAX_ROW = Math.pow(2,31) - 1;
-/* TABLE_REQUEST should match QueryUtil on the server-side */
-
-export const META = {
-    // should match TableMeta.java
-    doclink: {url: 'doclink.url', desc: 'doclink.desc', label: 'doclink.label'}
-};
-
+export {MAX_ROW, META} from './TableConst.js';
 
 /**
  * Creates a table request object for the given id.
@@ -394,3 +387,10 @@ export function getJobIdFromTblId(tbl_id) {
     return request?.META_INFO?.[ServerParams.JOB_ID];
 }
 
+/**
+ * @param {string} jobId
+ * @param {Object} tableModel
+ */
+export function setJobIdToTbl(jobId, tableModel) {
+    set(tableModel, ['request', 'META_INFO', ServerParams.JOB_ID], jobId);
+}
